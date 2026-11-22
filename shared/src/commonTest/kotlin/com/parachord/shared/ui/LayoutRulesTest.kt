@@ -47,4 +47,11 @@ class LayoutRulesTest {
         assertFalse(LayoutRules.halvesSideBySide(820.0))
         assertTrue(LayoutRules.halvesSideBySide(1180.0))
     }
+
+    @Test fun `a header keeps 360 upright and shrinks sideways`() {
+        assertEquals(360.0, LayoutRules.heroHeight(852.0))
+        assertEquals(360.0, LayoutRules.heroHeight(1180.0))
+        assertEquals(393.0 * 0.45, LayoutRules.heroHeight(393.0))
+        assertEquals(160.0, LayoutRules.heroHeight(300.0))
+    }
 }

@@ -18,6 +18,8 @@ import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.ui.platform.LocalConfiguration
+import com.parachord.shared.ui.LayoutRules
+import androidx.compose.foundation.layout.widthIn
 import android.content.res.Configuration
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -449,7 +451,8 @@ fun NowPlayingScreen(
                 // Title, artist, seek bar, controls and the bottom row.
                 val details: @Composable () -> Unit = {
                 Column(
-                    modifier = Modifier.fillMaxWidth(),
+                    // The controls stop at PLAYER_CONTROLS_MAX on a tablet (shared LayoutRules).
+                    modifier = Modifier.widthIn(max = LayoutRules.PLAYER_CONTROLS_MAX.dp).fillMaxWidth(),
                     horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
                 // Display actual streaming metadata when available, fall back to queued track
@@ -778,6 +781,7 @@ fun NowPlayingScreen(
                                 .fillMaxHeight()
                                 .verticalScroll(rememberScrollState()),
                             verticalArrangement = Arrangement.Center,
+                            horizontalAlignment = Alignment.CenterHorizontally,
                         ) {
                             details()
                         }

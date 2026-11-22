@@ -123,6 +123,9 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
   - Grids get as many columns as fit (`gridColumns`: covers at least 150 wide, artist circles 110), never fewer than the phone's 2 (covers) or 3 (artists). Never a fixed column count.
   - Two-up things widen from 700 (`isWide`): Jump back in's four tiles go on one line, concert cards go two across. Home's halves sit side by side from 1000 (`halvesSideBySide`), where each still fits three cards.
   - Text, forms, settings rows, chat bubbles and the queue panel stop at 680 (`READABLE_MAX`); the mini player and tab bar at 640, centred (`BAR_MAX`); Now Playing's controls at 560 (`PLAYER_CONTROLS_MAX`). Held sideways on a tablet, Now Playing puts the art beside the controls, as a phone in landscape does.
+  - Track-list pages (playlist, album, a recommended playlist, Search) sit in a centred column 900 wide (`LIST_MAX`). On a wide screen the AI chat is a 480-wide drawer at the trailing edge (`CHAT_DRAWER_MAX`).
+  - The artist page's photo is 16:9 on Android and 360 on iOS when the phone is upright, never taller than 45 % of the window (`heroHeight`, at least 160), so landscape still shows the page under it.
+  - A phone held sideways puts the mini player and the tab bar on one row (iOS). Android's mini player and tab row keep their full-width colour and cap their contents at `BAR_MAX`.
   - Android reads the window width from `LocalConfiguration` (`ui/components/AdaptiveLayout.kt`); iOS measures it once in `RootView` and hands it down as `pcLayoutWidth` (`PCLayout` in `Theme.swift`).
 
 ---

@@ -52,9 +52,12 @@ struct ContentView: View {
     /// "Sign in to X?" after a play a plug-in refused as not signed in (#775).
     @State private var signInPrompt = SignInPromptModel()
     @Environment(\.scenePhase) private var rootScenePhase
-    /// The window's width, handed to every screen as `pcLayoutWidth` so rows and
-    /// grids size to the space they have (iPad, landscape, Split View).
+    @Environment(\.verticalSizeClass) private var rootVSize
+    /// The window's size, handed to every screen as `pcLayoutWidth` /
+    /// `pcLayoutHeight` so rows, grids and headers size to the space they have
+    /// (iPad, landscape, Split View).
     @State private var layoutWidth: CGFloat = 390
+    @State private var layoutHeight: CGFloat = 844
     /// Shared namespace for the mini-player ↔ Now Playing artwork morph.
     @Namespace private var artNS
 
@@ -81,7 +84,12 @@ struct ContentView: View {
             .id("\(tab.rawValue)-\(navResetCount)")
 
             // ── Floating mini-player + tab bar ───────────────────────
-            VStack(spacing: 10) {
+            // A phone held sideways has ~390 pt of height: the mini player and the
+            // tab bar share one row there instead of stacking (~70 pt, not ~135).
+            let barsInRow = rootVSize == .compact
+            let bars = barsInRow ? AnyLayout(HStackLayout(alignment: .center, spacing: 0))
+                                 : AnyLayout(VStackLayout(spacing: 10))
+            bars {
                 if let t = coordinator.currentTrack {
                     PCMiniPlayer(
                         track: t,
@@ -102,10 +110,11 @@ struct ContentView: View {
                          // whose path is internal @State) is recreated fresh at
                          // root, popping every push regardless of how it got there.
                          onReselect: { _ in navResetCount += 1 })
+                    .frame(maxWidth: barsInRow ? 380 : .infinity)
             }
-            // On an iPad or in landscape the bars stop at `BAR_MAX` and sit
-            // centred, rather than spreading four tabs across the screen.
-            .frame(maxWidth: PCLayout.barMax)
+            // On an iPad the bars stop at `BAR_MAX` and sit centred, rather than
+            // spreading four tabs across the screen; side by side they get twice that.
+            .frame(maxWidth: PCLayout.barMax * (barsInRow ? 2 : 1))
             .padding(.bottom, 6)
             .opacity(showNowPlaying ? 0 : 1)
 
@@ -150,22 +159,38 @@ struct ContentView: View {
                 Color.black.opacity(0.44).ignoresSafeArea()
                     .transition(.opacity)
                     .onTapGesture { withAnimation(.easeOut(duration: 0.25)) { showSidebar = false } }
-                HStack(spacing: 0) {
-                    PCSidebar(onNav: handleSidebar, onClose: { closeSidebar() },
-                              onListenAlong: { listenAlong.toggle($0) },
-                              onFriendProfile: { f in
-                                  closeSidebar()
-                                  tab = .home
-                                  homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName)
-                              })
-                        .ignoresSafeArea()
-                    Spacer(minLength: 0)
+                // The drawer's panel runs to the screen's edges; its content keeps
+                // clear of the status bar and (in landscape) the camera by the
+                // insets measured here, and its width leaves a scrim to tap in a
+                // narrow Split View window.
+                GeometryReader { geo in
+                    HStack(spacing: 0) {
+                        PCSidebar(onNav: handleSidebar, onClose: { closeSidebar() },
+                                  onListenAlong: { listenAlong.toggle($0) },
+                                  onFriendProfile: { f in
+                                      closeSidebar()
+                                      tab = .home
+                                      homePendingRoute = .friend(id: f.id, username: f.username, service: f.service, name: f.displayName)
+                                  },
+                                  insets: geo.safeAreaInsets,
+                                  width: min(320, geo.size.width * 0.85))
+                        Spacer(minLength: 0)
+                    }
+                    .ignoresSafeArea()
                 }
                 .transition(.move(edge: .leading))
             }
 
             // ── DJ Chat / Shuffleupagus (slides in from the RIGHT, Android parity) ──
             if showChat {
+                // On a wide screen the chat is a drawer at the trailing edge over a
+                // scrim, as a phone's chat is a full-width one.
+                if PCLayout.isWide(layoutWidth) {
+                    Color.black.opacity(0.44).ignoresSafeArea()
+                        .transition(.opacity)
+                        .onTapGesture { closeChat() }
+                        .zIndex(59)
+                }
                 ChatScreen(onClose: { closeChat() }, seedPrompt: pendingChatPrompt, onOpenPlaylist: { id in
                     closeChat()
                     tab = .home
@@ -175,10 +200,13 @@ struct ContentView: View {
                     handleDeepLink(url)
                 })
                     .environment(coordinator)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(PC.Player.bg)
+                    .frame(maxWidth: PCLayout.isWide(layoutWidth) ? PCLayout.chatDrawerMax : .infinity, maxHeight: .infinity)
+                    // Only the background runs under the status bar, home indicator
+                    // and (in landscape) the camera: the header, messages and input
+                    // keep to the safe area, and the input rises with the keyboard.
+                    .background(PC.Player.bg.ignoresSafeArea())
+                    .frame(maxWidth: .infinity, alignment: .trailing)
                     .offset(x: chatDragX)
-                    .ignoresSafeArea()
                     .overlay(alignment: .leading) {
                         // Thin leading-edge swipe-right-to-close zone — a screen-wide
                         // drag would fight the chat's scroll/input, so scope it to the edge.
@@ -233,8 +261,9 @@ struct ContentView: View {
         // the trait). NowPlaying stays dark regardless — its surfaces use the
         // constant PC.Player.* tokens, not `dyn`.
         .preferredColorScheme(theme.scheme)
-        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { layoutWidth = $0 }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { layoutWidth = $0.width; layoutHeight = $0.height }
         .environment(\.pcLayoutWidth, layoutWidth)
+        .environment(\.pcLayoutHeight, layoutHeight)
         .task { theme.start() }
         // Playback start-up (plugin host, ResolverPrefs, the Listen Along /
         // Spinoff / chat binds, the queue restore and the current track's artwork) lives in

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.artist
 
+import com.parachord.android.ui.components.artistHeroHeight
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.rememberPlayFromSource
@@ -216,12 +217,14 @@ fun ArtistScreen(
             windowInsets = WindowInsets(0),
         )
 
+        // 16:9 on a phone; capped by the window's height on a tablet or in landscape (shared heroHeight).
+        val heroHeight = artistHeroHeight()
         if (isLoading) {
             Column(modifier = Modifier.fillMaxSize()) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .aspectRatio(16f / 9f)
+                        .height(heroHeight)
                         .background(MaterialTheme.colorScheme.surfaceVariant),
                 )
                 repeat(5) { ShimmerTrackRow() }
@@ -255,7 +258,7 @@ fun ArtistScreen(
                         Box(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .aspectRatio(16f / 9f)
+                                .height(heroHeight)
                                 .background(shimmerBrush())
                                 .onSizeChanged { size ->
                                     if (size.height > 0 && imageMaxHeightPx == 0f) {
@@ -269,7 +272,7 @@ fun ArtistScreen(
                                 contentDescription = "Artist image",
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .aspectRatio(16f / 9f)
+                                    .height(heroHeight)
                                     .onSizeChanged { size ->
                                         if (size.height > 0 && imageMaxHeightPx == 0f) {
                                             imageMaxHeightPx = size.height.toFloat()

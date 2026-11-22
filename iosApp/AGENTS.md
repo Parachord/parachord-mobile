@@ -1858,6 +1858,8 @@ NSHTTPURLResponse`.
 - **Grids:** `PCLayout.columns(layoutWidth, …)`, never a fixed `GridItem` count. `PCSkeletonGrid` follows the same rule.
 - **Readable width:** `.pcReadableWidth(gutter:centered:)` for text, forms, Settings and the Ask box; the mini player and tab bar stop at `PCLayout.barMax`; Now Playing's controls at `PCLayout.playerControlsMax`.
 - **Now Playing:** a landscape iPad (regular in both size classes, wider than tall) takes the art-beside-controls layout a landscape phone uses (`sideBySide`, from the view's own measured size). The "Playing from" deck keeps its space while hidden (a new track starts with no resolver; showing and hiding it moved the controls), and its source list is a popover below the pill, not an overlay over the transport.
+- **Track lists:** `.pcListColumn()` at a page's root centres every scroll view under it in a `LIST_MAX` column (`contentMargins`), with no change on a phone. Used by the playlist, album, recommended-playlist and Search pages.
+- **The shell:** `RootView` measures the window's height too (`pcLayoutHeight`). On a landscape phone (`verticalSizeClass == .compact`) the mini player and tab bar share one row. The side drawer gets the measured safe-area insets (it runs to the edges, its content doesn't) and scrolls its rows. The chat keeps to the safe area (only its background ignores it), and on a wide screen it's a `CHAT_DRAWER_MAX` drawer over a scrim. The artist page's photo is `LayoutRules.heroHeight` tall.
 - A sheet presented as a form sheet on iPad inherits the window's `pcLayoutWidth`, not its own narrower width; a sheet that lays out a grid should measure itself.
 
 ## What's intentionally deferred (don't "fix")

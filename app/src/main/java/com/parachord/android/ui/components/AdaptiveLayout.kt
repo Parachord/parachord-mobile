@@ -40,3 +40,11 @@ fun adaptiveGridCells(
         minColumns = minColumns,
     ),
 )
+
+/** The artist page's photo: 16:9 of the width, but no taller than the shared [LayoutRules.heroHeight] for the window. */
+@Composable
+fun artistHeroHeight(): Dp {
+    val config = LocalConfiguration.current
+    val sixteenByNine = config.screenWidthDp * 9.0 / 16.0
+    return minOf(sixteenByNine, LayoutRules.heroHeight(config.screenHeightDp.toDouble())).dp
+}

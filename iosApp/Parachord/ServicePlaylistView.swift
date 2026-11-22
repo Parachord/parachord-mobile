@@ -112,6 +112,8 @@ struct ServicePlaylistView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // On an iPad the header and tracks sit in a centred column (`LIST_MAX`).
+        .pcListColumn()
         .navigationDestination(item: $route) { pcRouteDestination($0) }
         .onAppear { if model.tracks.isEmpty && model.error == nil && model.loading { model.load() } }
     }

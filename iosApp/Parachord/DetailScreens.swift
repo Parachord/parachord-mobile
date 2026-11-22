@@ -627,6 +627,8 @@ struct AlbumScreen: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // On an iPad the header and tracks sit in a centred column (`LIST_MAX`).
+        .pcListColumn()
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .confirmationDialog(model.title, isPresented: $showAlbumMenu, titleVisibility: .visible) {
             Button("Queue Album") { model.entities.forEach { coordinator.addToQueue($0) } }
@@ -922,6 +924,7 @@ enum ArtistTab: String, CaseIterable {
 /// grid / Top Tracks / Biography / Related Artists).
 struct ArtistScreen: View {
     @Environment(\.pcLayoutWidth) private var layoutWidth
+    @Environment(\.pcLayoutHeight) private var layoutHeight
     @State private var model: ArtistDetailModel
     @State private var tab: ArtistTab
     @State private var discoFilter = "all"
@@ -1054,7 +1057,8 @@ struct ArtistScreen: View {
                 .shadow(color: .black.opacity(0.6), radius: 16)
                 .padding(.horizontal, 24).padding(.bottom, 64)
         }
-        .frame(height: 360)
+        // 360 on a phone held upright; shorter in landscape so Play Top Tracks and the tabs show.
+        .frame(height: CGFloat(LayoutRules.shared.heroHeight(windowHeight: Double(layoutHeight))))
         .frame(maxWidth: .infinity)
         .clipped()
     }

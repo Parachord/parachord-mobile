@@ -199,6 +199,8 @@ struct PlaylistDetailView: View {
             }
         }
         .toolbar(.hidden, for: .navigationBar)
+        // On an iPad the header and tracks sit in a centred column (`LIST_MAX`).
+        .pcListColumn()
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .navigationDestination(item: $navAlbum) { AlbumScreen(title: $0.title, artist: $0.artist) }
         .task { await model.load() }

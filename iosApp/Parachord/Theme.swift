@@ -548,6 +548,7 @@ func pcLoadErrorMessage(_ error: Error) -> String? {
 // MARK: - Layout width (iPad, landscape, Split View)
 
 private struct PCLayoutWidthKey: EnvironmentKey { static let defaultValue: CGFloat = 390 }
+private struct PCLayoutHeightKey: EnvironmentKey { static let defaultValue: CGFloat = 844 }
 
 extension EnvironmentValues {
     /// The window's width, measured once at the root (`RootView`). Rows and
@@ -555,6 +556,11 @@ extension EnvironmentValues {
     var pcLayoutWidth: CGFloat {
         get { self[PCLayoutWidthKey.self] }
         set { self[PCLayoutWidthKey.self] = newValue }
+    }
+    /// The window's height, measured with the width.
+    var pcLayoutHeight: CGFloat {
+        get { self[PCLayoutHeightKey.self] }
+        set { self[PCLayoutHeightKey.self] = newValue }
     }
 }
 
@@ -584,6 +590,8 @@ enum PCLayout {
     static var readableMax: CGFloat { CGFloat(rules.READABLE_MAX) }
     static var barMax: CGFloat { CGFloat(rules.BAR_MAX) }
     static var playerControlsMax: CGFloat { CGFloat(rules.PLAYER_CONTROLS_MAX) }
+    static var chatDrawerMax: CGFloat { CGFloat(rules.CHAT_DRAWER_MAX) }
+    static var listMax: CGFloat { CGFloat(rules.LIST_MAX) }
 }
 
 extension View {
@@ -595,4 +603,19 @@ extension View {
         frame(maxWidth: PCLayout.readableMax + 2 * gutter, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: centered ? .center : .leading)
     }
+}
+
+/// Centres the content of every scroll view under it in a column `LIST_MAX` wide
+/// (`contentMargins`), for track-list pages: a phone is narrower than the column
+/// and gets no margin.
+private struct PCListColumn: ViewModifier {
+    @Environment(\.pcLayoutWidth) private var layoutWidth
+    func body(content: Content) -> some View {
+        content.contentMargins(.horizontal, max(0, (layoutWidth - PCLayout.listMax) / 2), for: .scrollContent)
+    }
+}
+
+extension View {
+    /// See `PCListColumn`.
+    func pcListColumn() -> some View { modifier(PCListColumn()) }
 }

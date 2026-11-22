@@ -45,6 +45,17 @@ object LayoutRules {
     /** Now Playing's controls (title, scrubber, transport, actions) stop growing here. */
     const val PLAYER_CONTROLS_MAX = 560.0
 
+    /** A full-bleed page header's tallest, shortest, and share of the window's height ([heroHeight]). */
+    const val HERO_MAX = 360.0
+    const val HERO_MIN = 160.0
+    const val HERO_SHARE = 0.45
+
+    /** On a wide screen the AI chat is a drawer this wide at the trailing edge. */
+    const val CHAT_DRAWER_MAX = 480.0
+
+    /** Track lists and the page headers above them (playlist, album, search) sit in a column this wide. */
+    const val LIST_MAX = 900.0
+
     /**
      * The width of each card in a row that shows [cards] cards across
      * [available] (the row's width inside its gutters) with [gap] between them.
@@ -70,6 +81,13 @@ object LayoutRules {
 
     /** Whether two-column content gets its wide form at [available] wide. */
     fun isWide(available: Double): Boolean = available >= WIDE_MIN
+
+    /**
+     * A full-bleed page header's height (the artist page's photo) for a window
+     * [windowHeight] tall: 360 on a phone held upright, at most 45 % of the
+     * height so a landscape phone still shows the page under it, never under 160.
+     */
+    fun heroHeight(windowHeight: Double): Double = (windowHeight * HERO_SHARE).coerceIn(HERO_MIN, HERO_MAX)
 
     /** Whether Home's halves go side by side at [available] wide. */
     fun halvesSideBySide(available: Double): Boolean = available >= HALVES_SIDE_BY_SIDE_MIN
