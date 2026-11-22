@@ -114,6 +114,18 @@ class MusicBrainzProvider(
         while (albumHints.size > ALBUM_HINT_LIMIT) albumHints.remove(albumHints.keys.first())
     }
 
+    /**
+     * Release groups another screen already knows (Fresh Drops' releases,
+     * with their type), so their album page opens that group, as desktop
+     * opens a Fresh Drops card by its release group, instead of searching.
+     */
+    suspend fun rememberReleaseGroups(groups: List<KnownReleaseGroup>) =
+        rememberAlbums(groups.map { albumKey(it.artist, it.title) to AlbumHint(it.releaseGroupId, null, it.releaseType) })
+
+    /** The release type a discography, search or [rememberReleaseGroups] gave this album, if any. */
+    suspend fun knownReleaseType(albumTitle: String, artistName: String): String? =
+        cacheMutex.withLock { albumHints[albumKey(artistName, albumTitle)]?.releaseType }
+
     override val name = "musicbrainz"
     override val priority = 0
 
@@ -359,3 +371,12 @@ class MusicBrainzProvider(
         }
     }
 }
+
+/** A release group known by its id and type, for [MusicBrainzProvider.rememberReleaseGroups]. */
+data class KnownReleaseGroup(
+    val title: String,
+    val artist: String,
+    val releaseGroupId: String,
+    /** MusicBrainz's lowercase type ("album", "ep", "single"); null when not known. */
+    val releaseType: String?,
+)

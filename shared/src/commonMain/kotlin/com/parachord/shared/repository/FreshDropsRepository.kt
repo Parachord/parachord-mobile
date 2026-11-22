@@ -17,6 +17,7 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.datetime.Clock
@@ -97,6 +98,12 @@ class FreshDropsRepository(
     private val artistIdCache: com.parachord.shared.cache.PersistentJsonCache<String>? = null,
     /** Today's date, which sets the window ([freshDropsWindow]); a test can fix it. */
     private val today: () -> LocalDate = { Clock.System.todayIn(TimeZone.currentSystemDefault()) },
+    /**
+     * Hands each list's release groups to the album page
+     * (`MetadataService.rememberReleaseGroups`), so a card opens its own
+     * release group and keeps its type, as desktop opens it by that id.
+     */
+    private val noteReleaseGroups: suspend (List<com.parachord.shared.metadata.KnownReleaseGroup>) -> Unit = {},
 ) {
     companion object {
         private const val TAG = "FreshDropsRepo"
@@ -274,7 +281,10 @@ class FreshDropsRepository(
      *   of the user's library due to the artist cap + shuffling)
      * - Cache results in memory for the session
      */
-    fun getFreshDrops(forceRefresh: Boolean = false): Flow<Resource<List<FreshDrop>>> = flow {
+    fun getFreshDrops(forceRefresh: Boolean = false): Flow<Resource<List<FreshDrop>>> = freshDropsFlow(forceRefresh)
+        .onEach { r -> if (r is Resource.Success) noteReleaseGroups(knownReleaseGroups(r.data)) }
+
+    private fun freshDropsFlow(forceRefresh: Boolean): Flow<Resource<List<FreshDrop>>> = flow {
         // Ensure disk cache is loaded before checking staleness
         if (!diskCacheLoaded) loadDiskCache()
 
@@ -611,6 +621,13 @@ class FreshDropsRepository(
             }
     }
 }
+
+/** The release groups a Fresh Drops list names, for the album page. */
+internal fun knownReleaseGroups(drops: List<FreshDrop>): List<com.parachord.shared.metadata.KnownReleaseGroup> =
+    drops.mapNotNull { d ->
+        val id = d.mbid?.takeIf { it.isNotBlank() } ?: return@mapNotNull null
+        com.parachord.shared.metadata.KnownReleaseGroup(d.title, d.artist, id, d.releaseType.trim().lowercase().ifEmpty { null })
+    }
 
 /** An artist from one of the discovery sources. */
 private data class ArtistSource(
