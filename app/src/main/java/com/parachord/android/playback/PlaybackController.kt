@@ -2224,6 +2224,9 @@ class PlaybackController constructor(
         // If the track has no artwork, try to fetch it in the background
         enrichArtworkIfMissing(routedTrack)
 
+        // A local file with no other source: find its others once (#769).
+        fillLocalTrackSources(routedTrack)
+
         // Enrich with MusicBrainz MBIDs in the background
         mbidEnrichment.enrichInBackground(routedTrack.id, routedTrack.artist, routedTrack.title)
 
@@ -4353,6 +4356,50 @@ class PlaybackController constructor(
      * been through the resolver pipeline yet. Caches the result in TrackResolverCache
      * so subsequent plays and queue items benefit.
      */
+    /** Tracks [fillLocalTrackSources] has already asked about this session. */
+    private val playFillTracker = com.parachord.shared.resolver.PlayFillTracker()
+
+    /**
+     * Find the other sources of a track that just started from a local file
+     * and has none (#769, desktop parachord#1604, shared [LocalPlayFill]):
+     * once per track per session, off the main thread, after the play began.
+     * What's found joins the resolver cache, so Now Playing's source switcher
+     * offers it. The background sweep still skips local files, so this never
+     * runs over a whole local library.
+     */
+    private fun fillLocalTrackSources(track: TrackEntity) {
+        val key = trackKey(track.title, track.artist)
+        val cached = trackResolverCache.getSources(track.title, track.artist)
+        if (!com.parachord.shared.resolver.LocalPlayFill.shouldFill(track.resolver, cached)) return
+        if (!playFillTracker.claim(key)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val report = resolverManager.resolveReport(
+                    "${track.title} ${track.artist}",
+                    targetTitle = track.title,
+                    targetArtist = track.artist,
+                    targetIsrc = track.isrc,
+                    targetMbid = track.recordingMbid,
+                )
+                val current = trackResolverCache.getSources(track.title, track.artist)
+                val merged = com.parachord.shared.resolver.LocalPlayFill.mergeFoundSources(current, report.sources)
+                if (merged.size == current.orEmpty().size) {
+                    Log.d(TAG, "Play fill: nothing new for '${track.title}'" +
+                        if (report.failed.isNotEmpty()) " (couldn't answer: ${report.failed})" else "")
+                    if (current == null && report.sources.isNotEmpty()) {
+                        trackResolverCache.putSources(track.title, track.artist, report.sources, report.failed)
+                    }
+                    return@launch
+                }
+                Log.d(TAG, "Play fill: '${track.title}' → ${merged.map { it.resolver }}")
+                trackResolverCache.putSources(track.title, track.artist, merged, report.failed)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Play fill failed for '${track.title}': ${e.message}")
+            }
+        }
+    }
+
     private class OnTheFlyResolve(
         val track: TrackEntity,
         /** Nothing usable came back and a resolver couldn't answer, or the resolve threw (#566). */

@@ -235,6 +235,40 @@ final class IosTrackResolverCache {
         pump()
     }
 
+    private let playFillTracker = PlayFillTracker()
+
+    /// A track that just started from a local file and has no other source:
+    /// ask the resolvers once per track per session, after the play began, and
+    /// add what they find, so the Now Playing deck offers it (#769, desktop
+    /// parachord#1604, the shared `LocalPlayFill`). The background sweep still
+    /// skips local files.
+    func fillLocalPlay(artist: String, title: String, album: String?, playedResolver: String?,
+                       isrc: String?, recordingMbid: String?) {
+        let key = ResolveRequest(artist: artist, title: title, album: album).key
+        guard LocalPlayFill.shared.shouldFill(playingResolver: playedResolver, cached: cache[key]),
+              playFillTracker.claim(key: key)
+        else { return }
+        Task { @MainActor in
+            guard let report = try? await self.container.resolveSourcesReport(
+                artist: artist, title: title, album: album,
+                spotifyId: nil, appleMusicId: nil,
+                targetIsrc: isrc, targetMbid: recordingMbid)
+            else { return }
+            let current = self.cache[key]
+            let merged = LocalPlayFill.shared.mergeFoundSources(current: current, found: report.sources)
+            let base = current ?? []
+            if merged.count == base.count {
+                if current == nil, !report.sources.isEmpty {
+                    self.cache[key] = report.sources
+                    self.scheduleSave()
+                }
+                return
+            }
+            self.cache[key] = (try? await self.container.rankSources(sources: merged)) ?? merged
+            self.scheduleSave()
+        }
+    }
+
     private func waitingToRetry(_ flightKey: String) -> Bool {
         guard let until = retryAfter[flightKey] else { return false }
         return Date() < until
