@@ -361,6 +361,12 @@ The runtime split: **Kotlin owns lifecycle, Swift owns polyfills.**
   `window.storage`) must prepend
   `if (typeof window === 'undefined') { globalThis.window = globalThis; }`
   so `.axe` plugins ported from the Android WebView host work unmodified.
+- **JSC has no `URL` or `URLSearchParams` either** (WebCore APIs, like
+  `DOMParser`). `IosJsRuntime` installs a WHATWG-style polyfill
+  (`JsUrlPolyfill`, tested in JSC by `JsUrlPolyfillTest`) before anything
+  else runs. Without it a plug-in's `new URL(...)` threw, and a `try` around
+  it read the page as "not a URL": every Amazon album lookup failed as "not
+  reachable". `DOMParser` is still missing (Bandcamp's page lookups fail).
 - Match Android's `bootstrap.html` Promise/Response shape byte-for-byte
   so plugins don't need per-platform forks.
 - **The plug-in host (`this.host`) comes from `BOOTSTRAP_JS`'s `plugin-host-supplier`

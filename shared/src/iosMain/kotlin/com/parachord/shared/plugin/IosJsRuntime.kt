@@ -75,6 +75,9 @@ class IosJsRuntime : JsRuntime {
             println("[IosJsRuntime] uncaught JS exception: ${exception?.toString() ?: "<unknown>"}")
         }
         ctx.evaluateScript("if (typeof window === 'undefined') { globalThis.window = globalThis; }")
+        // JSC has no URL / URLSearchParams; plug-ins written for Electron and
+        // WebView use them (amazonmusic.axe's page checks, #781).
+        ctx.evaluateScript(JsUrlPolyfill.SCRIPT)
         context = ctx
 
         val installer = nativeBridgeInstaller
