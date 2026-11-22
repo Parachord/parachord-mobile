@@ -385,6 +385,7 @@ class SpotifyClient(
      * null on 204 (no active device), any non-2xx, or a decode/transport
      * failure. Never throws.
      */
+    @Throws(Throwable::class)
     suspend fun getPlaybackStateOrNull(): SpPlaybackState? = try {
         val resp = getPlaybackState()
         if (resp.status.value == 204 || !resp.status.isSuccess()) null else resp.body()

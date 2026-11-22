@@ -116,3 +116,12 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 }
+
+// SwiftSuspendThrowsTest reads iosMain and the Swift sources at run time, so
+// they're declared as inputs: otherwise an edit there leaves the JVM test task
+// up to date and the check doesn't run.
+tasks.withType<Test>().configureEach {
+    inputs.dir("src/iosMain").withPropertyName("iosMainSources").withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(fileTree(rootProject.file("iosApp/Parachord")) { include("**/*.swift") })
+        .withPropertyName("swiftSources").withPathSensitivity(PathSensitivity.RELATIVE)
+}

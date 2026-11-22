@@ -537,6 +537,7 @@ class IosContainer private constructor() {
     fun clearAppleMusicReauth() = syncEngine.clearAppleMusicReauth()
 
     /** Per-provider "what's synced" summary axes (tracks/albums/artists/playlists). */
+    @Throws(Throwable::class)
     suspend fun getSyncCollectionsForProvider(providerId: String): Set<String> =
         settingsStore.getSyncCollectionsForProvider(providerId)
 
@@ -550,6 +551,7 @@ class IosContainer private constructor() {
      * the provider's list is fetched at most once a minute, and a row the user
      * already checked stays checked. Call from a `Task`.
      */
+    @Throws(Throwable::class)
     suspend fun getProviderPickerRows(providerId: String): List<ProviderChannelPlaylist> =
         syncPickerRows.rows(providerId)
 
@@ -574,6 +576,7 @@ class IosContainer private constructor() {
     private var lastMigrationSummary: MigrationPlanSummary? = null
 
     /** Forced, no-write dry-run preview, shaped for Swift (call from `Task`). */
+    @Throws(Throwable::class)
     suspend fun previewMigration(): IosMigrationSummary {
         val s = summarizeMigrationPlan(syncEngine.previewMigration())
         lastMigrationSummary = s
@@ -583,6 +586,7 @@ class IosContainer private constructor() {
     /** Accept: recompute; flip `sync_engine_mode='new'` only if the plan is
      *  unchanged since the user looked, else return the fresh plan
      *  (`flipped=false`) to re-show (recompute-on-accept). */
+    @Throws(Throwable::class)
     suspend fun acceptMigration(): IosMigrationAcceptResult {
         val prev = lastMigrationSummary
         val fresh = summarizeMigrationPlan(syncEngine.previewMigration())
@@ -596,10 +600,12 @@ class IosContainer private constructor() {
 
     /** Current per-client sync-engine mode: `legacy` | `shadow` | `new`. Drives
      *  the Sync-tab "Sync engine" section (shows which engine is active). */
+    @Throws(Throwable::class)
     suspend fun getSyncEngineMode(): String = settingsStore.getSyncEngineMode()
 
     /** Set the sync-engine mode directly. Used to revert `new` → `legacy`
      *  (the migration preview handles `legacy` → `new` via [acceptMigration]). */
+    @Throws(Throwable::class)
     suspend fun setSyncEngineMode(mode: String) = settingsStore.setSyncEngineMode(mode)
 
     // ── AI Suggestions (Shuffleupagus) — home parity (#196) ──────────────
@@ -626,10 +632,12 @@ class IosContainer private constructor() {
     // is wrapped to return a safe default instead of throwing across the bridge.
 
     /** True when any AI provider (ChatGPT/Claude/Gemini) has a key configured. */
+    @Throws(Throwable::class)
     suspend fun hasAiSuggestionsPlugin(): Boolean =
         try { aiRecommendationService.hasEnabledProvider() } catch (e: Exception) { false }
 
     /** Stale-while-revalidate: disk-cached AI suggestions (instant), or null. */
+    @Throws(Throwable::class)
     suspend fun aiSuggestionsCached(): IosAiSuggestions? =
         try { aiRecommendationService.getCachedRecommendations()?.toIos() } catch (e: Exception) { null }
 
@@ -639,6 +647,7 @@ class IosContainer private constructor() {
      * showing, and the provider's message, which Home shows when nothing is
      * cached (Android's HomeViewModel). Never throws.
      */
+    @Throws(Throwable::class)
     suspend fun loadAiSuggestions(): IosAiSuggestionsResult =
         try { IosAiSuggestionsResult(aiRecommendationService.loadRecommendations().toIos(), null) }
         catch (e: Exception) {
@@ -653,6 +662,7 @@ class IosContainer private constructor() {
      * (desktop does this when it loads them), or null when there was nothing
      * to fill. Never throws.
      */
+    @Throws(Throwable::class)
     suspend fun fillAiSuggestionArtwork(): IosAiSuggestions? =
         try { aiRecommendationService.fillMissingArtwork()?.toIos() }
         catch (e: Exception) {
@@ -674,6 +684,7 @@ class IosContainer private constructor() {
         (NSBundle.mainBundle.objectForInfoDictionaryKey("CFBundleShortVersionString") as? String ?: "").trim()
 
     /** Fetch the announcement feed (cold start). Fire-and-forget; failures swallowed. */
+    @Throws(Throwable::class)
     suspend fun refreshAnnouncements() { try { announcementsRepository.refreshNow() } catch (_: Exception) {} }
 
     /** Observe the top visible (surface/version-matched, not-dismissed) announcement. */
@@ -684,11 +695,13 @@ class IosContainer private constructor() {
         }
 
     /** Telemetry: "view" | "cta-click" | "dismiss". Fire-and-forget. */
+    @Throws(Throwable::class)
     suspend fun trackAnnouncementEvent(id: String, event: String) {
         try { achordionClient.trackAnnouncementEvent(id, event) } catch (_: Exception) {}
     }
 
     /** Persistently dismiss an announcement (also fires the dismiss event). */
+    @Throws(Throwable::class)
     suspend fun dismissAnnouncement(id: String) {
         try { announcementsRepository.dismiss(id) } catch (_: Exception) {}
     }
@@ -711,9 +724,11 @@ class IosContainer private constructor() {
      *  the empty string on success, else the error message (so "Sync now" can
      *  surface WHY it failed instead of a generic toast). Safe to call from the
      *  foreground timer (which ignores the result). */
+    @Throws(Throwable::class)
     suspend fun syncNow(): String = syncNowOutcome().error
 
     /** [syncNow] with the run's notices ("ListenBrainz rate-limited…"), for "Sync now". */
+    @Throws(Throwable::class)
     suspend fun syncNowOutcome(): IosSyncOutcome {
         // CRITICAL (Kotlin/Native): this is a Swift-bridged `suspend` — an
         // exception that escapes it does NOT reach Swift's `try?`; Kotlin/Native
@@ -802,18 +817,21 @@ class IosContainer private constructor() {
     }
 
     /** Sweep expired track tombstones once per launch (Android parity). */
+    @Throws(Throwable::class)
     suspend fun pruneTombstonesOnLaunch() {
         try { tombstoneService.prune() } catch (_: Exception) {}
     }
 
     /** One-time repair of track lengths saved in seconds instead of ms (#349,
      *  Android parity). Idempotent; never throws to Swift. */
+    @Throws(Throwable::class)
     suspend fun migrateDurationUnitsOnLaunch() {
         try { com.parachord.shared.db.DurationUnitMigration.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
     }
 
     /** One-time repair of Apple Music library ids saved where a catalog id
      *  belongs (#265, Android parity). Idempotent; never throws to Swift. */
+    @Throws(Throwable::class)
     suspend fun repairAppleMusicLibraryIdsOnLaunch() {
         try { com.parachord.shared.db.AppleMusicLibraryIdRepair.runOnce(sqlDriver, kvStore) } catch (_: Exception) {}
         // One-time redate of collection items saved as 1970 (#508); same launch hook.
@@ -822,7 +840,9 @@ class IosContainer private constructor() {
 
     /** Persist the Apple Music Music User Token (acquired Swift-side via
      *  SKCloudServiceController). Enables the Apple Music library API for sync. */
+    @Throws(Throwable::class)
     suspend fun setAppleMusicUserToken(token: String) = settingsStore.setAppleMusicUserToken(token)
+    @Throws(Throwable::class)
     suspend fun hasAppleMusicUserToken(): Boolean = !settingsStore.getAppleMusicUserToken().isNullOrBlank()
 
     /**
@@ -834,6 +854,7 @@ class IosContainer private constructor() {
      * cleared too: a deliberate disconnect isn't a stale token to fix.
      * The resolver side (active list, cached sources) is the caller's.
      */
+    @Throws(Throwable::class)
     suspend fun disconnectAppleMusic() {
         settingsStore.clearAppleMusicUserToken()
         syncEngine.clearAppleMusicReauth()
@@ -846,6 +867,7 @@ class IosContainer private constructor() {
         }
     }
     /** The ES256 dev token SKCloudServiceController.requestUserToken needs. */
+    @Throws(Throwable::class)
     suspend fun appleMusicDeveloperToken(): String = appConfig.appleMusicDeveloperToken
 
     /** Remaining Spotify rate-limit cooldown in ms (0 = clear). PURELY LOCAL —
@@ -869,10 +891,12 @@ class IosContainer private constructor() {
         spotifyPlayRequests.forTrack(trackUri)
 
     /** The same, starting [startMs] into the track (`position_ms`, a resumed track, #657). */
+    @Throws(Throwable::class)
     suspend fun spotifyPlayRequest(trackUri: String, startMs: Long): com.parachord.shared.api.SpPlaybackRequest =
         spotifyPlayRequests.forTrack(trackUri, startMs)
 
     // ── Sync settings (Phase 1 toggles for the iOS Settings screen) ──────
+    @Throws(Throwable::class)
     suspend fun isSyncEnabled(): Boolean = settingsStore.getSyncSettings().enabled
 
     /**
@@ -881,6 +905,7 @@ class IosContainer private constructor() {
      * membership alone would wrongly show Spotify "on" on a fresh install — gate
      * on the master flag too.
      */
+    @Throws(Throwable::class)
     suspend fun isProviderSyncEnabled(providerId: String): Boolean =
         settingsStore.getSyncSettings().enabled && providerId in settingsStore.getEnabledSyncProviders()
 
@@ -889,9 +914,11 @@ class IosContainer private constructor() {
     // [String: KotlinInt], which makes every Swift call site box and unbox.
 
     /** Stored dB offset for [resolverId] (0 when unset). */
+    @Throws(Throwable::class)
     suspend fun resolverVolumeOffsetDb(resolverId: String): Int =
         settingsStore.getResolverVolumeOffsets()[resolverId] ?: 0
 
+    @Throws(Throwable::class)
     suspend fun setResolverVolumeOffsetDb(resolverId: String, db: Int) {
         val clamped = db.coerceIn(ResolverVolume.MIN_OFFSET_DB, ResolverVolume.MAX_OFFSET_DB)
         settingsStore.setResolverVolumeOffsets(
@@ -906,6 +933,7 @@ class IosContainer private constructor() {
      * offsets attenuate from full. See
      * docs/plans/2026-09-20-ios-volume-normalizer-design.md.
      */
+    @Throws(Throwable::class)
     suspend fun resolverVolumePercent(resolverId: String): Int =
         ResolverVolume.effectiveVolumePercent(100, resolverVolumeOffsetDb(resolverId))
 
@@ -927,6 +955,7 @@ class IosContainer private constructor() {
             embedVolumeApplies = false,
         )
 
+    @Throws(Throwable::class)
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
 
     // ── Per-provider sync selection (axes + playlist picker) ──────────────
@@ -935,21 +964,26 @@ class IosContainer private constructor() {
     // for Swift.
 
     /** The axes this provider syncs (subset of tracks/albums/artists/playlists). */
+    @Throws(Throwable::class)
     suspend fun getSyncCollections(providerId: String): List<String> =
         settingsStore.getSyncCollectionsForProvider(providerId).toList()
 
+    @Throws(Throwable::class)
     suspend fun setSyncCollections(providerId: String, axes: List<String>) {
         settingsStore.setSyncCollectionsForProvider(providerId, axes.toSet())
     }
 
     /** "ALL" | "NONE" | "SELECTED" — the provider's playlist-push mode. */
+    @Throws(Throwable::class)
     suspend fun getPlaylistSelectionMode(providerId: String): String =
         settingsStore.getPlaylistSelection(providerId).mode.name
 
     /** Local playlist ids selected when mode == SELECTED. */
+    @Throws(Throwable::class)
     suspend fun getPlaylistSelectionIds(providerId: String): List<String> =
         settingsStore.getPlaylistSelection(providerId).localPlaylistIds.toList()
 
+    @Throws(Throwable::class)
     suspend fun setPlaylistSelection(providerId: String, mode: String, ids: List<String>) {
         val m = when (mode) {
             "NONE" -> com.parachord.shared.sync.PlaylistSyncMode.NONE
@@ -964,27 +998,39 @@ class IosContainer private constructor() {
 
     /** How many synced items a provider has for an axis (tracks/albums/artists/
      *  playlists) — drives the keep/remove prompt when an axis is deselected. */
+    @Throws(Throwable::class)
     suspend fun countSyncedItems(providerId: String, axis: String): Int =
         syncEngine.countItemsForProviderAxis(providerId, axis).toInt()
 
     /** Remove the items a provider contributed for [axis]. Items also synced from
      *  another provider survive (lose just this provider's source). */
+    @Throws(Throwable::class)
     suspend fun removeSyncedItems(providerId: String, axis: String): Int =
         syncEngine.removeItemsForProviderAxis(providerId, axis).toInt()
 
     /** Persisted playlists-screen sort key (matches Android's PlaylistSort.name). */
+    @Throws(Throwable::class)
     suspend fun getPlaylistsSort(): String? = settingsStore.getSortPlaylists()
+    @Throws(Throwable::class)
     suspend fun setPlaylistsSort(sort: String) { settingsStore.setSortPlaylists(sort) }
 
     /** Persisted Collection per-tab sort keys (match Android's
      *  {Track,Album,Artist,Friend}Sort.name) — restored across launches (#250). */
+    @Throws(Throwable::class)
     suspend fun getTracksSort(): String? = settingsStore.getSortTracks()
+    @Throws(Throwable::class)
     suspend fun setTracksSort(sort: String) { settingsStore.setSortTracks(sort) }
+    @Throws(Throwable::class)
     suspend fun getAlbumsSort(): String? = settingsStore.getSortAlbums()
+    @Throws(Throwable::class)
     suspend fun setAlbumsSort(sort: String) { settingsStore.setSortAlbums(sort) }
+    @Throws(Throwable::class)
     suspend fun getArtistsSort(): String? = settingsStore.getSortArtists()
+    @Throws(Throwable::class)
     suspend fun setArtistsSort(sort: String) { settingsStore.setSortArtists(sort) }
+    @Throws(Throwable::class)
     suspend fun getFriendsSort(): String? = settingsStore.getSortFriends()
+    @Throws(Throwable::class)
     suspend fun setFriendsSort(sort: String) { settingsStore.setSortFriends(sort) }
 
     // ── XSPF import + hosted polling (#254) ───────────────────────────────────
@@ -1010,6 +1056,7 @@ class IosContainer private constructor() {
 
     /** Re-fetch every hosted XSPF playlist; replace tracks on content change.
      *  Driven from a foreground timer + launch poll in the SwiftUI shell. */
+    @Throws(Throwable::class)
     suspend fun pollHostedPlaylists() = hostedXspfService.pollAll()
 
     /** Import a playlist from a link: the shared importer (Android's too), on the
@@ -1029,6 +1076,7 @@ class IosContainer private constructor() {
         playlistUrlImporter.importFromUrl(url, savedKey)
 
     /** Saves a recommended service playlist under its key; never throws (a failure is a null id). */
+    @Throws(Throwable::class)
     suspend fun saveRecommendedPlaylist(url: String): IosSaveResult = try {
         IosSaveResult(importPlaylistFromUrl(url, recommendedPlaylistKey(url)).playlistId)
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1069,6 +1117,7 @@ class IosContainer private constructor() {
 
     /** Add/follow a friend by username or "service:username" / profile URL (#198,
      *  FAB "Add Friend"). Returns null on success, else a user-facing error. */
+    @Throws(Throwable::class)
     suspend fun addFriend(input: String): String? =
         when (val r = friendsRepository.addFriend(input)) {
             is com.parachord.shared.model.Resource.Success<*> -> null
@@ -1077,6 +1126,7 @@ class IosContainer private constructor() {
         }
 
     /** Local playlists eligible to push to [providerId] (the picker's rows). */
+    @Throws(Throwable::class)
     suspend fun getPushablePlaylists(providerId: String): List<IosSyncPlaylist> =
         playlistDao.getAllSync()
             .filter { it.name.isNotBlank() && com.parachord.shared.sync.isPlaylistPushCandidate(it, providerId) }
@@ -1086,12 +1136,14 @@ class IosContainer private constructor() {
 
     /** The user's imported playlists FROM [providerId] (id-prefix `<provider>-`),
      *  for the per-provider PULL picker. */
+    @Throws(Throwable::class)
     suspend fun getImportedProviderPlaylists(providerId: String): List<IosSyncPlaylist> =
         playlistDao.getAllSync()
             .filter { it.id.startsWith("$providerId-") && it.name.isNotBlank() }
             .map { IosSyncPlaylist(id = it.id, name = it.name, trackCount = it.trackCount) }
 
     /** The provider's pull allowlist (remote external ids). Empty = import all. */
+    @Throws(Throwable::class)
     suspend fun getPullAllowlist(providerId: String): List<String> =
         settingsStore.getPullPlaylists(providerId).toList()
 
@@ -1108,6 +1160,7 @@ class IosContainer private constructor() {
      * row survives but never re-syncs. The allowlist MUST exclude the kept ids
      * (the caller passes only the still-checked ids) or detached rows re-import.
      */
+    @Throws(Throwable::class)
     suspend fun applyPullSelection(
         providerId: String,
         allowlist: List<String>,
@@ -1135,6 +1188,7 @@ class IosContainer private constructor() {
      * rebuilt from scratch (ignoring the default `{spotify}`) so enabling one
      * provider never silently lights up another.
      */
+    @Throws(Throwable::class)
     suspend fun setSyncProviderEnabled(providerId: String, enabled: Boolean) {
         val masterOn = settingsStore.getSyncSettings().enabled
         val current = if (masterOn) settingsStore.getEnabledSyncProviders().toMutableSet() else mutableSetOf()
@@ -1162,6 +1216,7 @@ class IosContainer private constructor() {
      * just this provider's source). Then drops it from the enabled set + flips
      * the master flag off iff no providers remain. (Keep = removeItems false.)
      */
+    @Throws(Throwable::class)
     suspend fun disableSyncProvider(providerId: String, removeItems: Boolean) {
         syncEngine.stopProviderSync(providerId, removeItems)
         val current = settingsStore.getEnabledSyncProviders().toMutableSet()
@@ -1202,7 +1257,9 @@ class IosContainer private constructor() {
     // Refresh each friend's cached now-playing (mirrors Android's friend activity
     // refresh on the Friends tab). Fire-and-forget; failures are swallowed in the repo.
     fun refreshFriendsActivity() { appScope.launch { runCatching { friendsRepository.refreshAllActivity() } } }
+    @Throws(Throwable::class)
     suspend fun removeFriend(friendId: String) { friendsRepository.removeFriend(friendId) }
+    @Throws(Throwable::class)
     suspend fun pinFriend(friendId: String, pinned: Boolean) { friendsRepository.pinFriend(friendId, pinned) }
 
     // ── #235 Listen Along & Friends ────────────────────────────────────
@@ -1229,9 +1286,11 @@ class IosContainer private constructor() {
         }
     }
 
+    @Throws(Throwable::class)
     suspend fun getFriend(friendId: String): Friend? = friendsRepository.getFriendById(friendId)
 
     /** The friend a `parachord://friend/{id}` link names: id, username or name (#470). */
+    @Throws(Throwable::class)
     suspend fun findFriendForLink(key: String): Friend? = friendsRepository.findFriendForLink(key)
 
     // ── Deep links (#228) ───────────────────────────────────────────────
@@ -1319,6 +1378,7 @@ class IosContainer private constructor() {
      * null when the link isn't one of these (Swift then falls back to the sync
      * command / ack).
      */
+    @Throws(Throwable::class)
     suspend fun resolveComplexDeepLink(
         scheme: String?, host: String?, path: List<String>, query: Map<String, String>,
     ): IosComplexLink? {
@@ -1430,6 +1490,7 @@ class IosContainer private constructor() {
      *
      * Returns null when the host isn't ours or the short link can't be resolved.
      */
+    @Throws(Throwable::class)
     suspend fun resolveUniversalLink(host: String?, path: List<String>, query: Map<String, String>): String? {
         return when (host?.lowercase()) {
             "parachord.com", "www.parachord.com" -> {
@@ -1456,6 +1517,7 @@ class IosContainer private constructor() {
      * albums via resolveBy{Spotify,AppleMusic}, single tracks via getTrack/lookup
      * (with the provider id as a hint), artists → a nav command.
      */
+    @Throws(Throwable::class)
     suspend fun resolveExternalLink(rawUrl: String): IosComplexLink {
         val u = try { io.ktor.http.Url(rawUrl) } catch (e: Exception) {
             return IosComplexLink("failed", message = "Couldn't read that link")
@@ -1580,6 +1642,7 @@ class IosContainer private constructor() {
     )
 
     /** Refresh one saved friend's cached now-playing + re-read the row (the friend's profile). */
+    @Throws(Throwable::class)
     suspend fun refreshFriendActivity(friend: Friend): Friend? {
         friendsRepository.refreshFriendActivity(friend)
         return friendsRepository.getFriendById(friend.id)
@@ -1587,6 +1650,7 @@ class IosContainer private constructor() {
 
     /** Now-playing for a friend NOT in the local DB (deeplink listen-along). Synthetic,
      *  non-persisted; null when they aren't currently listening. */
+    @Throws(Throwable::class)
     suspend fun fetchTransientFriendNowPlaying(service: String, user: String): Friend? =
         friendsRepository.fetchTransientFriendNowPlaying(service, user)
 
@@ -1733,6 +1797,7 @@ class IosContainer private constructor() {
     fun friendWithHidesListening(friend: Friend, hides: Boolean): Friend = friend.copy(hidesListening = hides)
 
     /** The profile's person: the saved friend, or an unsaved one (`transient`) for a Listener not followed. Never throws. */
+    @Throws(Throwable::class)
     suspend fun profileFriend(friendId: String): Friend? = try {
         friendsRepository.profileFriend(friendId)
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -1743,6 +1808,7 @@ class IosContainer private constructor() {
     }
 
     /** Follows the profile's person: the saved friend on success, else the shared message to show. Never throws. */
+    @Throws(Throwable::class)
     suspend fun followProfile(service: String, username: String): IosFollowProfileResult = try {
         when (val result = friendsRepository.follow(service, username)) {
             is Resource.Success -> IosFollowProfileResult(result.data, null)
@@ -1767,8 +1833,11 @@ class IosContainer private constructor() {
     // Add to collection (user-intent) — routes through LibraryRepository so a
     // re-add clears the track's remove-tombstones (#194) and fires MBID
     // enrichment. Sync push happens on the next sync cycle.
+    @Throws(Throwable::class)
     suspend fun addTrackToCollection(track: Track) { libraryRepository.addToCollection(track) }
+    @Throws(Throwable::class)
     suspend fun addAlbumToCollection(album: Album) { libraryRepository.addAlbumToCollection(album) }
+    @Throws(Throwable::class)
     suspend fun addArtistToCollection(artist: Artist) { libraryRepository.addArtistToCollection(artist) }
 
     /**
@@ -1777,6 +1846,7 @@ class IosContainer private constructor() {
      * fires MBID enrichment per track in the background (which also drives online
      * artwork enrichment for files with no embedded art — Android parity).
      */
+    @Throws(Throwable::class)
     suspend fun addLocalTracks(tracks: List<Track>) {
         // Full replace of the SCANNED set: a re-scan reflects the CURRENT Music
         // library. Prune existing scanned rows (id prefix "local-") no longer in
@@ -1803,6 +1873,7 @@ class IosContainer private constructor() {
      * URL in the app sandbox, which AVPlayer plays natively (no DRM, no
      * ipod-library:// round-trip).
      */
+    @Throws(Throwable::class)
     suspend fun addImportedFiles(tracks: List<Track>) {
         if (tracks.isEmpty()) return
         libraryRepository.addScannedLocalTracks(tracks)
@@ -1817,6 +1888,7 @@ class IosContainer private constructor() {
      * the corrected title/artist. Primarily for `localfiles` tracks (whose import
      * metadata is often just a filename), but works for any row by id.
      */
+    @Throws(Throwable::class)
     suspend fun updateTrackMetadata(id: String, title: String, artist: String, album: String?) {
         val existing = trackDao.getAll().first().firstOrNull { it.id == id } ?: return
         val t = title.trim().ifBlank { existing.title }
@@ -1827,20 +1899,25 @@ class IosContainer private constructor() {
     }
 
     /** Number of scanned local-library tracks currently in the DB (Settings display). */
+    @Throws(Throwable::class)
     suspend fun localTrackCount(): Int = trackDao.getAll().first().count { it.resolver == "localfiles" }
 
     // Remove from collection — sync-aware (#194): tombstones the item + attempts
     // remote removal on each linked provider BEFORE the local delete, so the next
     // pull doesn't re-import it. Tracks come from any screen (weekly playlist,
     // player, search) whose id isn't the library row's, so resolve the row first.
+    @Throws(Throwable::class)
     suspend fun removeTrackFromCollection(track: Track) { libraryRepository.removeFromCollection(track) }
+    @Throws(Throwable::class)
     suspend fun removeAlbumFromCollection(album: Album) { libraryRepository.deleteAlbumWithSync(album) }
+    @Throws(Throwable::class)
     suspend fun removeArtistFromCollection(artist: Artist) { libraryRepository.deleteArtistWithSync(artist) }
 
     // Toggle album/artist collection from detail screens (#195 M4). ID + row
     // construction live in Kotlin so the `hashCode()`-based ID matches Android
     // exactly (Swift's String.hashValue differs). year/trackCount use 0 as the
     // "unknown" sentinel to keep the Swift→Kotlin bridge on primitive Int.
+    @Throws(Throwable::class)
     suspend fun toggleAlbumCollection(title: String, artist: String, artworkUrl: String?, year: Int, trackCount: Int) {
         val existing = albumDao.getByTitleAndArtist(title, artist)
         if (existing != null) { libraryRepository.deleteAlbumWithSync(existing); return }
@@ -1851,6 +1928,7 @@ class IosContainer private constructor() {
         ))
     }
 
+    @Throws(Throwable::class)
     suspend fun toggleArtistCollection(name: String, imageUrl: String?) {
         val existing = artistDao.getByName(name).first()
         if (existing != null) { libraryRepository.deleteArtistWithSync(existing); return }
@@ -1882,14 +1960,17 @@ class IosContainer private constructor() {
 
     /** Pop of the Tops — Apple Music (iTunes RSS) top albums (default tab) +
      *  top songs. No auth/key. Mirrors Android's Albums/Songs tabs. */
+    @Throws(Throwable::class)
     suspend fun loadPopOfTheTopsAlbums(countryCode: String): List<ChartAlbum> =
         chartsRepository.getAppleMusicAlbums(countryCode)
 
+    @Throws(Throwable::class)
     suspend fun loadPopOfTheTops(countryCode: String): List<ChartSong> =
         chartsRepository.getAppleMusicSongs(countryCode)
 
     /** Top songs from [source] ("apple" or "lastfm", Android's Songs-tab picker).
      *  A blank [countryCode] is Last.fm's global chart. */
+    @Throws(Throwable::class)
     suspend fun loadPopOfTheTopsSongs(countryCode: String, source: String): List<ChartSong> =
         if (source == "lastfm") chartsRepository.getLastfmCharts(countryCode)
         else chartsRepository.getAppleMusicSongs(countryCode)
@@ -1979,11 +2060,13 @@ class IosContainer private constructor() {
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun getAlbumDetail(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.getAlbumTracks(albumTitle, artistName)
 
     /** An album's track list for Play / Queue: the providers race the plugins'
      *  catalogs, first list wins ([MetadataService.loadAlbumTrackList], desktop #1202). */
+    @Throws(Throwable::class)
     suspend fun albumTrackList(albumTitle: String, artistName: String): AlbumDetail? =
         metadataService.loadAlbumTrackList(albumTitle, artistName)
 
@@ -2005,17 +2088,21 @@ class IosContainer private constructor() {
         metadataService.getAlbumTracksWithCatalogFallback(albumTitle, artistName)
 
     /** [mbid]: the artist's MusicBrainz id when the caller has one (#478). */
+    @Throws(Throwable::class)
     suspend fun getArtistInfo(artistName: String, mbid: String? = null): ArtistInfo? =
         metadataService.getArtistInfo(artistName, mbid)
 
     /** Fast artist-IMAGE lookup (Apple-Music-first, short-circuit) for the iOS
      *  ArtistImageCache — header + related-artist images (#187). */
+    @Throws(Throwable::class)
     suspend fun getArtistImage(artistName: String): String? =
         metadataService.getArtistImage(artistName)
 
+    @Throws(Throwable::class)
     suspend fun getArtistTopTracks(artistName: String): List<TrackSearchResult> =
         metadataService.getArtistTopTracks(artistName, 10)
 
+    @Throws(Throwable::class)
     suspend fun getArtistAlbums(artistName: String, mbid: String? = null): List<AlbumSearchResult> =
         metadataService.getArtistAlbums(artistName, 50, mbid)
 
@@ -2056,6 +2143,7 @@ class IosContainer private constructor() {
 
     /** Whether the artist has upcoming shows near the user's saved concert location
      *  (#201 Now Playing dot). null location → any upcoming show counts. */
+    @Throws(Throwable::class)
     suspend fun checkOnTour(artistName: String): Boolean {
         val loc = settingsStore.getConcertLocation()
         return concertsRepository.checkOnTour(artistName, loc.latitude, loc.longitude, loc.radiusMiles)
@@ -2256,6 +2344,7 @@ class IosContainer private constructor() {
     fun recommendationsMessages(): Flow<String> = recommendationsRepository.messages
 
     /** Loads the page and, alongside it, Home's history mixes ([force] is Try again or pull to refresh). Never throws. */
+    @Throws(Throwable::class)
     suspend fun loadRecommendations(force: Boolean) {
         try {
             // Home's history mixes load alongside: their ids leave the Playlists row.
@@ -2284,12 +2373,14 @@ class IosContainer private constructor() {
     }
 
     /** A weekly playlist card's play: its tracks, "Playing [name]", or "Couldn't load [name]" ([name] is the card's title). */
+    @Throws(Throwable::class)
     suspend fun recommendationsWeeklyQueue(weeklyId: String, name: String): IosRecQueueResult =
         weeklyQueueResult(recommendationItem { it.weekly?.id == weeklyId }, name) { id ->
             weeklyPlaylistsRepository.loadPlaylistTracks(id)
         }
 
     /** A recommended service playlist's tracks through the registry's link lookup ([servicePlaylistQueue]); [name] is the card's or view's title. */
+    @Throws(Throwable::class)
     suspend fun recommendationsServicePlaylist(url: String, name: String): IosRecQueueResult {
         // The card the page holds, else one built from the link (a view opened from a queue's context).
         val item = (recommendationItem { it.weekly == null && it.url == url }
@@ -2316,10 +2407,12 @@ class IosContainer private constructor() {
     }
 
     /** A listener card's play: their top tracks, or the shared message when there are none or they failed. */
+    @Throws(Throwable::class)
     suspend fun recommendationsListenerPlay(service: String, username: String): IosRecQueueResult =
         listenerQueueResult(service, username, username) { s, u -> friendsRepository.listenerTopTracks(s, u) }
 
     /** Follows a listener: null on success (the page reloads without them), else the message to show. */
+    @Throws(Throwable::class)
     suspend fun followListener(service: String, username: String): String? = try {
         when (val result = friendsRepository.follow(service, username)) {
             is Resource.Error -> result.message
@@ -2342,6 +2435,7 @@ class IosContainer private constructor() {
     }
 
     /** A weekly card's mosaic: its first 4 distinct covers ([WeeklyCovers]); empty when none or the load failed. */
+    @Throws(Throwable::class)
     suspend fun weeklyCovers(weeklyId: String): List<String> = try {
         val flow = weeklyCoverLoader.covers(weeklyId)
         flow.value.ifEmpty {
@@ -2451,10 +2545,12 @@ class IosContainer private constructor() {
 
     /** A cover failed to load: a working URL for it, or null. Once per album per
      *  session. Guarded: a bridged suspend must not throw across the ObjC bridge. */
+    @Throws(Throwable::class)
     suspend fun reportBrokenAlbumArt(url: String, artist: String, album: String): String? =
         try { brokenArtRetry.reportAlbumArt(url, artist, album) } catch (e: Exception) { null }
 
     /** An artist image failed to load: a working URL for it, or null. */
+    @Throws(Throwable::class)
     suspend fun reportBrokenArtistImage(url: String, artist: String): String? =
         try { brokenArtRetry.reportArtistImage(url, artist) } catch (e: Exception) { null }
 
@@ -2462,6 +2558,7 @@ class IosContainer private constructor() {
      *  so: each later track write re-checks that playlist (Android's
      *  ParachordApplication startup hook). Call fire-and-forget on launch.
      *  Guarded: bridged suspend must not throw across the ObjC bridge. */
+    @Throws(Throwable::class)
     suspend fun regeneratePlaylistMosaics() {
         try {
             imageEnrichmentService.watchTrackChanges()
@@ -2472,6 +2569,7 @@ class IosContainer private constructor() {
     /** Enrich ONE playlist's mosaic art (Android's enrichPlaylistArtIfNeeded) —
      *  e.g. just after saving a ListenBrainz weekly. Returns the file:// URL or
      *  null. Guarded for the bridge. */
+    @Throws(Throwable::class)
     suspend fun enrichPlaylistArt(playlistId: String): String? =
         try { imageEnrichmentService.enrichPlaylistArt(playlistId) } catch (e: Exception) { null }
 
@@ -2483,6 +2581,7 @@ class IosContainer private constructor() {
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun loadCriticalDarlings(): List<CriticsPickAlbum> {
         var out = emptyList<CriticsPickAlbum>()
         criticalDarlingsRepository.getCriticsPicks(false).collect { res ->
@@ -2631,6 +2730,7 @@ class IosContainer private constructor() {
     /** Upcoming shows from the user's TOP ARTISTS across every time window.
      *  Bounded internally (Semaphore(5) in getPersonalizedEvents) so the cap is
      *  safe. */
+    @Throws(Throwable::class)
     suspend fun loadConcerts(): List<ConcertEvent> {
         val artists = try { concertArtistSeed.gather() } catch (e: Exception) { if (e is kotlinx.coroutines.CancellationException) throw e; emptyList() }
         if (artists.isEmpty()) return emptyList()
@@ -2667,13 +2767,16 @@ class IosContainer private constructor() {
     /** GeoIP detect (ipapi.co → ip-api.com → ipwho.is), reverse-geocoded to a
      *  city name. Coarse on cellular — the Swift caller treats this as a
      *  confirmable suggestion, NOT a direct commit (unlike GPS). */
+    @Throws(Throwable::class)
     suspend fun detectLocationByIp(): GeoLocation? = geoLocationClient.detectLocationByIp()
 
     /** Nominatim forward-geocode typeahead for the city search field. */
+    @Throws(Throwable::class)
     suspend fun searchLocations(query: String): List<GeoLocation> =
         geoLocationClient.searchLocations(query)
 
     /** Reverse-geocode GPS coords → a "City, State" display name. */
+    @Throws(Throwable::class)
     suspend fun reverseGeocode(lat: Double, lng: Double): String? =
         geoLocationClient.reverseGeocode(lat, lng)
 
@@ -2736,6 +2839,7 @@ class IosContainer private constructor() {
         )
     }
 
+    @Throws(Throwable::class)
     suspend fun loadFreshDrops(): List<FreshDrop> {
         var out = emptyList<FreshDrop>()
         freshDropsRepository.getFreshDrops(false).collect { res ->
@@ -2766,8 +2870,11 @@ class IosContainer private constructor() {
     }
 
     // ── BYO Spotify Client ID (Parachord ships none — user supplies their own) ──
+    @Throws(Throwable::class)
     suspend fun getSpotifyClientId(): String = settingsStore.getSpotifyClientId() ?: ""
+    @Throws(Throwable::class)
     suspend fun setSpotifyClientId(clientId: String) = settingsStore.setSpotifyClientId(clientId)
+    @Throws(Throwable::class)
     suspend fun clearSpotifyClientId() = settingsStore.clearSpotifyClientId()
 
     // ── Swift-callable Spotify auth surface ────────────────────────────
@@ -2777,12 +2884,14 @@ class IosContainer private constructor() {
      * `IosOAuthManager.authorize`) for tokens and persist them. Throws on
      * non-2xx / missing client ID.
      */
+    @Throws(Throwable::class)
     suspend fun connectSpotify(code: String, codeVerifier: String) {
         spotifyAuth.exchangeCode(code, codeVerifier, "parachord://auth/callback/spotify")
         _spotifyReauthRequired.value = false // a fresh grant clears the reauth banner
     }
 
     /** Clear stored Spotify tokens (disconnect). */
+    @Throws(Throwable::class)
     suspend fun disconnectSpotify() {
         settingsStore.clearSpotifyTokens()
         _spotifyReauthRequired.value = false // user-initiated; not a reauth-needed state
@@ -2806,6 +2915,7 @@ class IosContainer private constructor() {
      * reauth banner covers that). Same rules as Android's Home
      * ([com.parachord.shared.api.auth.SpotifyGrantExpiry]).
      */
+    @Throws(Throwable::class)
     suspend fun spotifyExpiryWarning(): String? {
         if (_spotifyReauthRequired.value) return null
         if (settingsStore.getSpotifyRefreshToken().isNullOrBlank()) return null
@@ -2819,6 +2929,7 @@ class IosContainer private constructor() {
     }
 
     /** Hide the pre-expiry warning for a day. */
+    @Throws(Throwable::class)
     suspend fun dismissSpotifyExpiryWarning() {
         settingsStore.setSpotifyExpiryWarningDismissedAt(com.parachord.shared.platform.currentTimeMillis())
     }
@@ -2828,11 +2939,13 @@ class IosContainer private constructor() {
         com.parachord.shared.api.LibreFmClient(httpClient)
     }
     /** Connect with username + password; persists the session key on success. */
+    @Throws(Throwable::class)
     suspend fun connectLibreFm(username: String, password: String): Boolean {
         val key = libreFmClient.authenticate(username, password) ?: return false
         settingsStore.setLibreFmSession(key)
         return true
     }
+    @Throws(Throwable::class)
     suspend fun disconnectLibreFm() { settingsStore.clearLibreFmSession() }
     fun getLibreFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLibreFmSessionKeyFlow().map { it != null }
@@ -2843,6 +2956,7 @@ class IosContainer private constructor() {
      * (#193). The session key is what scrobbling/now-playing/love require —
      * the read-only username alone can't authenticate writes.
      */
+    @Throws(Throwable::class)
     suspend fun connectLastFm(token: String): Boolean {
         val result = lastFmClient.getSession(token, appConfig.lastFmApiKey, appConfig.lastFmSharedSecret)
             ?: return false
@@ -2850,6 +2964,7 @@ class IosContainer private constructor() {
         result.name?.let { settingsStore.setLastFmUsername(it) }
         return true
     }
+    @Throws(Throwable::class)
     suspend fun disconnectLastFm() { settingsStore.clearLastFmSession() }
     fun getLastFmConnectedFlow(): Flow<Boolean> =
         settingsStore.getLastFmSessionKeyFlow().map { it != null }
@@ -2868,6 +2983,7 @@ class IosContainer private constructor() {
             onEach(map.filterValues { it }.keys.sorted())
         }
 
+    @Throws(Throwable::class)
     suspend fun setLovePushEnabled(service: String, enabled: Boolean) =
         settingsStore.setLovePushEnabled(service, enabled)
 
@@ -2921,6 +3037,7 @@ class IosContainer private constructor() {
     )
 
     /** The Client ID a sign-in uses: the saved one, else Parachord's built-in app. */
+    @Throws(Throwable::class)
     suspend fun soundCloudClientId(): String = soundCloudAuth.credentialsInUse()?.clientId ?: ""
 
     /** The redirect URI every SoundCloud sign-in uses: desktop's loopback address. */
@@ -2931,6 +3048,7 @@ class IosContainer private constructor() {
      * else the message to show (port 8888 is taken); then don't open the
      * browser. Never throws: Swift awaits it.
      */
+    @Throws(Throwable::class)
     suspend fun startSoundCloudLoopback(state: String): String? = try {
         soundCloudLoopback.start(soundCloudLoopbackScope, state)
         null
@@ -2955,6 +3073,7 @@ class IosContainer private constructor() {
     }
 
     /** Sign out of SoundCloud; the Client ID + Secret stay. */
+    @Throws(Throwable::class)
     suspend fun disconnectSoundCloud() { soundCloudAuth.disconnect() }
 
     /** Emits true while a SoundCloud access token is stored. */
@@ -3180,6 +3299,7 @@ class IosContainer private constructor() {
      * this play only: it goes to AVPlayer and nowhere else, and is logged
      * redacted. Never throws to Swift.
      */
+    @Throws(Throwable::class)
     suspend fun pluginStream(
         source: ResolvedSource,
         trackId: String,
@@ -3297,6 +3417,7 @@ class IosContainer private constructor() {
      * Subsonic up before this change); one whose config is gone is taken out.
      * A plug-in the person turned off later stays off.
      */
+    @Throws(Throwable::class)
     suspend fun seedConfiguredPluginResolvers() {
         pluginManager.ensureInitialized()
         for (plugin in pluginManager.plugins.value) {
@@ -3329,6 +3450,7 @@ class IosContainer private constructor() {
      * Test connection: the plug-in's own search, which throws with the
      * server's status when the credentials are wrong. The line to show.
      */
+    @Throws(Throwable::class)
     suspend fun testPluginConnection(id: String): IosConnectionTest = try {
         val raw = pluginManager.searchForConnectionTest(id)
         val count = raw?.let {
@@ -3346,6 +3468,7 @@ class IosContainer private constructor() {
      * plugin IDs. The Swift caller attaches the NativeBridge installer
      * before calling this.
      */
+    @Throws(Throwable::class)
     suspend fun loadPluginsAndList(): List<String> {
         pluginManager.ensureInitialized()
         // The status-capable plugins' plan limits decide what plays (#707).
@@ -3367,6 +3490,7 @@ class IosContainer private constructor() {
      * fetch callbacks (URLSession → MainActor → `__fetchCallbacks` → JS
      * Promise) can fire and settle the resolve.
      */
+    @Throws(Throwable::class)
     suspend fun pluginResolveAsync(resolverId: String, artist: String, title: String): String? {
         pluginManager.ensureInitialized()
         val a = artist.replace("\\", "\\\\").replace("'", "\\'")
@@ -3397,11 +3521,13 @@ class IosContainer private constructor() {
     }
 
     /** Full plugin metadata for the Settings UI (id/name/version/type/icon/color/capabilities). */
+    @Throws(Throwable::class)
     suspend fun loadPlugins(): List<PluginManager.PluginInfo> {
         pluginManager.ensureInitialized()
         return pluginManager.plugins.value
     }
     /** Includes platform-filtered plugins (e.g. youtube) — for the "N plugins loaded" count. */
+    @Throws(Throwable::class)
     suspend fun loadAllPlugins(): List<PluginManager.PluginInfo> {
         pluginManager.ensureInitialized()
         return pluginManager.allLoadedPlugins.value
@@ -3415,6 +3541,7 @@ class IosContainer private constructor() {
     private val bandcampEmbedResolver by lazy { com.parachord.shared.playback.BandcampEmbedResolver(httpClient) }
 
     /** The embed URL for a Bandcamp source (#513); null when there's none to be had. Never throws to Swift. */
+    @Throws(Throwable::class)
     suspend fun bandcampEmbedUrl(trackId: String?, pageUrl: String?): String? = try {
         bandcampEmbedResolver.embedUrl(trackId, pageUrl)
     } catch (e: Exception) {
@@ -3422,6 +3549,7 @@ class IosContainer private constructor() {
         null
     }
 
+    @Throws(Throwable::class)
     suspend fun nonStreamingResolverIds(): Set<String> {
         pluginManager.ensureInitialized()
         return pluginManager.plugins.value
@@ -3439,12 +3567,14 @@ class IosContainer private constructor() {
             platform = "ios",
         )
     }
+    @Throws(Throwable::class)
     suspend fun syncPluginsNow(): PluginSyncService.SyncResult = pluginSyncService.sync()
 
     /** 24h-debounced marketplace sync for app start (Android parity:
      *  MainViewModel.syncIfNeeded). Downloads new/updated `.axe` (e.g. the
      *  achordion playback-telemetry plugin) + hot-reloads them so they register.
      *  Returns null when the debounce window hasn't elapsed. */
+    @Throws(Throwable::class)
     suspend fun syncPluginsIfNeeded(): PluginSyncService.SyncResult? = pluginSyncService.syncIfNeeded()
 
     // ── Resolver pipeline (.axe-only, the iOS ResolverManager-equivalent) ──
@@ -3858,6 +3988,7 @@ class IosContainer private constructor() {
      * its canonical place. An empty stored list hasn't been seeded yet; Settings
      * seeds it with every usable resolver, so this one included.
      */
+    @Throws(Throwable::class)
     suspend fun enableResolverAfterConnect(resolverId: String) {
         val active = settingsStore.getActiveResolvers()
         if (active.isNotEmpty() && resolverId !in active) {
@@ -3932,6 +4063,7 @@ class IosContainer private constructor() {
      * parsing/logic lives here (shared, mirrors Android) so the Swift bridge
      * stays a thin callback shim.
      */
+    @Throws(Throwable::class)
     suspend fun resolveMbidForLove(trackJson: String): String? {
         return try {
             val obj = Json.parseToJsonElement(trackJson).jsonObject
@@ -3962,6 +4094,7 @@ class IosContainer private constructor() {
      * falls back to iTunes. Android parity: `NativeBridge.appleMusicCatalogGet`.
      * `/v1/catalog/` paths only; the token never reaches JavaScript.
      */
+    @Throws(Throwable::class)
     suspend fun appleMusicCatalogGet(path: String): String? = try {
         appleMusicCatalog.get(path)
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -3980,6 +4113,7 @@ class IosContainer private constructor() {
      * read here and never reaches JavaScript. Android parity:
      * `NativeBridge.appleMusicPersonalRecommendations`.
      */
+    @Throws(Throwable::class)
     suspend fun appleMusicPersonalRecommendations(limit: Int): String = try {
         appleMusicCatalog.personalRecommendations(limit, settingsStore.getAppleMusicUserToken()).toJsEnvelope()
     } catch (e: kotlinx.coroutines.CancellationException) {
@@ -4001,6 +4135,7 @@ class IosContainer private constructor() {
         resolverCoordinator.resolveSingle(resolverId, artist, title, album)
 
     /** Re-rank merged sources (best first) after an additive merge (#1). */
+    @Throws(Throwable::class)
     suspend fun rankSources(sources: List<ResolvedSource>): List<ResolvedSource> =
         resolverScoring.selectRanked(sources, null)
 
@@ -4085,6 +4220,7 @@ class IosContainer private constructor() {
      * resolver / streaming IDs yet) — browse-only until the iOS resolver
      * pipeline is wired. Powers the Playlist Detail screen (phase 5.4).
      */
+    @Throws(Throwable::class)
     suspend fun loadWeeklyPlaylistTracks(playlistId: String): List<IosPlaylistTrack> {
         return weeklyPlaylistsRepository.loadPlaylistTracks(playlistId).map {
             IosPlaylistTrack(
@@ -4106,6 +4242,7 @@ class IosContainer private constructor() {
      * writes the playlist + track rows directly via the DAOs. Saved id is
      * "listenbrainz-<playlistId>" (Android parity). Returns the saved id.
      */
+    @Throws(Throwable::class)
     suspend fun saveWeeklyPlaylist(
         playlistId: String,
         title: String,
@@ -4169,6 +4306,7 @@ class IosContainer private constructor() {
     fun watchPlaylistTracks(id: String, onEach: (List<PlaylistTrack>) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(playlistTrackDao.getByPlaylistId(id)) { onEach((it as? List<PlaylistTrack>) ?: emptyList()) }
 
+    @Throws(Throwable::class)
     suspend fun renamePlaylist(id: String, name: String) {
         val p = playlistDao.getById(id) ?: return
         playlistDao.update(p.copy(name = name, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
@@ -4176,6 +4314,7 @@ class IosContainer private constructor() {
 
     /** localPlaylistId -> the providers each playlist EFFECTIVELY syncs with
      *  (override-aware), for the playlists-list source chips. */
+    @Throws(Throwable::class)
     suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =
         libraryRepository.getAllEffectivePlaylistChannels().map { (id, providers) ->
             IosPlaylistMirrors(localPlaylistId = id, providerIds = providers)
@@ -4183,6 +4322,7 @@ class IosContainer private constructor() {
 
     /** The providers a playlist mirrors to (source + push links), for the
      *  per-mirror delete dialog. */
+    @Throws(Throwable::class)
     suspend fun getPlaylistMirrorProviders(id: String): List<String> =
         libraryRepository.getPlaylistMirrors(id).keys.toList()
 
@@ -4197,6 +4337,7 @@ class IosContainer private constructor() {
      * `achordion.xyz/playlist/<lbMbid>`, keyed on the playlist's ListenBrainz mirror
      * or id. Override-aware: a Sync-menu-disabled LB channel won't share.
      */
+    @Throws(Throwable::class)
     suspend fun preparePlaylistShare(localId: String, name: String): IosPlaylistShare {
         val lbMbid = libraryRepository.getPlaylistMirrors(localId)["listenbrainz"]
             ?: localId.takeIf { it.startsWith("listenbrainz-") }?.removePrefix("listenbrainz-")
@@ -4216,6 +4357,7 @@ class IosContainer private constructor() {
     }
 
     /** The person confirmed the prompt. Never throws: this crosses into Swift. */
+    @Throws(Throwable::class)
     suspend fun makePlaylistPublicAndShare(mbid: String): IosPlaylistShare {
         val error = playlistShareCheck.makePublic(mbid)
         if (error != null) {
@@ -4238,12 +4380,16 @@ class IosContainer private constructor() {
      *  the same path Android shares through, exposed flat for the iOS share sheet. */
     /** [sources]: the track's resolved sources (Swift's IosTrackResolverCache), so the
      *  Achordion submit carries every service's link with its real page address. */
+    @Throws(Throwable::class)
     suspend fun shareTrack(track: Track, sources: List<ResolvedSource>): IosShareResult =
         shareLinkResolver.shareTrack(track, sources).toIos()
+    @Throws(Throwable::class)
     suspend fun shareAlbum(title: String, artist: String, releaseGroupMbid: String?): IosShareResult =
         shareLinkResolver.shareAlbum(title, artist, releaseGroupMbid).toIos()
+    @Throws(Throwable::class)
     suspend fun shareArtist(name: String, artistMbid: String?): IosShareResult =
         shareLinkResolver.shareArtist(name, artistMbid).toIos()
+    @Throws(Throwable::class)
     suspend fun sharePlaylistLink(playlistId: String): IosShareResult? =
         shareLinkResolver.sharePlaylist(playlistId)?.toIos()
 
@@ -4252,6 +4398,7 @@ class IosContainer private constructor() {
 
     /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
      *  page's "open on <service>" chips. */
+    @Throws(Throwable::class)
     suspend fun getPlaylistMirrorLinks(id: String): List<IosPlaylistMirrorLink> =
         libraryRepository.getPlaylistMirrors(id).map { (provider, externalId) ->
             IosPlaylistMirrorLink(providerId = provider, externalId = externalId)
@@ -4266,6 +4413,7 @@ class IosContainer private constructor() {
 
     /** The sync channels for one playlist — each provider with connected /
      *  enabled / available state, for the playlist Sync menu. */
+    @Throws(Throwable::class)
     suspend fun getPlaylistSyncChannels(localId: String): List<IosSyncChannel> =
         playlistSyncChannelManager.getChannels(localId).map { ch ->
             IosSyncChannel(
@@ -4282,6 +4430,7 @@ class IosContainer private constructor() {
      *  state updates immediately and the next sync's override gate keeps it off.
      *  Enabling sets the override; the next sync mirrors it (push) if it's a
      *  valid target. */
+    @Throws(Throwable::class)
     suspend fun setPlaylistChannel(localId: String, providerId: String, enabled: Boolean) {
         playlistSyncChannelManager.setChannel(localId, providerId, enabled)
         // Parity with Android: enabling a mirror kicks off a sync NOW (off the
@@ -4296,11 +4445,13 @@ class IosContainer private constructor() {
     /** Effective + forced one-way-mirror state for a playlist (dynamic /
      *  algorithmic playlists). Drives the "Mirror only" toggle in the Sync sheet:
      *  `effective` = checked, `forced` = locked ON (a followed/hosted playlist). */
+    @Throws(Throwable::class)
     suspend fun getPlaylistMirrorOnlyState(localId: String): MirrorOnlyState =
         playlistSyncChannelManager.getMirrorOnlyState(localId)
 
     /** Flag (or clear) this playlist as a one-way mirror, then kick a sync so the
      *  new reconcile mode takes effect immediately (parity with Android). */
+    @Throws(Throwable::class)
     suspend fun setPlaylistMirrorOnly(localId: String, mirrorOnly: Boolean) {
         playlistSyncChannelManager.setMirrorOnly(localId, mirrorOnly)
         appScope.launch(Dispatchers.Default) { runCatching { syncEngine.syncAll() } }
@@ -4313,6 +4464,7 @@ class IosContainer private constructor() {
      * the provider display name when the remote delete was UNSUPPORTED (Apple
      * Music) so the UI can say "remove it manually", else null.
      */
+    @Throws(Throwable::class)
     suspend fun disablePlaylistChannel(
         localId: String,
         providerId: String,
@@ -4323,6 +4475,7 @@ class IosContainer private constructor() {
      *  ids). Returns the display names of providers that DON'T support API
      *  deletion (e.g. Apple Music) so the UI can tell the user to remove it
      *  manually. */
+    @Throws(Throwable::class)
     suspend fun deletePlaylistFromMirrors(id: String, fromProviders: List<String>): List<String> {
         val pl = playlistDao.getById(id) ?: run {
             playlistTrackDao.deleteByPlaylistId(id)
@@ -4335,6 +4488,7 @@ class IosContainer private constructor() {
             .map { it.providerDisplayName }
     }
 
+    @Throws(Throwable::class)
     suspend fun removePlaylistTrackAt(id: String, index: Int) {
         val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
         if (index < 0 || index >= tracks.size) return
@@ -4342,6 +4496,7 @@ class IosContainer private constructor() {
         persistReorderedTracks(id, tracks)
     }
 
+    @Throws(Throwable::class)
     suspend fun movePlaylistTrack(id: String, from: Int, to: Int) {
         val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()
         if (from < 0 || from >= tracks.size || to < 0 || to >= tracks.size || from == to) return
@@ -4351,6 +4506,7 @@ class IosContainer private constructor() {
     }
 
     /** Create a new empty local playlist (#242); returns the new id. */
+    @Throws(Throwable::class)
     suspend fun createPlaylist(name: String): String {
         val id = "local-${com.parachord.shared.platform.randomUUID()}"
         val now = com.parachord.shared.platform.currentTimeMillis()
@@ -4361,13 +4517,16 @@ class IosContainer private constructor() {
     }
 
     /** One-shot saved-playlist list for the "Add to Playlist" picker (#240). */
+    @Throws(Throwable::class)
     suspend fun getSavedPlaylistsOnce(): List<Playlist> = playlistDao.getAllSync()
 
     /** One-shot playlist tracks (for "Play Playlist" from the context menu). */
+    @Throws(Throwable::class)
     suspend fun getPlaylistTracksOnce(id: String): List<PlaylistTrack> =
         playlistTrackDao.getByPlaylistIdSync(id)
 
     /** Append a track to a playlist at the end (#240). Bumps trackCount + flags. */
+    @Throws(Throwable::class)
     suspend fun addTrackToPlaylist(playlistId: String, track: Track) {
         val pos = playlistTrackDao.getByPlaylistIdSync(playlistId).size
         playlistTrackDao.insertAll(
@@ -4409,6 +4568,7 @@ class IosContainer private constructor() {
      * artist-credit / release-group structures that bridge awkwardly).
      * No auth needed. Powers the iOS Search screen (phase 5.1).
      */
+    @Throws(Throwable::class)
     suspend fun search(query: String, limit: Int): IosSearchResults {
         if (query.isBlank()) return IosSearchResults(emptyList(), emptyList())
         val artists = try {
@@ -4473,6 +4633,7 @@ class IosContainer private constructor() {
     val chatCardEnricher: ChatCardEnricher by lazy { ChatCardEnricher(metadataService, imageEnrichmentService, com.parachord.shared.metadata.CatalogTrackArtwork(httpClient)) }
 
     // Flat Swift-facing API (mirrors Android's ChatViewModel calls).
+    @Throws(Throwable::class)
     suspend fun chatSend(providerId: String, userMessage: String, onProgress: (String) -> Unit): String {
         val provider = chatProviders.firstOrNull { it.id == providerId } ?: return "That AI provider isn't available."
         // No explicit model picked → use the plugin's `default` (marketplace-driven),
@@ -4486,10 +4647,13 @@ class IosContainer private constructor() {
         return aiChatService.sendMessage(provider, config, userMessage, onProgress)
     }
     /** The plugin's default model id — the Settings picker seeds its selection with this. */
+    @Throws(Throwable::class)
     suspend fun chatModelDefault(providerId: String): String =
         try { resolverRuntime.aiModelDefault(providerId) } catch (e: Exception) { "" }
+    @Throws(Throwable::class)
     suspend fun chatMessages(providerId: String): List<IosChatMessage> =
         aiChatService.getDisplayMessages(providerId).map { IosChatMessage(it.role.name.lowercase(), it.content) }
+    @Throws(Throwable::class)
     suspend fun chatClear(providerId: String) = aiChatService.clearHistory(providerId)
 
     /**
@@ -4529,6 +4693,7 @@ class IosContainer private constructor() {
      * playlist card): `open` with the saved playlist's id, `offerSave` with the
      * question to ask, or `unavailable` with the message to show.
      */
+    @Throws(Throwable::class)
     suspend fun chatPlaylistCardTap(name: String, id: String, trackCount: String, messageContent: String): IosChatPlaylistTap {
         // Caught here: a Kotlin exception through a Swift-bridged suspend aborts the app, even under try?.
         val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
@@ -4553,6 +4718,7 @@ class IosContainer private constructor() {
      * lists; returns the new id, or null when the save failed (caught here, as
      * a Kotlin exception through a Swift-bridged suspend aborts the app).
      */
+    @Throws(Throwable::class)
     suspend fun saveChatPlaylistCard(name: String, id: String, trackCount: String, messageContent: String): String? = try {
         val card = com.parachord.shared.ai.ChatCardRef.Playlist(name, id, trackCount)
         val (playlist, tracks) = com.parachord.shared.ai.ChatPlaylistCards.draft(card, messageContent)
@@ -4568,35 +4734,45 @@ class IosContainer private constructor() {
     /** The chat screen opened or closed; closing drops a prompt that never went out. */
     fun chatVisibilityChanged(wasOpen: Boolean, chatOpen: Boolean) =
         aiChatService.onChatVisibilityChanged(wasOpen, chatOpen)
+    @Throws(Throwable::class)
     suspend fun chatSelectedProvider(): String? = settingsStore.getSelectedChatProvider()
+    @Throws(Throwable::class)
     suspend fun chatSetSelectedProvider(id: String) = settingsStore.setSelectedChatProvider(id)
+    @Throws(Throwable::class)
     suspend fun chatProviderConfigured(providerId: String): Boolean =
         !settingsStore.getAiProviderApiKey(providerId).isNullOrBlank()
     /** Model list for the provider, from the marketplace `.axe` plugin's model
      *  setting (curated `options` for static `select`, live `listModels` for
      *  `dynamic-select`) — desktop parity, nothing reimplemented natively. */
+    @Throws(Throwable::class)
     suspend fun chatListModels(providerId: String, apiKey: String): List<String> =
         try { resolverRuntime.aiModels(providerId, apiKey) } catch (e: Exception) { emptyList() }
+    @Throws(Throwable::class)
     suspend fun chatTrackArtwork(title: String, artist: String, album: String): String? =
         chatCardEnricher.getTrackArtwork(title, artist, album)
+    @Throws(Throwable::class)
     suspend fun chatAlbumArtwork(title: String, artist: String): String? =
         chatCardEnricher.getAlbumArtwork(title, artist)
+    @Throws(Throwable::class)
     suspend fun chatArtistImage(name: String): String? = chatCardEnricher.getArtistImage(name)
 
     // Card taps in the chat play directly (DJ context): track → play it; album →
     // play the album; artist → play their top tracks. All route through the same
     // bridge, resolving on-the-fly. (Navigating to album/artist detail pages from
     // the chat cover is a follow-up.)
+    @Throws(Throwable::class)
     suspend fun chatPlayTrack(title: String, artist: String, album: String?) {
         chatPlaybackBridge.onClearQueue()
         chatPlaybackBridge.onPlayTrack(chatTrack(title, artist, album))
     }
+    @Throws(Throwable::class)
     suspend fun chatPlayAlbum(title: String, artist: String) {
         val tracks = catalogQueues.album(title, artist)?.tracks ?: return
         chatPlaybackBridge.onClearQueue()
         chatPlaybackBridge.onPlayTrack(tracks.first())
         tracks.drop(1).forEach { chatPlaybackBridge.onAddToQueue(it) }
     }
+    @Throws(Throwable::class)
     suspend fun chatPlayArtist(name: String) {
         val tops = catalogQueues.artistTopSongs(name)?.tracks ?: return
         chatPlaybackBridge.onClearQueue()
@@ -4704,6 +4880,7 @@ class IosContainer private constructor() {
     fun watchSearchHistory(onEach: (List<SearchHistory>) -> Unit): Cancellable =
         FlowWatcher(appScope).watch(searchHistoryDao.getRecent()) { onEach((it as? List<SearchHistory>) ?: emptyList()) }
 
+    @Throws(Throwable::class)
     suspend fun saveSearchHistory(
         query: String,
         resultType: String,
@@ -4727,7 +4904,9 @@ class IosContainer private constructor() {
         searchHistoryDao.trimToLimit()
     }
 
+    @Throws(Throwable::class)
     suspend fun deleteSearchHistory(id: Long) { searchHistoryDao.deleteById(id) }
+    @Throws(Throwable::class)
     suspend fun clearSearchHistory() { searchHistoryDao.clearAll() }
 }
 

@@ -69,6 +69,7 @@ class IosSmokeTest {
      * friendly DTO. Plain `data class` so Kotlin/Native exposes it
      * cleanly to Swift without `List<MbArtist>` ObjC bridging weirdness.
      */
+    @Throws(Throwable::class)
     suspend fun searchArtists(query: String, limit: Int): List<SmokeTestArtist> {
         val response = musicBrainz.searchArtists(query, limit)
         return response.artists.map { artist ->
@@ -89,6 +90,7 @@ class IosSmokeTest {
      * that `ImageEnrichmentService.enrichPlaylistArt` would call via
      * its `composeMosaic` lambda once an iOS Koin module wires it up.
      */
+    @Throws(Throwable::class)
     suspend fun composeMosaic(playlistId: String, urls: List<String>): String? =
         mosaicComposer.compose(playlistId, urls)
 
@@ -100,6 +102,7 @@ class IosSmokeTest {
      * the same `(async () => {...})()` evaluation pattern the Android
      * `JsBridge.evaluate(...)` accepts.
      */
+    @Throws(Throwable::class)
     suspend fun evaluateJs(script: String): String? {
         if (!jsRuntime.ready.value) jsRuntime.initialize()
         return jsRuntime.evaluate(script)
@@ -112,6 +115,7 @@ class IosSmokeTest {
      * polyfills BEFORE any script that depends on them
      * (`console.log`, `fetch`, etc.) runs. Idempotent.
      */
+    @Throws(Throwable::class)
     suspend fun ensureJsRuntimeReady() {
         if (!jsRuntime.ready.value) jsRuntime.initialize()
     }

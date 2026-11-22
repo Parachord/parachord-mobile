@@ -121,6 +121,7 @@ class ListenBrainzClient(
     }
 
     /** Validate a ListenBrainz user token; returns username if valid, null otherwise. */
+    @Throws(Throwable::class)
     suspend fun validateToken(token: String): String? {
         return try {
             val response = executeWithRetry {
