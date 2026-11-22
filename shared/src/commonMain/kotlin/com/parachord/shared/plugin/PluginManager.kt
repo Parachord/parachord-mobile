@@ -82,6 +82,13 @@ class PluginManager constructor(
          * or neither).
          */
         val hasDrmPair: Boolean = false,
+        /**
+         * The plugin implements `getStreamUrl(track, config)`: a plain https
+         * URL for the track, built at play time (Subsonic; Amazon Music's
+         * purchases beside its DRM pair, desktop parachord#1613). Checked by
+         * presence, like [hasDrmPair].
+         */
+        val hasStreamUrl: Boolean = false,
     )
 
     /** One `settings.configurable` field of a plugin manifest, rendered by the settings screen. */
@@ -805,6 +812,47 @@ class PluginManager constructor(
         }.getOrNull()?.takeIf { it.isNotBlank() }
     }
 
+    /**
+     * The loaded plugin behind [resolverId] when this host plays it through
+     * `getStreamUrl` ([playsThroughStreamUrl] for [hostPaths]): an
+     * `html5Stream` plugin (Subsonic), or, where the host has no Widevine
+     * engine (iOS), a Widevine plugin that also implements `getStreamUrl`
+     * (Amazon Music's purchases). By capability and method, never by id.
+     */
+    fun streamUrlPlugin(resolverId: String?, hostPaths: Set<String>): PluginInfo? =
+        resolverId?.let { id -> plugins.value.find { it.id == id && playsThroughStreamUrl(it, hostPaths) } }
+
+    /**
+     * The Widevine plugin behind [resolverId] when it also implements
+     * `getStreamUrl` (desktop's `drmFallback`, parachord#1613): its plain
+     * stream plays when the DRM stream didn't start.
+     */
+    fun drmPlainStreamPlugin(resolverId: String?): PluginInfo? =
+        widevinePlugin(resolverId)?.takeIf { it.hasStreamUrl }
+
+    /**
+     * The plugin's `getStreamUrl(track, config)`, with its error kept: the
+     * raw `{ok:true,url}` / `{ok:false,error:{reason,message}}` JSON for
+     * [com.parachord.shared.playback.PluginStreamReplies.parse], or null with no
+     * answer. The URL is a credential for this play only: never log the raw reply.
+     */
+    @OptIn(ExperimentalEncodingApi::class)
+    suspend fun requestStreamUrl(resolverId: String, trackJson: String): String? {
+        ensureInitialized()
+        val b64 = Base64.encode(trackJson.encodeToByteArray())
+        return pollAsync(
+            "gsr",
+            // One expression (see [getStreamUrl]).
+            "await (async () => { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                "if (!r || !r.getStreamUrl) return { ok: false, error: { reason: 'load-failed', message: 'no getStreamUrl' } }; " +
+                "try { const u = await r.getStreamUrl(JSON.parse(atob('$b64')), r.config || {}); " +
+                "return { ok: true, url: (typeof u === 'string' && u) ? u : null }; } " +
+                "catch (e) { return { ok: false, error: { reason: (e && e.reason) || 'playback-failed', " +
+                "message: String((e && e.message) || e).slice(0, 300) } }; } })()",
+            attempts = LOOKUP_POLL_ATTEMPTS,
+        )
+    }
+
     // ── The plugin-supplied Widevine path (capabilities.widevine) ──────
 
     /**
@@ -894,8 +942,12 @@ class PluginManager constructor(
         ensureInitialized()
         val raw = try {
             jsRuntime.evaluate(
-                "(function() { const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
-                    "if (!r || !r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
+                // No loader or no resolver yet (iOS's JSC host before its
+                // plugins load) answers null, which is never cached: caching
+                // it would fix the plugin's state for the session (#671 review).
+                "(function() { if (!window.__resolverLoader) return null; " +
+                    "const r = window.__resolverLoader.getResolver('${escapeForJs(resolverId)}'); " +
+                    "if (!r) return null; if (!r.isConfigured) return true; return !!r.isConfigured(r.config || {}); })()",
             )?.unquote()
         } catch (e: kotlinx.coroutines.CancellationException) {
             throw e
@@ -1036,6 +1088,7 @@ class PluginManager constructor(
                 hasDrmPair = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.let {
                     it.containsKey("getPlaybackManifest") && it.containsKey("relayLicense")
                 } == true,
+                hasStreamUrl = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("getStreamUrl") == true,
             )
         } catch (e: Exception) {
             Log.w(TAG, "Failed to parse .axe manifest: ${e.message}", e)

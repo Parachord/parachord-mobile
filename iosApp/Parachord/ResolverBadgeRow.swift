@@ -62,7 +62,7 @@ struct ResolverBadgeRow: View {
 
     // Fallback when the user has no explicit order yet (matches
     // ResolverScoring.CANONICAL_RESOLVER_ORDER).
-    private static let canonical = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "youtube"]
+    private static let canonical = ["spotify", "applemusic", "bandcamp", "soundcloud", "localfiles", "subsonic", "youtube"]
 
     /// The badges, by the shared rule (`ResolverBadges`, #592, Android's and
     /// desktop's): playable sources only, from resolvers the user has on, one

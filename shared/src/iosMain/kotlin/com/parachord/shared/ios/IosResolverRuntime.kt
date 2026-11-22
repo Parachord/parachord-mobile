@@ -58,6 +58,13 @@ class IosResolverRuntime(
      * true when a different token is now stored. Null: no retry (#598).
      */
     private val refreshSoundCloudAfterRejection: (suspend (String?) -> Boolean)? = null,
+    /**
+     * Whether [resolverId] plays through `getStreamUrl` here (Subsonic, Amazon
+     * Music's purchases): its results carry no URL, so they're kept under the
+     * non-secret placeholder, and a Widevine plugin's own result fields
+     * ([ResolvedSource.pluginFields]) ride along for the plugin to read back.
+     */
+    private val playsThroughStreamUrl: (String) -> Boolean = { false },
 ) : ResolverRuntime {
     private val json = Json { ignoreUnknownKeys = true; isLenient = true }
 
@@ -211,12 +218,21 @@ class IosResolverRuntime(
                 val hasRoutableId = parsed.appleMusicId != null ||
                     parsed.spotifyUri != null || parsed.spotifyId != null ||
                     parsed.soundcloudId != null
-                if (playableUrl == null && !hasRoutableId) return null
+                // A plugin played through getStreamUrl (Subsonic, Amazon's
+                // purchases) carries no URL: its stream is built at play time.
+                // Kept under the non-secret placeholder (`subsonic:track:<id>`),
+                // as Android's resolveViaPlugin does.
+                val streamPlugin = playsThroughStreamUrl(resolverId)
+                val pluginTrackId = com.parachord.shared.resolver.pluginTrackId(raw, resolverId)
+                val pluginFields = if (streamPlugin) com.parachord.shared.resolver.pluginResultFields(raw) else null
+                val placeholder = if (!streamPlugin) null else
+                    (pluginTrackId ?: pluginFields?.get("id"))?.let { com.parachord.shared.resolver.pluginTrackUrl(resolverId, it) }
+                if (playableUrl == null && !hasRoutableId && placeholder == null) return null
 
                 return ResolvedSource(
                     // For AM/Spotify the router keys off the ID; url is the
                     // best-available stream (e.g. AM 30s previewUrl) or empty.
-                    url = playableUrl ?: "",
+                    url = playableUrl ?: placeholder ?: "",
                     sourceType = parsed.sourceType ?: resolverId,
                     resolver = resolverId,
                     spotifyUri = parsed.spotifyUri,
@@ -225,6 +241,8 @@ class IosResolverRuntime(
                     soundcloudUrl = parsed.soundcloudUrl,
                     appleMusicId = parsed.appleMusicId,
                     bandcampTrackId = com.parachord.shared.resolver.pluginBandcampTrackId(raw),
+                    pluginTrackId = pluginTrackId,
+                    pluginFields = pluginFields,
                     // Optional `.axe` result field — a streaming resolver MAY
                     // supply its ISRC for the MBID fallback. Validated/normalized
                     // so a malformed value never enters the source record (#217).

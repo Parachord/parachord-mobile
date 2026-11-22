@@ -1656,6 +1656,11 @@ final class IosAVPlayer {
     private var failureReported = false
     /// The tag the loaded item was given (`load(tag:)`), reported with its failure.
     private var loadedTag = 0
+    /// The resolver the loaded item plays for (`load(resolver:)`).
+    var loadedResolverId: String? { loadedResolver }
+    /// The HTTP status the loaded item's last error carried (its error log),
+    /// 0 when none: a plug-in stream's 401/403 is a wrong password (#670).
+    private(set) var failedHttpStatus = 0
 
     var status: Status = .idle
     var isPlaying = false
@@ -1859,6 +1864,7 @@ final class IosAVPlayer {
         guard player?.currentItem === item else { return }
         guard !failureReported else { return }
         failureReported = true
+        failedHttpStatus = item.errorLog()?.events.last?.errorStatusCode ?? 0
         let at = currentTime
         let length = duration
         isPlaying = false
@@ -1930,6 +1936,7 @@ final class IosAVPlayer {
         }
         startedPlaying = false
         failureReported = false
+        failedHttpStatus = 0
         loadedTag = 0
         player?.pause()
         player = nil
@@ -2021,6 +2028,10 @@ final class QueuePlaybackCoordinator {
         /// couldn't answer, or the resolve threw (#566): the lookup didn't
         /// really run, so the track isn't known to have no source.
         var resolversCouldNotAnswer = false
+        /// A plug-in stream's own words (#670): the settings message, or
+        /// why its plug-in refused the track.
+        var startFailedMessage: String?
+        var refusedMessage: String?
     }
 
     /// A track on screen that no engine holds (the shared `LoadOnPlay`, as
@@ -3380,6 +3391,20 @@ final class QueuePlaybackCoordinator {
                 if refusal.startFailure == nil { refusal.startFailure = timedOut ? .startTimedOut : .startFailed }
             }
             router.onAppleMusicUnauthorized = { refusal.appleMusicUnauthorized = true }
+            // A plug-in's getStreamUrl gave no stream (#670): its settings or a
+            // failed request stop on the track for Play with its words (shared
+            // START_FAILED); a plug-in that won't play it is a refused source.
+            router.onPluginStreamFailed = { kind, message, service in
+                if kind == IosPluginStream.companion.REFUSED {
+                    if refusal.service == nil {
+                        refusal.service = service; refusal.pageUrl = nil; refusal.reason = "plugin"
+                        refusal.refusedMessage = message
+                    }
+                } else if refusal.startFailure == nil {
+                    refusal.startFailure = .startFailed
+                    refusal.startFailedMessage = message
+                }
+            }
             // The embeds' lock screen / CarPlay art: the cover the phone shows
             // (the track's own unless it's Last.fm's placeholder, else its
             // resolved sources'), then the playing source's.
@@ -3387,7 +3412,8 @@ final class QueuePlaybackCoordinator {
                                            startAtSec: aimedAtSec,
                                            album: track.album,
                                            artworkUrl: pcTrackArt(track.artworkUrl, artist: track.artist,
-                                                                  title: track.title, album: track.album))
+                                                                  title: track.title, album: track.album),
+                                           trackId: track.id, durationMs: track.duration?.int64Value ?? 0)
             // Superseded while the engine was starting — skip the stale UI
             // state updates (the newer start owns activeEngine now).
             if Task.isCancelled { return }
@@ -3553,7 +3579,7 @@ final class QueuePlaybackCoordinator {
                 // the phone, the third in a row stops (a car that connected
                 // since the run began starts it over).
                 let session = CarPlaySession.shared
-                let refusedMessage = refusal.service.map {
+                let refusedMessage = refusal.refusedMessage ?? refusal.service.map {
                     SoundCloudWidget.shared.refusedMessage(serviceName: $0, title: track.title, reason: refusal.reason)
                 }
                 let outcome = PlayFailureKt.unplayableTrackOutcome(
@@ -3579,6 +3605,9 @@ final class QueuePlaybackCoordinator {
                         notice = Notice(message: stop.message,
                                         actionLabel: refusal.pageUrl == nil ? nil : PlaybackMessages.shared.openIn(service: service),
                                         actionUrl: refusal.pageUrl)
+                    } else if startFailed, !stop.byCar, let message = refusal.startFailedMessage {
+                        // A plug-in stream's settings ("Check Subsonic's settings…").
+                        notice = Notice(message: message)
                     } else {
                         notice = Notice(message: stop.message)
                     }
@@ -3659,6 +3688,14 @@ final class QueuePlaybackCoordinator {
                 if playRequestCount == requestsBefore { heldForListener = true }
                 return
             }
+        }
+        // An html5Stream plug-in's server refused the stream's credentials
+        // (Subsonic answers 401/403 for a wrong password): its settings (#670).
+        if let resolver = player.loadedResolverId, [401, 403].contains(player.failedHttpStatus),
+           container.isHtml5StreamResolver(resolverId: resolver) {
+            NSLog("QUEUE '%@': %@ refused the stream (HTTP %d)", track.title, resolver, player.failedHttpStatus)
+            notice = Notice(message: container.pluginSettingsMessage(resolverId: resolver))
+            return
         }
         notice = Notice(message: PlayFailureKt.PLAY_START_FAILED_MESSAGE)
     }

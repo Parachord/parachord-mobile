@@ -1813,10 +1813,14 @@ class PlaybackController constructor(
             // A plugin DRM source's manifest wait gives way to a newer play at once.
             // A manual switch leaves the engine that's playing alone until the
             // pick has started (shared failedSwitchKeepsPlayback).
-            val routeIt: suspend () -> PlaybackAction? = if (activeSwitch != null) {
-                { router.route(routedTrack, stopActive = false) }
-            } else {
-                { router.route(routedTrack) }
+            // A DRM play that didn't start, playing the plugin's plain stream
+            // instead (desktop's drmFallback, parachord#1613): its item is ready.
+            val plainItem = pendingPlainStream?.takeIf { it.first == routedTrack.id }?.second
+            pendingPlainStream = null
+            val routeIt: suspend () -> PlaybackAction? = when {
+                plainItem != null -> { { router.plainStreamAction(plainItem, stopActive = activeSwitch == null) } }
+                activeSwitch != null -> { { router.route(routedTrack, stopActive = false) } }
+                else -> { { router.route(routedTrack) } }
             }
             if (router.getPluginDrmHandler().canHandle(routedTrack)) {
                 supersession.untilSuperseded(activePlayGeneration) { routeIt() }
@@ -3897,7 +3901,8 @@ class PlaybackController constructor(
         Log.w(TAG, "ExoPlayer failed '${track.title}' (${error.errorCodeName}): its licence was refused ($outcome)")
         launchPlay {
             playTrackInternal(track, skipReselect = true, userRequested = false, instead = {
-                playAfterPluginDrmFailure(track, track.resolver ?: "", drmError, advancing = false, sessionId, positionMs)
+                // After the start wait: the DRM stream had started, so no plain-stream fallback.
+                playAfterPluginDrmFailure(track, track.resolver ?: "", drmError, advancing = false, sessionId, positionMs, started = true)
             })
         }
         return true
@@ -3951,6 +3956,13 @@ class PlaybackController constructor(
             null -> {
                 Log.w(TAG, "'${track.title}': the DRM stream didn't start within ${DRM_START_TIMEOUT_MS}ms")
                 ctrl.stop()
+                val resolverId = track.resolver ?: ""
+                if (playPlainStreamInstead(
+                        track, resolverId, com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED,
+                        started = false, advancing = advancing, sessionId = sessionId, positionMs = 0L,
+                    )
+                ) return
+                if (switchFailed(track, PlayFailure.START_TIMED_OUT)) return
                 playFailure = PlayFailure.START_TIMED_OUT
                 stateHolder.update { copy(isPlaying = false, isBuffering = false, playbackError = PLAY_START_FAILED_MESSAGE) }
             }
@@ -3974,9 +3986,16 @@ class PlaybackController constructor(
         advancing: Boolean,
         sessionId: String?,
         positionMs: Long = 0L,
+        /** The DRM stream had started (a failure after the start wait): no plain-stream fallback. */
+        started: Boolean = false,
     ) {
         val handler = router.getPluginDrmHandler()
-        when (val outcome = com.parachord.shared.playback.drm.pluginDrmOutcome(error)) {
+        val drmOutcome = com.parachord.shared.playback.drm.pluginDrmOutcome(error)
+        // A plain stream beside the DRM pair plays when the DRM stream didn't
+        // start (desktop's drmFallback, parachord#1613), past the family retry.
+        suspend fun plainStreamInstead(): Boolean =
+            playPlainStreamInstead(track, resolverId, drmOutcome, started, advancing, sessionId, positionMs)
+        when (val outcome = drmOutcome) {
             com.parachord.shared.playback.drm.PluginDrmOutcome.SUPERSEDED -> {
                 Log.d(TAG, "'${track.title}': the DRM play was superseded")
                 return
@@ -3991,17 +4010,23 @@ class PlaybackController constructor(
                     playTrackInternalUnsafe(track, skipReselect = true, advancing = advancing, userRequested = false)
                     return
                 }
+                if (plainStreamInstead()) return
                 if (switchFailed(track, PlayFailure.START_FAILED)) return
                 startFailedForDrm(track)
             }
-            com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED ->
+            com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED -> {
+                if (plainStreamInstead()) return
                 if (!switchFailed(track, PlayFailure.START_FAILED)) startFailedForDrm(track)
+            }
             com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED,
             com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN,
             com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED,
             -> {
                 if (outcome != com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED) {
                     handler.noteRefusalLater(resolverId, scope)
+                } else if (plainStreamInstead()) {
+                    // A licence this build can't get (an unsigned build): the plain stream plays.
+                    return
                 }
                 // A manual switch: no other source, the old one comes back.
                 if (switchFailed(track, PlayFailure.EMBED_REFUSED)) return
@@ -4032,6 +4057,41 @@ class PlaybackController constructor(
             }
         }
     }
+
+    /**
+     * The DRM stream of [track] didn't start ([outcome]): when the shared
+     * [com.parachord.shared.playback.drmPlainStreamFallbackAllowed] allows it,
+     * the plugin's plain stream (`getStreamUrl`) plays on the same source, at
+     * [positionMs] (desktop's drmFallback, parachord#1613). False when it
+     * isn't allowed or the plugin had no stream, so the DRM failure's own
+     * handling and message stand; a manual switch that fails both ways still
+     * gives the old playback back. Throws [com.parachord.android.playback.drm.PlaySupersededException]
+     * when a newer play was asked for meanwhile.
+     */
+    private suspend fun playPlainStreamInstead(
+        track: TrackEntity,
+        resolverId: String,
+        outcome: com.parachord.shared.playback.drm.PluginDrmOutcome,
+        started: Boolean,
+        advancing: Boolean,
+        sessionId: String?,
+        positionMs: Long,
+    ): Boolean {
+        val hasStreamUrl = router.getPluginStreamHandler().hasDrmPlainStream(resolverId)
+        if (!com.parachord.shared.playback.drmPlainStreamFallbackAllowed(outcome, started, hasStreamUrl)) return false
+        supersession.check(activePlayGeneration)
+        if (sessionId != null) router.getPluginDrmHandler().closeSession(sessionId)
+        Log.w(TAG, "'${track.title}': the DRM stream didn't start ($outcome); trying $resolverId's plain stream")
+        val item = router.getPluginStreamHandler().plainStreamItem(track, resolverId) ?: return false
+        supersession.check(activePlayGeneration)
+        pendingPlainStream = track.id to item
+        if (positionMs > 0) pendingStartAt = track.id to positionMs
+        playTrackInternalUnsafe(track, skipReselect = true, advancing = advancing, userRequested = false)
+        return true
+    }
+
+    /** The plain stream [playPlainStreamInstead] has ready for the track it names, taken by the next route. */
+    private var pendingPlainStream: Pair<String, androidx.media3.common.MediaItem>? = null
 
     /** A plugin DRM play that didn't start: Play loads it again. */
     private fun startFailedForDrm(track: TrackEntity) {

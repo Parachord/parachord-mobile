@@ -238,6 +238,28 @@ data class IosPlaylistShare(
 )
 
 /** The loved-tracks backfill's progress for the Settings sheets (#125). Idle = empty service. */
+/**
+ * What a plug-in's `getStreamUrl` gave for one play ([IosContainer.pluginStream]):
+ * [kind] is [PLAY] (with [url], the credential for this play only), [SETTINGS]
+ * (an html5Stream plug-in's settings, START_FAILED with [message]), [REFUSED] (a
+ * refused source: another source, else [message]), [START_FAILED] or [SUPERSEDED].
+ */
+data class IosPluginStream(val kind: String, val url: String?, val message: String?, val serviceName: String) {
+    companion object {
+        const val PLAY = "play"
+        const val SETTINGS = "settings"
+        const val REFUSED = "refused"
+        const val START_FAILED = "startFailed"
+        const val SUPERSEDED = "superseded"
+    }
+}
+
+/** One field of a plug-in's field editor ([IosContainer.pluginConfigFields]). */
+data class IosPluginField(val key: String, val secret: Boolean, val label: String, val hint: String, val placeholder: String)
+
+/** A Test connection result: [ok] and the line to show. */
+data class IosConnectionTest(val ok: Boolean, val message: String)
+
 data class IosLoveBackfill(
     val service: String = "",
     val running: Boolean = false,
@@ -288,14 +310,19 @@ class IosContainer private constructor() {
      *  restart instead of re-probing an already-rate-limited Spotify). */
     val kvStore by lazy { KvStoreFactory.create() }
 
+    /** The Keychain-backed secure store: [settingsStore]'s, and the plug-ins' own secrets ([pluginUserConfig]). */
+    val secureTokenStore: com.parachord.shared.store.SecureTokenStore by lazy {
+        IosSecureTokenStore(
+            migrationDone = { kvStore.getBoolean("keychain_accessibility_v2") },
+            markMigrationDone = {
+                kotlinx.coroutines.runBlocking { kvStore.setBoolean("keychain_accessibility_v2", true) }
+            },
+        )
+    }
+
     val settingsStore: SettingsStore by lazy {
         SettingsStore(
-            secureStore = IosSecureTokenStore(
-                migrationDone = { kvStore.getBoolean("keychain_accessibility_v2") },
-                markMigrationDone = {
-                    kotlinx.coroutines.runBlocking { kvStore.setBoolean("keychain_accessibility_v2", true) }
-                },
-            ),
+            secureStore = secureTokenStore,
             kv = kvStore,
         )
     }
@@ -3101,10 +3128,200 @@ class IosContainer private constructor() {
             // lastfm.axe and listenbrainz.axe read the username for
             // getRecommendations (#606).
             resolverConfigProvider = {
-                mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()) +
-                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey)
+                com.parachord.shared.plugin.mergeResolverConfigs(
+                    mapOf("soundcloud" to soundCloudAuth.pluginConfigJson()),
+                    com.parachord.shared.plugin.metaServicePluginConfigs(settingsStore, appConfig.lastFmApiKey),
+                    // A plug-in's own configurable fields (Subsonic's server URL /
+                    // username / password; #670), last, field by field. Cached in
+                    // memory until a save, so a plugin call doesn't read the
+                    // Keychain each time.
+                    pluginUserConfig.pluginConfigs(),
+                )
             }
         }
+    }
+
+    // ── Plug-ins played through getStreamUrl + their own settings (#670) ──
+
+    /**
+     * A plug-in's `settings.configurable` fields (Subsonic): text in [kvStore],
+     * passwords in the Keychain ([secureTokenStore]), shared with Android.
+     */
+    val pluginUserConfig: com.parachord.shared.plugin.PluginUserConfig by lazy {
+        com.parachord.shared.plugin.PluginUserConfig(
+            plugins = { pluginManager.plugins.value },
+            kv = kvStore,
+            secureStore = secureTokenStore,
+            onConfigSaved = { id -> pluginManager.refreshConfiguredCache(id) },
+        )
+    }
+
+    /**
+     * Whether [resolverId]'s plug-in plays here through `getStreamUrl` and
+     * AVPlayer (shared `playsThroughStreamUrl` for `HostPlayback.IOS`): an
+     * html5Stream plug-in (Subsonic), or a Widevine plug-in that also has a
+     * plain stream (Amazon Music's purchases, desktop parachord#1613). By
+     * capability and method, never by id.
+     */
+    fun playsThroughStreamUrl(resolverId: String): Boolean =
+        pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS) != null
+
+    /**
+     * Asks [source]'s plug-in for this play's stream (`getStreamUrl`) and says
+     * what to do (shared `pluginStreamOutcome`). The URL is a credential for
+     * this play only: it goes to AVPlayer and nowhere else, and is logged
+     * redacted. Never throws to Swift.
+     */
+    suspend fun pluginStream(
+        source: ResolvedSource,
+        trackId: String,
+        title: String,
+        artist: String,
+        album: String?,
+        durationMs: Long,
+    ): IosPluginStream {
+        val resolverId = source.resolver
+        val plugin = pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS)
+            ?: return IosPluginStream(IosPluginStream.START_FAILED, null, com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE, resolverId)
+        val html5 = plugin.capabilities[com.parachord.shared.plugin.HostPlayback.HTML5_STREAM] == true
+        val pluginTrackId = source.pluginTrackId
+            ?: com.parachord.shared.resolver.parsePluginTrackUrl(source.url)?.takeIf { it.first == resolverId }?.second
+        val trackJson = com.parachord.shared.playback.pluginStreamTrackJson(
+            trackId, title, artist, album, durationMs.takeIf { it > 0 }, resolverId, pluginTrackId, source,
+        )
+        val reply = try {
+            com.parachord.shared.playback.PluginStreamReplies.parse(
+                pluginManager.requestStreamUrl(resolverId, trackJson.toString()),
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            com.parachord.shared.playback.PluginStreamReply.Failed(
+                com.parachord.shared.playback.drm.PluginDrmError(message = e.message?.take(120)),
+            )
+        }
+        val outcome = com.parachord.shared.playback.pluginStreamOutcome(reply, resolverId, plugin.name, html5)
+        return when (outcome) {
+            is com.parachord.shared.playback.PluginStreamOutcome.Play -> {
+                Log.d("PluginStream", "Playing '$title' from $resolverId: ${com.parachord.shared.playback.PluginStreamUrl.redact(outcome.url)}")
+                IosPluginStream(IosPluginStream.PLAY, outcome.url, null, plugin.name)
+            }
+            is com.parachord.shared.playback.PluginStreamOutcome.Settings -> {
+                Log.w("PluginStream", "'$title': $resolverId has no stream (settings)")
+                IosPluginStream(IosPluginStream.SETTINGS, null, outcome.message, plugin.name)
+            }
+            is com.parachord.shared.playback.PluginStreamOutcome.Refused -> {
+                Log.w("PluginStream", "'$title': $resolverId refused it (${outcome.outcome})")
+                if (outcome.outcome != com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED) {
+                    // A plan or sign-in refusal: read the status again (a plan limit lands in "not playing").
+                    refreshPluginStatus(resolverId)
+                }
+                IosPluginStream(IosPluginStream.REFUSED, null, outcome.message, plugin.name)
+            }
+            is com.parachord.shared.playback.PluginStreamOutcome.StartFailed -> {
+                Log.w("PluginStream", "'$title': $resolverId's stream couldn't start")
+                IosPluginStream(IosPluginStream.START_FAILED, null, outcome.message, plugin.name)
+            }
+            com.parachord.shared.playback.PluginStreamOutcome.Superseded ->
+                IosPluginStream(IosPluginStream.SUPERSEDED, null, null, plugin.name)
+        }
+    }
+
+    /** The settings message for [resolverId] (a 401/403 from its stream: a wrong password). */
+    fun pluginSettingsMessage(resolverId: String): String =
+        com.parachord.shared.playback.checkPluginSettingsMessage(resolverId)
+
+    /** Whether [resolverId]'s plug-in declares `html5Stream` (its stream's 401/403 is a settings problem). */
+    fun isHtml5StreamResolver(resolverId: String): Boolean = pluginManager.html5StreamPlugin(resolverId) != null
+
+    /** The plug-in's sheet uses the generic field editor (Subsonic; not a plug-in the app sets up itself). */
+    fun pluginUsesFieldEditor(id: String): Boolean =
+        pluginUserConfig.fields(id).isNotEmpty()
+
+    /** Whether the plug-in needs its fields set before it can answer (`settings.requiresAuth`). */
+    fun pluginRequiresSetup(id: String): Boolean =
+        pluginUsesFieldEditor(id) && pluginManager.plugins.value.firstOrNull { it.id == id }?.requiresAuth == true
+
+    /** The field editor's fields, in manifest order. */
+    fun pluginConfigFields(id: String): List<IosPluginField> =
+        pluginUserConfig.fields(id).map {
+            IosPluginField(it.key, it.type == "password", it.label, it.description ?: "", it.placeholder ?: "")
+        }
+
+    /** The saved values (passwords from the Keychain), keyed by field. */
+    @Throws(Throwable::class)
+    suspend fun pluginConfigValues(id: String): Map<String, String> =
+        pluginUserConfig.fields(id).associate { it.key to pluginUserConfig.value(id, it) }
+
+    /**
+     * The plug-in's own `isConfigured` answer: true / false, or null when it
+     * gave none (the plug-in host isn't ready). Never cached when null.
+     */
+    @Throws(Throwable::class)
+    suspend fun pluginConfigured(id: String): Boolean? = pluginManager.isPluginConfiguredOrNull(id)
+
+    /**
+     * Saves the field editor's values and keeps `active_resolvers` in step
+     * (#670): a save that leaves the plug-in configured turns it on, one that
+     * clears it turns it off (the coordinator only asks an active resolver).
+     * The plug-in's configured answer afterwards, null when unknown.
+     */
+    @Throws(Throwable::class)
+    suspend fun savePluginConfig(id: String, values: Map<String, String>): Boolean? {
+        pluginUserConfig.save(id, values)
+        val configured = pluginManager.isPluginConfiguredOrNull(id)
+        if (configured != null) applyPluginConfiguredToActive(id, configured)
+        return configured
+    }
+
+    /**
+     * At launch: a plug-in with the field editor that is configured and was
+     * never put in `active_resolvers` is added once (an install that set
+     * Subsonic up before this change); one whose config is gone is taken out.
+     * A plug-in the person turned off later stays off.
+     */
+    suspend fun seedConfiguredPluginResolvers() {
+        pluginManager.ensureInitialized()
+        for (plugin in pluginManager.plugins.value) {
+            if (!pluginRequiresSetup(plugin.id)) continue
+            val configured = pluginManager.isPluginConfiguredOrNull(plugin.id) ?: continue
+            val seededKey = "plugin_active_seeded_${plugin.id}"
+            if (!configured) {
+                applyPluginConfiguredToActive(plugin.id, false)
+            } else if (!kvStore.getBoolean(seededKey)) {
+                applyPluginConfiguredToActive(plugin.id, true)
+            }
+            if (configured) kvStore.setBoolean(seededKey, true)
+        }
+    }
+
+    private suspend fun applyPluginConfiguredToActive(id: String, configured: Boolean) {
+        val active = settingsStore.getActiveResolvers()
+        val next = com.parachord.shared.plugin.activeResolversAfterConfig(active, id, configured) ?: return
+        settingsStore.setActiveResolvers(next)
+        val order = settingsStore.getResolverOrder()
+        if (configured) {
+            if (order.isNotEmpty() && id !in order) settingsStore.setResolverOrder(resolverScoring.insertInCanonicalOrder(order, id))
+        } else if (id in order) {
+            settingsStore.setResolverOrder(order - id)
+        }
+        Log.d("PluginConfig", "$id ${if (configured) "configured: on" else "not configured: off"} (active_resolvers)")
+    }
+
+    /**
+     * Test connection: the plug-in's own search, which throws with the
+     * server's status when the credentials are wrong. The line to show.
+     */
+    suspend fun testPluginConnection(id: String): IosConnectionTest = try {
+        val raw = pluginManager.searchForConnectionTest(id)
+        val count = raw?.let {
+            runCatching { (Json.parseToJsonElement(it) as? kotlinx.serialization.json.JsonArray)?.size }.getOrNull()
+        } ?: 0
+        IosConnectionTest(true, com.parachord.shared.plugin.connectionTestOkMessage(count))
+    } catch (e: kotlinx.coroutines.CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        IosConnectionTest(false, e.message ?: "Connection failed")
     }
 
     /**
@@ -3231,9 +3448,10 @@ class IosContainer private constructor() {
 
     /**
      * The status-capable plugins' replies and the one "not playing" list
-     * (#707), shared with Android. iOS runs no plugin-supplied playback
-     * path ([com.parachord.shared.plugin.HostPlayback.IOS]), so a plugin that
-     * plays only that way (Amazon Music, Widevine) is in the list too.
+     * (#707), shared with Android. iOS runs the `getStreamUrl` paths but no
+     * Widevine ([com.parachord.shared.plugin.HostPlayback.IOS]), so a plugin
+     * that plays only through Widevine (an Amazon build with no
+     * `getStreamUrl`) is in the list too.
      */
     val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
         com.parachord.shared.plugin.PluginStatusStore.create(
@@ -3403,6 +3621,7 @@ class IosContainer private constructor() {
             trackDao = trackDao,
             appleMusicResolver = com.parachord.shared.resolver.AppleMusicCatalogResolver(appleMusicCatalog, settingsStore),
             refreshSoundCloudAfterRejection = { soundCloudAuth.refreshAfterRejection(it) },
+            playsThroughStreamUrl = { playsThroughStreamUrl(it) },
         )
     }
 

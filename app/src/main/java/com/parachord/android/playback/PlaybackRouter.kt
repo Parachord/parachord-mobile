@@ -149,6 +149,19 @@ class PlaybackRouter constructor(
     /** Whether [resolverId]'s plugin declares `capabilities.html5Stream` (the [PluginStreamHandler]'s resolvers). */
     fun isHtml5StreamResolver(resolverId: String?): Boolean = pluginManager.html5StreamPlugin(resolverId) != null
 
+    /**
+     * A Widevine plugin's plain stream, ready to play ([PluginStreamHandler.plainStreamItem],
+     * desktop's drmFallback): stops an external engine first unless [stopActive]
+     * is false (a manual switch keeps it until the pick plays).
+     */
+    suspend fun plainStreamAction(item: androidx.media3.common.MediaItem, stopActive: Boolean): PlaybackAction {
+        if (stopActive) stopExternalPlayback()
+        return PlaybackAction.ExoPlayerItem(item)
+    }
+
+    /** The html5Stream / plain-stream handler. */
+    fun getPluginStreamHandler(): PluginStreamHandler = pluginStreamHandler
+
     /** The plugin Widevine engine's handler (messages, refusals). */
     fun getPluginDrmHandler(): com.parachord.android.playback.drm.PluginDrmHandler = pluginDrmHandler
 

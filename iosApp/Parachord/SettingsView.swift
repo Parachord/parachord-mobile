@@ -53,6 +53,8 @@ enum PCServices {
         .init(id: "bandcamp", name: "Bandcamp", color: ResolverColor.hex("bandcamp"), icon: "music.note", kind: .resolver),
         .init(id: "soundcloud", name: "SoundCloud", color: ResolverColor.hex("soundcloud"), icon: "cloud", kind: .resolver),
         .init(id: "localfiles", name: "Local Files", color: ResolverColor.hex("localfiles"), icon: "internaldrive", kind: .resolver),
+        // Its own server (#670): set up in its sheet's field editor; drawn with its logo (the yellow submarine).
+        .init(id: "subsonic", name: "Subsonic", color: ResolverColor.hex("subsonic"), icon: "server.rack", kind: .resolver),
     ]
     static let meta: [PCService] = [
         .init(id: "lastfm", name: "Last.fm", color: ResolverColor.hex("lastfm"), icon: "waveform", kind: .meta),
@@ -141,9 +143,61 @@ final class SettingsViewModel {
     /// (`appleMusicConfigured && appleMusicAuthorized`). It's also what iOS
     /// resolution itself gates on (#327), so listing it unconnected promised a
     /// source that never resolves.
-    func requiresConnection(_ id: String) -> Bool { id == "spotify" || id == "soundcloud" || id == "applemusic" }
-    /// Usable = no connection required, or connected.
-    func isUsable(_ id: String) -> Bool { !requiresConnection(id) || isConnected(id) }
+    func requiresConnection(_ id: String) -> Bool {
+        id == "spotify" || id == "soundcloud" || id == "applemusic" || needsSetup(id)
+    }
+    /// Usable = no connection required, or connected. A plug-in set up in its
+    /// field editor whose state isn't known yet counts as usable, so opening
+    /// Settings before its answer never turns it off.
+    func isUsable(_ id: String) -> Bool {
+        !requiresConnection(id) || isConnected(id) || (needsSetup(id) && pluginConfigured[id] == nil)
+    }
+
+    // ── Plug-ins set up in their sheet's field editor (#670: Subsonic) ──
+    /// The plug-ins' own `isConfigured` answers; absent while unknown.
+    var pluginConfigured: [String: Bool] = [:]
+    /// The saved field values, per plug-in (passwords from the Keychain).
+    var pluginFieldValues: [String: [String: String]] = [:]
+    /// Test connection: running, then its line (ok or the error).
+    var connectionTests: [String: IosConnectionTest] = [:]
+    var connectionTesting: Set<String> = []
+    /// The plug-in's sheet is the generic field editor (shared `PluginUserConfig`).
+    func usesFieldEditor(_ id: String) -> Bool { container.pluginUsesFieldEditor(id: id) }
+    /// It needs its fields before it can resolve or play (`requiresAuth`).
+    func needsSetup(_ id: String) -> Bool { container.pluginRequiresSetup(id: id) }
+    func fields(_ id: String) -> [IosPluginField] { container.pluginConfigFields(id: id) }
+    func refreshPluginConfigured(_ id: String) async {
+        if let answer = try? await container.pluginConfigured(id: id) { pluginConfigured[id] = answer.boolValue }
+    }
+    func loadPluginFields(_ id: String) {
+        Task { @MainActor in
+            pluginFieldValues[id] = (try? await container.pluginConfigValues(id: id)) ?? [:]
+            await refreshPluginConfigured(id)
+        }
+    }
+    /// Saves the fields; the container puts the plug-in in or out of
+    /// `active_resolvers` by its configured answer, and the list follows.
+    func savePluginFields(_ id: String, _ values: [String: String]) {
+        Task { @MainActor in
+            let configured = try? await container.savePluginConfig(id: id, values: values)
+            pluginFieldValues[id] = (try? await container.pluginConfigValues(id: id)) ?? values
+            connectionTests[id] = nil
+            if let configured {
+                pluginConfigured[id] = configured.boolValue
+                if configured.boolValue { activeResolvers.insert(id) } else { activeResolvers.remove(id) }
+            }
+            recomputeResolvers()
+        }
+    }
+    func testConnection(_ id: String) {
+        guard !connectionTesting.contains(id) else { return }
+        connectionTesting.insert(id)
+        connectionTests[id] = nil
+        Task { @MainActor in
+            connectionTests[id] = try? await container.testPluginConnection(id: id)
+            connectionTesting.remove(id)
+        }
+    }
     /// In the priority list = user-enabled AND usable AND mobile-allowed.
     func isEnabledUsable(_ id: String) -> Bool {
         activeResolvers.contains(id) && !mobileBlocked.contains(id) && isUsable(id)
@@ -370,6 +424,7 @@ final class SettingsViewModel {
             blocked.formUnion(["youtube", "ollama"])
             mobileBlocked = blocked
             await refreshLoadedPlugins()
+            for p in loadedPlugins where needsSetup(p.id) { await refreshPluginConfigured(p.id) }
 
             appleMusicConnected = (try? await container.hasAppleMusicUserToken())?.boolValue ?? false
 
@@ -481,6 +536,8 @@ final class SettingsViewModel {
         // Scrobbling needs the session key (OAuth), not the read-only username.
         case "lastfm": return lastFmConnected
         case "localfiles", "bandcamp": return true   // genuinely need no credentials
+        // A plug-in set up in its field editor (Subsonic): its own isConfigured.
+        case let id where needsSetup(id): return pluginConfigured[id] == true
         // NOT unconditionally true: resolution needs the Music User Token.
         case "applemusic": return appleMusicConnected
         // No-key meta (Discogs) + any uncataloged loaded plugin (Wikipedia,
@@ -931,19 +988,21 @@ private struct PlugInsTab: View {
         // Auth-gated + not connected → "Connect" (opens config); otherwise the
         // user disabled it → "Enable" re-adds it directly.
         let needsConnect = model.requiresConnection(svc.id) && !model.isConnected(svc.id)
+        // A plug-in with its own server reads "Set up" (#670), as Android's tile.
+        let connectWord = model.needsSetup(svc.id) ? "Set up" : "Connect"
         return HStack(spacing: 12) {
             tileIcon(svc, size: 34).opacity(0.4).grayscale(1)
             VStack(alignment: .leading, spacing: 1) {
                 Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg3)
                 if needsConnect {
-                    Text("Connect to enable").font(.system(size: 12)).foregroundStyle(PC.fg3)
+                    Text("\(connectWord) to enable").font(.system(size: 12)).foregroundStyle(PC.fg3)
                 }
             }
             Spacer(minLength: 0)
             Button { onConfig(svc) } label: { Image(systemName: "gearshape").foregroundStyle(PC.fg3) }.buttonStyle(.plain)
             // Fixed-width action so the gear sits at the same x on every row
             // regardless of the "Connect" vs "Enable" label width.
-            Button(needsConnect ? "Connect" : "Enable") {
+            Button(needsConnect ? connectWord : "Enable") {
                 if needsConnect { onConfig(svc) } else { model.setResolverEnabled(svc.id, true) }
             }
             .font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent).buttonStyle(.plain)
@@ -1004,7 +1063,14 @@ private struct PlugInsTab: View {
         RoundedRectangle(cornerRadius: size * 0.22, style: .continuous)
             .fill(Color(uiColor: UIColor(hex: svc.color)))
             .frame(width: size, height: size)
-            .overlay(Image(systemName: svc.icon).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(.white))
+            .overlay {
+                // Desktop's logo where there is one (Subsonic's yellow submarine), as Android's tiles.
+                if svc.id == "subsonic" {
+                    PCServiceLogo(serviceId: svc.id).padding(size * 0.12)
+                } else {
+                    Image(systemName: svc.icon).font(.system(size: size * 0.42, weight: .semibold)).foregroundStyle(.white)
+                }
+            }
     }
 }
 
@@ -1093,6 +1159,10 @@ private struct PluginConfigSheet: View {
         // public API works unauthenticated; a token would only raise rate
         // limits, which we don't surface.
         case "discogs": infoSection("Discogs provides artist bios and images from the community database — no API key required.")
+        // A plug-in with its own settings fields and no screen of the app's
+        // own (Subsonic's server URL / username / password, #670): the
+        // generic field editor, Android's PluginFieldsConfig.
+        case let id where model.usesFieldEditor(id): PluginFieldsSection(service: service, model: model)
         // Uncataloged loaded plugins (e.g. Wikipedia, Achordion) have no
         // BYO-key config — show read-only info instead of a stray key field.
         case let id where PCServices.find(id) == nil: pluginInfoSection
@@ -1818,5 +1888,80 @@ private struct AboutTab: View {
         }
         .frame(maxWidth: .infinity).padding(.bottom, 130)
         .sheet(item: $reportLink) { SafariView(url: $0.url) }
+    }
+}
+
+
+// MARK: - A plug-in's own settings fields (#670, Android's PluginFieldsConfig)
+
+/// The generic field editor for a plug-in that brings its own settings
+/// (Subsonic's server URL, username and password): one field per
+/// `settings.configurable` entry, Save, and Test connection. Passwords go to
+/// the Keychain (shared `PluginUserConfig`); the plug-in's own `isConfigured`
+/// decides whether it's set up.
+private struct PluginFieldsSection: View {
+    let service: PCService
+    @Bindable var model: SettingsViewModel
+    @State private var drafts: [String: String] = [:]
+    @State private var shown: Set<String> = []
+
+    var body: some View {
+        let fields = model.fields(service.id)
+        let configured = model.pluginConfigured[service.id] == true
+        Section {
+            ForEach(fields, id: \.key) { field in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(field.label).font(.system(size: 13)).foregroundStyle(PC.fg2)
+                    HStack {
+                        if field.secret && !shown.contains(field.key) {
+                            SecureField(field.placeholder, text: binding(field.key))
+                        } else {
+                            TextField(field.placeholder, text: binding(field.key))
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        }
+                        if field.secret {
+                            Button(shown.contains(field.key) ? "Hide" : "Show") {
+                                if shown.contains(field.key) { shown.remove(field.key) } else { shown.insert(field.key) }
+                            }
+                            .font(.system(size: 13)).buttonStyle(.plain).foregroundStyle(PC.accent)
+                        }
+                    }
+                    if !field.hint.isEmpty {
+                        Text(field.hint).font(.system(size: 12)).foregroundStyle(PC.fg3)
+                    }
+                }
+            }
+            Button("Save") { model.savePluginFields(service.id, drafts) }
+                .foregroundStyle(PC.accent)
+            Button {
+                model.testConnection(service.id)
+            } label: {
+                if model.connectionTesting.contains(service.id) {
+                    HStack(spacing: 8) { ProgressView().controlSize(.small); Text("Testing…") }
+                } else {
+                    Text("Test connection")
+                }
+            }
+            .disabled(!configured || model.connectionTesting.contains(service.id))
+            if let test = model.connectionTests[service.id] {
+                Text(test.message).font(.system(size: 13))
+                    .foregroundStyle(test.ok ? PC.success : PC.error)
+            }
+        } header: {
+            Text("Settings")
+        } footer: {
+            if model.needsSetup(service.id) && model.pluginConfigured[service.id] == false {
+                Text("Set up \(service.name) to use it: every field above is needed before it can resolve or play.")
+            }
+        }
+        .onAppear {
+            model.loadPluginFields(service.id)
+            drafts = model.pluginFieldValues[service.id] ?? [:]
+        }
+        .onChange(of: model.pluginFieldValues[service.id] ?? [:]) { _, saved in drafts = saved }
+    }
+
+    private func binding(_ key: String) -> Binding<String> {
+        Binding(get: { drafts[key] ?? "" }, set: { drafts[key] = $0 })
     }
 }

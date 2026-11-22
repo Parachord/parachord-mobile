@@ -2583,7 +2583,7 @@ private fun PluginFieldsConfig(
                 )
                 Spacer(modifier = Modifier.width(6.dp))
                 Text(
-                    text = "Connected — ${connectionTest.resultCount} result${if (connectionTest.resultCount == 1) "" else "s"} for \"test\"",
+                    text = com.parachord.shared.plugin.connectionTestOkMessage(connectionTest.resultCount),
                     style = MaterialTheme.typography.bodySmall,
                     color = Color(0xFF10B981),
                 )

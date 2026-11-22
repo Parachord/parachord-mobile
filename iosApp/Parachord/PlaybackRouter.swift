@@ -18,6 +18,9 @@ import Shared
 //   bandcamp                             → Bandcamp's embed (#513)
 //   applemusic (catalog ID)              → MusicKit
 //   spotify (track URI)                  → Spotify Connect
+//   a plug-in played through getStreamUrl → AVPlayer, with a URL the plug-in
+//     builds at play time (Subsonic's html5Stream; Amazon Music's purchases,
+//     a Widevine plug-in's plain stream, desktop parachord#1613; #670)
 
 enum PlaybackEngineKind: String {
     case avPlayer, musicKit, spotify, soundCloud, bandcamp, browser
@@ -68,6 +71,10 @@ struct PlaybackRouter {
     /// Apple Music (access denied or restricted). If nothing plays, the caller
     /// says so (Android's "Sign in to Apple Music to play this track").
     var onAppleMusicUnauthorized: (() -> Void)? = nil
+    /// A plug-in's `getStreamUrl` gave no stream ([IosPluginStream]'s kind:
+    /// `settings` / `startFailed` stop on the track with [message], `refused`
+    /// is a refused source named [service]). The walk then moves on.
+    var onPluginStreamFailed: ((_ kind: String, _ message: String, _ service: String) -> Void)? = nil
     /// Resolver ids that resolve but can't stream (stream:false, e.g. Bandcamp)
     /// — opened in the browser. Mirrors Android's PlaybackRouter browser branch.
     var nonStreamingResolvers: Set<String> = []
@@ -80,7 +87,8 @@ struct PlaybackRouter {
     /// and Spotify start there; the SoundCloud and Bandcamp embeds can't, so the
     /// caller seeks once they play (`PlaybackEngineKind.startsAtPosition`).
     func play(ranked: [ResolvedSource], title: String, artist: String, startAtSec: Double = 0,
-              album: String? = nil, artworkUrl: String? = nil) async -> RouteResult {
+              album: String? = nil, artworkUrl: String? = nil,
+              trackId: String = "", durationMs: Int64 = 0) async -> RouteResult {
         for source in ranked {
             // Non-streaming resolver — hand its URL back to open in the browser,
             // before trying any audio engine for this source. Not Bandcamp, which
@@ -130,6 +138,26 @@ struct PlaybackRouter {
                     if reason == "superseded" { return .noPlayableSource }
                     onRefused?(embed.SERVICE_NAME, pageLink, reason)
                 }
+
+            case let resolver where IosContainer.companion.shared.playsThroughStreamUrl(resolverId: resolver):
+                // A plug-in played through `getStreamUrl` (#670): the URL is
+                // built now, by capability and method, never by id, and lives
+                // for this play only (AVPlayer's item; never the track, a
+                // cache, the saved queue or a log line).
+                let container = IosContainer.companion.shared
+                let stream = try? await container.pluginStream(source: source, trackId: trackId, title: title,
+                                                               artist: artist, album: album, durationMs: durationMs)
+                guard let stream else {
+                    onPluginStreamFailed?(IosPluginStream.companion.START_FAILED, PlayFailureKt.PLAY_START_FAILED_MESSAGE, resolver)
+                    continue
+                }
+                if stream.kind == IosPluginStream.companion.PLAY, let url = stream.url {
+                    avPlayer.load(url: url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag,
+                                  startAtSec: startAtSec)
+                    return .played(.avPlayer, resolver: source.resolver)
+                }
+                if stream.kind == IosPluginStream.companion.SUPERSEDED { return .noPlayableSource }
+                onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
 
             case let resolver where Self.avPlayerResolvers.contains(resolver):
                 guard !source.url.isEmpty else { continue }
