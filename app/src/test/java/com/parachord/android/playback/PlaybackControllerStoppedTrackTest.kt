@@ -54,6 +54,10 @@ class PlaybackControllerStoppedTrackTest {
         coEvery { f.router.route(any()) } answers {
             if (firstArg<TrackEntity>().id == "n") null else PlaybackAction.ExternalPlayback(handler)
         }
+        // A manual source switch routes without stopping what plays.
+        coEvery { f.router.route(any(), false) } answers {
+            if (firstArg<TrackEntity>().id == "n") null else PlaybackAction.ExternalPlayback(handler)
+        }
     }
 
     @After
@@ -447,7 +451,7 @@ class PlaybackControllerStoppedTrackTest {
         f.stateHolder.update { copy(currentTrack = a) }
         controller.switchSource("soundcloud")
         run()
-        routed("a")
+        coVerify { f.router.route(match { it.id == "a" }, false) }
 
         controller.onLocalPlayerFailed(positionMs = 60_000, durationMs = 200_000)
 
