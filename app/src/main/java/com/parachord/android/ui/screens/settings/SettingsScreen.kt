@@ -1443,6 +1443,9 @@ private fun PluginConfigSheet(
             // from X". A meta-service keeps its own on/off below; it gets the
             // recommendations switch when it offers them.
             val info = plugin.sharedInfo
+            // A status-capable plug-in that last said it's signed out shows
+            // the nested switches disabled, "Sign in to use this" (#782).
+            val signedIn = pluginStatus?.signedIn
             if (isResolver) {
                 Spacer(modifier = Modifier.height(16.dp))
                 PluginSwitchRow(
@@ -1452,7 +1455,7 @@ private fun PluginConfigSheet(
                     onCheckedChange = onResolverEnabledChange,
                 )
             }
-            val playState = com.parachord.shared.plugin.playbackSwitchState(info, isResolver && resolverOn, playbackOff, playbackLimit)
+            val playState = com.parachord.shared.plugin.playbackSwitchState(info, isResolver && resolverOn, playbackOff, playbackLimit, signedIn)
             if (playState.shown) {
                 PluginSwitchRow(
                     label = com.parachord.shared.plugin.playbackSwitchLabel(plugin.name),
@@ -1463,18 +1466,19 @@ private fun PluginConfigSheet(
                     onCheckedChange = onPlaybackOn,
                 )
             }
-            val metaState = com.parachord.shared.plugin.metadataSwitchState(info, isResolver && resolverOn, metadataOff)
+            val metaState = com.parachord.shared.plugin.metadataSwitchState(info, isResolver && resolverOn, metadataOff, signedIn)
             if (metaState.shown) {
                 PluginSwitchRow(
                     label = com.parachord.shared.plugin.metadataSwitchLabel(plugin.name),
                     hint = metaState.hint,
                     checked = metaState.checked,
+                    enabled = !metaState.disabled,
                     nested = true,
                     onCheckedChange = onMetadataOn,
                 )
             }
             val recState = com.parachord.shared.plugin.recommendationsSwitchState(
-                info, if (isResolver) resolverOn else isConnected, recommendationsOff,
+                info, if (isResolver) resolverOn else isConnected, recommendationsOff, signedIn,
             )
             if (recState.shown) {
                 if (!isResolver) Spacer(modifier = Modifier.height(16.dp))
@@ -1482,6 +1486,7 @@ private fun PluginConfigSheet(
                     label = com.parachord.shared.plugin.recommendationsSwitchLabel(plugin.name),
                     hint = recState.hint,
                     checked = recState.checked,
+                    enabled = !recState.disabled,
                     nested = isResolver,
                     onCheckedChange = onRecommendationsOn,
                 )
@@ -3057,7 +3062,8 @@ private fun PluginSwitchRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            // A disabled switch never writes its list (a plan limit, signed out).
+            onCheckedChange = { if (enabled) onCheckedChange(it) },
             enabled = enabled,
             modifier = if (nested) Modifier.scale(0.85f) else Modifier,
         )

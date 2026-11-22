@@ -1003,7 +1003,8 @@ private struct PluginConfigSheet: View {
     /// One of the sheet's switches; nested ones sit indented under "Enable X" (#707).
     private func switchRow(_ label: String, _ hint: String, on: Bool, nested: Bool = false, locked: Bool = false,
                            set: @escaping (Bool) -> Void) -> some View {
-        Toggle(isOn: Binding(get: { on }, set: set)) {
+        // A locked switch (a plan limit, signed out) never writes its list.
+        Toggle(isOn: Binding(get: { on }, set: { if !locked { set($0) } })) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(.system(size: nested ? 14 : 16))
                 if !hint.isEmpty { Text(hint).font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -1083,12 +1084,14 @@ private struct PluginConfigSheet: View {
                                       locked: sheet.playback.disabled) { model.setPluginSwitch("playback", service.id, $0) }
                         }
                         if sheet.metadata.shown {
-                            switchRow(sheet.metadataLabel, sheet.metadata.hint, on: sheet.metadata.checked, nested: true) {
+                            switchRow(sheet.metadataLabel, sheet.metadata.hint, on: sheet.metadata.checked, nested: true,
+                                      locked: sheet.metadata.disabled) {
                                 model.setPluginSwitch("metadata", service.id, $0)
                             }
                         }
                         if sheet.recommendations.shown {
-                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
+                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true,
+                                      locked: sheet.recommendations.disabled) {
                                 model.setPluginSwitch("recommendations", service.id, $0)
                             }
                         }
@@ -1107,7 +1110,8 @@ private struct PluginConfigSheet: View {
                                   sheet.enableHint.isEmpty ? "Turn off to stop using this plugin." : sheet.enableHint,
                                   on: active) { model.setPluginEnabled(service.id, $0) }
                         if sheet.recommendations.shown {
-                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
+                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true,
+                                      locked: sheet.recommendations.disabled) {
                                 model.setPluginSwitch("recommendations", service.id, $0)
                             }
                         }

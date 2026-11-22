@@ -3245,6 +3245,9 @@ class IosContainer private constructor() {
             capabilities = if (isResolver) mapOf("resolve" to true) else emptyMap(),
         )
         val limit = pluginStatusStore.limits.value[id]
+        // Signed out (the last status read said so), the nested switches are
+        // disabled with "Sign in to use this" (#782); unknown changes nothing.
+        val signedIn = pluginStatusStore.statuses.value[id]?.signedIn
         // iOS has no plugin DRM engine and its Apple Music follows iOS's own
         // setting, so no line here follows Playback Quality: the settings
         // passed don't change the answer.
@@ -3258,11 +3261,11 @@ class IosContainer private constructor() {
             enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
             enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
             playbackLabel = com.parachord.shared.plugin.playbackSwitchLabel(name),
-            playback = com.parachord.shared.plugin.playbackSwitchState(info, active, id in lists.playbackOff, limit),
+            playback = com.parachord.shared.plugin.playbackSwitchState(info, active, id in lists.playbackOff, limit, signedIn),
             metadataLabel = com.parachord.shared.plugin.metadataSwitchLabel(name),
-            metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff),
+            metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff, signedIn),
             recommendationsLabel = com.parachord.shared.plugin.recommendationsSwitchLabel(name),
-            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, active, id in lists.recommendationsOff),
+            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, active, id in lists.recommendationsOff, signedIn),
             hasStatus = info.capabilities["status"] == true,
             canSignIn = info.hasSignIn,
             canSignOut = info.hasSignOut,

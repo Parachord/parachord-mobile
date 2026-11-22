@@ -81,4 +81,56 @@ class PluginSwitchTest {
         assertFalse(metadataSwitchState(wikipedia, active = true, metadataOff = false).shown)
         assertFalse(metadataSwitchState(spotify, active = false, metadataOff = false).shown)
     }
+
+    // #782 (desktop parachord#1614 proposed): signed out, the nested switches are disabled.
+    private val signInHint = "Sign in to use this"
+
+    @Test
+    fun `signed out the three switches are disabled and keep the stored on`() {
+        assertEquals(PluginSwitchState(true, true, true, signInHint), playbackSwitchState(amazon, active = true, playbackOff = false, signedIn = false))
+        assertEquals(PluginSwitchState(true, true, true, signInHint), metadataSwitchState(amazon, active = true, metadataOff = false, signedIn = false))
+        assertEquals(PluginSwitchState(true, true, true, signInHint), recommendationsSwitchState(amazon, active = true, recommendationsOff = false, signedIn = false))
+    }
+
+    @Test
+    fun `signed out the switches keep the stored off`() {
+        assertEquals(PluginSwitchState(true, false, true, signInHint), playbackSwitchState(amazon, active = true, playbackOff = true, signedIn = false))
+        assertEquals(PluginSwitchState(true, false, true, signInHint), metadataSwitchState(amazon, active = true, metadataOff = true, signedIn = false))
+        assertEquals(PluginSwitchState(true, false, true, signInHint), recommendationsSwitchState(amazon, active = true, recommendationsOff = true, signedIn = false))
+    }
+
+    @Test
+    fun `signed out a plug-in that is off still hides its switches`() {
+        assertFalse(playbackSwitchState(amazon, active = false, playbackOff = false, signedIn = false).shown)
+        assertFalse(metadataSwitchState(amazon, active = false, metadataOff = false, signedIn = false).shown)
+        assertFalse(recommendationsSwitchState(amazon, active = false, recommendationsOff = false, signedIn = false).shown)
+    }
+
+    @Test
+    fun `a plan limit still wins over signed out for Play from`() {
+        val limit = PlaybackLimit(true, "Prime: no playback", message = "Playing Amazon tracks in Parachord needs Music Unlimited.")
+        assertEquals(
+            PluginSwitchState(true, false, true, "Playing Amazon tracks in Parachord needs Music Unlimited."),
+            playbackSwitchState(amazon, active = true, playbackOff = false, limit = limit, signedIn = false),
+        )
+    }
+
+    @Test
+    fun `signed in or unknown changes nothing`() {
+        for (signedIn in listOf(true, null)) {
+            assertEquals(playbackSwitchState(amazon, true, false), playbackSwitchState(amazon, true, false, signedIn = signedIn))
+            assertEquals(playbackSwitchState(amazon, true, true), playbackSwitchState(amazon, true, true, signedIn = signedIn))
+            assertEquals(metadataSwitchState(amazon, true, false), metadataSwitchState(amazon, true, false, signedIn = signedIn))
+            assertEquals(metadataSwitchState(amazon, true, true), metadataSwitchState(amazon, true, true, signedIn = signedIn))
+            assertEquals(recommendationsSwitchState(amazon, true, false), recommendationsSwitchState(amazon, true, false, signedIn = signedIn))
+            assertEquals(recommendationsSwitchState(amazon, true, true), recommendationsSwitchState(amazon, true, true, signedIn = signedIn))
+        }
+        assertFalse(playbackSwitchState(amazon, true, false, signedIn = null).disabled)
+    }
+
+    @Test
+    fun `a failed status read has no sign-in verdict`() {
+        assertEquals(null, PluginStatusEntry.READ_FAILED.signedIn)
+        assertFalse(metadataSwitchState(amazon, true, false, signedIn = PluginStatusEntry.READ_FAILED.signedIn).disabled)
+    }
 }
