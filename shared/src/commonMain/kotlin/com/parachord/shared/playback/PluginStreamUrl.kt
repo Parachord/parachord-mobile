@@ -24,7 +24,12 @@ object PluginStreamUrl {
     fun isPlayable(url: String): Boolean = url.startsWith("https://", ignoreCase = true)
 
     /** Query parameters whose values are credentials; redacted by [redact]. */
-    private val SECRET_PARAMS = setOf("t", "s", "p", "token", "jwt", "apikey", "api_key", "password")
+    private val SECRET_PARAMS = setOf(
+        "t", "s", "p", "token", "jwt", "apikey", "api_key", "password",
+        // A signed CDN URL (Amazon's purchase stream, CloudFront; S3): the signature and its key.
+        "signature", "key-pair-id", "policy", "coid",
+        "x-amz-signature", "x-amz-credential", "x-amz-security-token",
+    )
 
     /**
      * [url] with every credential-bearing query value replaced with `***`, safe

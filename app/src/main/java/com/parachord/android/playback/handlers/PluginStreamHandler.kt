@@ -91,6 +91,47 @@ class PluginStreamHandler(
     }
 
     /**
+     * A Widevine plugin's plain stream for [track] (desktop's `drmFallback`,
+     * parachord#1613): asked when the DRM stream didn't start. A [MediaItem]
+     * to play on the same source, or null when the plugin has none (or its
+     * call failed), so the DRM failure's own handling and message stand.
+     * The URL lives on the item only, logged redacted.
+     */
+    /** [resolverId]'s plugin plays through Widevine and also implements `getStreamUrl`. */
+    fun hasDrmPlainStream(resolverId: String?): Boolean = pluginManager.drmPlainStreamPlugin(resolverId) != null
+
+    suspend fun plainStreamItem(track: TrackEntity, resolverId: String): MediaItem? {
+        val plugin = pluginManager.drmPlainStreamPlugin(resolverId) ?: return null
+        trackResolverCache.awaitLoaded()
+        val source = trackResolverCache.trackSources.value[trackKey(track.title, track.artist)]
+            ?.filter { it.resolver == resolverId && !it.noMatch }
+            ?.maxByOrNull { if (it.pluginFields != null) 1 else 0 }
+        val trackJson = com.parachord.shared.playback.pluginStreamTrackJson(
+            trackId = track.id, title = track.title, artist = track.artist, album = track.album,
+            durationMs = track.duration, resolverId = resolverId,
+            pluginTrackId = source?.pluginTrackId, source = source,
+        )
+        val reply = try {
+            com.parachord.shared.playback.PluginStreamReplies.parse(
+                pluginManager.requestStreamUrl(resolverId, trackJson.toString()),
+            )
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w(TAG, "getStreamUrl($resolverId) failed for '${track.title}': ${e.message?.take(120)}")
+            return null
+        }
+        val outcome = com.parachord.shared.playback.pluginStreamOutcome(reply, resolverId, plugin.name, html5Stream = false)
+        val url = (outcome as? com.parachord.shared.playback.PluginStreamOutcome.Play)?.url
+        if (url == null) {
+            Log.w(TAG, "No plain stream from $resolverId for '${track.title}' (${outcome::class.simpleName})")
+            return null
+        }
+        Log.d(TAG, "Plain stream for '${track.title}' from $resolverId: ${PluginStreamUrl.redact(url)}")
+        return MediaItem.Builder().setMediaId(track.id).setUri(url).build()
+    }
+
+    /**
      * The plugin's track id: the placeholder URL the resolved source carries
      * (`subsonic:track:<id>`), else the cached source's `pluginTrackId`
      * (Bandcamp's `trackIdFor` pattern — the track row has no column for it).

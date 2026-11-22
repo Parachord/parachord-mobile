@@ -53,4 +53,16 @@ class PluginStreamUrlTest {
         assertEquals("https://x.example/s?a=1&t=***#frag", PluginStreamUrl.redact("https://x.example/s?a=1&t=z#frag"))
         assertEquals("https://x.example/s?", PluginStreamUrl.redact("https://x.example/s?"))
     }
+
+    @Test
+    fun `redact strips the signature and key of a signed CDN URL - Amazon purchase streams`() {
+        assertEquals(
+            "https://cdn.example/a.mp3?response-content-disposition=x&coid=***&Expires=1&Signature=***&Key-Pair-Id=***",
+            PluginStreamUrl.redact("https://cdn.example/a.mp3?response-content-disposition=x&coid=c1&Expires=1&Signature=sig&Key-Pair-Id=K"),
+        )
+        assertEquals(
+            "https://b.s3.example/k?X-Amz-Credential=***&X-Amz-Signature=***&X-Amz-Security-Token=***",
+            PluginStreamUrl.redact("https://b.s3.example/k?X-Amz-Credential=c&X-Amz-Signature=s&X-Amz-Security-Token=t"),
+        )
+    }
 }

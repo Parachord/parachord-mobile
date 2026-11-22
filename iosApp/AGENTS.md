@@ -1586,9 +1586,11 @@ greyed rows and selection (`resolverScoring`'s `getNotPlaying`) leave the list
 out. The account row (status line, Sign in / Sign out) shows for a plugin with
 `capabilities.status`: Amazon Music, which loads on iOS since the web-session
 bridge landed (#779, "The webSession host bridge" below); its Sign in opens the
-web-session sign-in sheet. iOS can't play from it (Widevine only), so it's in
-the not-playing list with "Search and links only" and a locked Play from
-(shared `hostCannotPlay`, `HostPlayback.IOS`). A purchases-only plan (`ownedOnly`,
+web-session sign-in sheet. iOS has no Widevine, so it plays Amazon's purchases
+through the plug-in's plain stream (`getStreamUrl`, amazonmusic 1.23.0, desktop
+parachord#1613; "Plug-ins played through getStreamUrl" below). An Amazon build
+with no `getStreamUrl` is in the not-playing list with "Search and links only"
+and a locked Play from (shared `hostCannotPlay`, `HostPlayback.IOS`). A purchases-only plan (`ownedOnly`,
 #1494) keeps the plug-in numbered, with `pluginTileStatus`'s label in place of
 "Connected"; entering it drops the resolver's saved sources
 (`IosTrackResolverCache.clearResolver`, called by the shared
@@ -1606,6 +1608,61 @@ who else sets it: Apple Music "Set in iOS Settings" (MusicKit's
 as it is". iOS has no Settings › Playback Quality section and no plugin DRM
 engine, so nothing follows the tier and Now Playing shows no quality chip; the
 chip's rule (`qualityLabel`) is shared for when one lands.
+
+## Plug-ins played through getStreamUrl (Subsonic, Amazon's purchases, #670)
+
+The html5Stream engine on iOS (root `CLAUDE.md` → "Plugin settings + the
+html5Stream engine" and "A plain stream beside the pair"). All the rules are
+shared; iOS supplies AVPlayer and the sheet.
+
+- **Routing is by capability and method, never by id.** `PlaybackRouter`'s
+  `playsThroughStreamUrl` case (`IosContainer.playsThroughStreamUrl`, shared
+  `playsThroughStreamUrl(info, HostPlayback.IOS)`): an `html5Stream` plug-in,
+  or a Widevine plug-in that also implements `getStreamUrl` (iOS has no
+  Widevine engine). `IosContainer.pluginStream` asks the plug-in at play time
+  (`PluginManager.requestStreamUrl`, the unique-key poll) and answers an
+  `IosPluginStream`: `play` with the URL, `settings` / `startFailed` (stop on
+  the track for Play with its message; `EmbedRefusal.startFailedMessage`), or
+  `refused` (another source, else the plug-in's words; `refusedMessage`).
+- **The URL lives for one play.** It goes to `IosAVPlayer.load` and nowhere
+  else: the track, the resolver cache and the saved queue carry only the
+  placeholder (`subsonic:track:<id>`), and the log line is
+  `PluginStreamUrl.redact`ed. `IosResolverRuntime.resolveOne` keeps url-less
+  results under that placeholder and keeps a stream plug-in's `pluginFields`
+  (Amazon's ASIN), which `pluginStreamTrackJson` hands back as
+  `sources[<id>]`.
+- **Failures.** A 401/403 in the failed item's error log
+  (`IosAVPlayer.failedHttpStatus`) for an html5Stream plug-in shows
+  `checkPluginSettingsMessage`; other AVPlayer failures follow the usual
+  `avPlaybackFailed` rules. A failed deck switch keeps the playback, as for
+  every source.
+- **Settings.** A plug-in whose fields the app doesn't set up itself
+  (`PluginUserConfig.usesGenericSettings`) gets `PluginFieldsSection`: its
+  fields, Save, Test connection (`IosContainer.testPluginConnection`, the
+  plug-in's own search). Passwords go to the Keychain; `PluginUserConfig`
+  caches the configs in memory until a save. Unconfigured, its disabled row
+  reads "Set up" (`SettingsViewModel.needsSetup`).
+- **`active_resolvers` must hold it.** iOS's coordinator asks only active
+  resolvers, so `savePluginConfig` adds it when the save leaves it configured
+  and removes it when the config is cleared (shared
+  `activeResolversAfterConfig`), and `AppBootstrap` calls
+  `seedConfiguredPluginResolvers` once the plug-ins have loaded (once per
+  plug-in, `plugin_active_seeded_<id>`, so turning it off sticks).
+- **Bundled.** `subsonic.axe` is in `Resources/axe-plugins/` (a folder
+  reference, no pbxproj entry per file); `BundledPluginCopiesTest` fails if the
+  two apps' bundles differ. Its `minAppVersion.ios` is 0.3.0, iOS's
+  `MARKETING_VERSION` since this change. Its logo is `ServiceLogoSubsonic`;
+  `ResolverBadgeRow`'s fallback order puts it after `localfiles`.
+- **`IosAVPlayer` is `@Observable`.** Now Playing reads its time, length and
+  play state through the coordinator; #387 had moved the attribute onto
+  `IosVolumeOffsets` (inserted between it and the class), so every AVPlayer
+  play's button, bar and times sat still until something else redrew them.
+- **Checked in the simulator** (iPhone 18 Pro, a Prime account): Pinegrove's
+  "Overthrown" and "Size of the Moon" (purchases) play from Amazon Music on
+  AVPlayer, and with Now Playing open the button, bar and times follow
+  through Next and Previous, and scrubbing forward and back moves both the
+  audio and the bar. **Not checked:** a real Subsonic server. Plain-http servers stay refused (`PluginStreamUrl.isPlayable`), so
+  no local-network permission is needed.
 
 ## The webSession host bridge (#779)
 
@@ -1748,6 +1805,11 @@ NSHTTPURLResponse`.
   clients have it (`createHttpClient`, `IosContainer.authHttpClient`).
 - **`configureSession` and `handleChallenge` are ignored** with a
   preconfigured session; set session options inside `useResponseTypeGuard`.
+- **A GET with Ktor's default empty body goes out with `Content-Length: 0`**
+  on the Darwin engine (OkHttp drops it). Most servers don't care; Amazon's
+  edge answers it with a bare `400 Bad Request` (`config.json`, #784). The
+  web session's `fetch` sends `NoLengthBody` for a request with no body;
+  do the same for any other Darwin request to a host that refuses it.
 - **Remove the guard** once a Ktor release checks the cast. KTOR-9807 is open
   (triaged 2026-10-26); 3.6.1 still has both casts.
 

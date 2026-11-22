@@ -154,3 +154,22 @@ class PluginUserConfig(
         emptyMap()
     }
 }
+
+/**
+ * `active_resolvers` after a field-editor plug-in's config changed (#670): a
+ * config that leaves the plug-in configured turns it on, a cleared one turns
+ * it off. Where the list holds resolvers (iOS, desktop), the coordinator asks
+ * only the ones in it, so a plug-in set up in Settings must join it. Null
+ * when nothing changes, including an empty list: nothing has been chosen yet,
+ * and an empty list asks every resolver.
+ */
+fun activeResolversAfterConfig(active: List<String>, pluginId: String, configured: Boolean): List<String>? = when {
+    active.isEmpty() -> null
+    configured && pluginId !in active -> active + pluginId
+    !configured && pluginId in active -> active - pluginId
+    else -> null
+}
+
+/** Test connection's line when the plug-in's search answered (desktop's wording). */
+fun connectionTestOkMessage(resultCount: Int): String =
+    "Connected — $resultCount result${if (resultCount == 1) "" else "s"} for \"test\""

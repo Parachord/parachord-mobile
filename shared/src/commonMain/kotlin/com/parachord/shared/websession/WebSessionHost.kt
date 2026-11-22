@@ -464,6 +464,14 @@ class WebSessionHost(
                 if (sendBody) {
                     val type = contentType?.let { runCatching { ContentType.parse(it) }.getOrNull() }
                     setBody(ByteArrayContent(body!!.encodeToByteArray(), type))
+                } else {
+                    // No body and no length. Ktor's default empty body has a
+                    // length of 0, which the Darwin engine sends as
+                    // `Content-Length: 0` on a GET, and Amazon's edge answers
+                    // that with a bare 400 (config.json on iOS, so the DRM /
+                    // purchase-stream mint had no customer or device, #784).
+                    // OkHttp drops it, so Android never saw this.
+                    setBody(NoLengthBody)
                 }
             }
             val setCookies = response.headers.getAll("Set-Cookie").orEmpty()
@@ -611,4 +619,12 @@ class WebSessionHost(
         val REDIRECT_STATUSES = setOf(301, 302, 303, 307, 308)
         val DROPPED_REQUEST_HEADERS = setOf("cookie", "cookie2", "content-length", "host", "transfer-encoding", "upgrade", "connection")
     }
+}
+
+/**
+ * A request with no body that declares no length either, so no engine sends
+ * `Content-Length: 0` on a GET ([WebSessionHost.fetch], #784).
+ */
+internal object NoLengthBody : io.ktor.http.content.OutgoingContent.NoContent() {
+    override val contentLength: Long? get() = null
 }

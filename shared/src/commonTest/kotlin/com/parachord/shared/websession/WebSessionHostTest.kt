@@ -371,6 +371,21 @@ class WebSessionHostTest {
         assertEquals("https://music.amazon.com/rel", seen[1].url.toString())
         assertEquals("POST", seen[0].method.value)
         assertEquals("GET", seen[1].method.value)
+        // The GET after the redirect carries no body length either (#784).
+        assertNull(seen[1].body.contentLength)
+    }
+
+    @Test
+    fun `a GET declares no body length - Darwin would send Content-Length 0 and Amazon answers 400`() = runTest {
+        val fake = FakeWebSessionPlatform(backgroundScope)
+        val seen = mutableListOf<HttpRequestData>()
+        val host = newHost(fake, mockClient { request ->
+            seen += request
+            respond("{}", HttpStatusCode.OK)
+        })
+        host.fetch(FetchRequest("https://music.amazon.com/config.json", headers = mapOf("Accept" to "application/json")))
+        assertNull(seen.single().body.contentLength)
+        assertNull(seen.single().headers["Content-Length"])
     }
 
     @Test

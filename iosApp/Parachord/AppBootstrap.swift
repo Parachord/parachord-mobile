@@ -59,6 +59,9 @@ final class AppBootstrap {
             Task { @MainActor in IosTrackResolverCache.shared.clearResolver(id, sourcesToo: sourcesToo.boolValue) }
         }
         _ = try? await container.loadPluginsAndList()
+        // A plug-in set up in its sheet's fields (Subsonic, #670) must be in
+        // `active_resolvers`, or the coordinator never asks it.
+        try? await container.seedConfiguredPluginResolvers()
 
         // The resolver order + active set mirror. Besides the badges it drives
         // the additive re-resolve when a resolver is enabled, which a CarPlay-only
