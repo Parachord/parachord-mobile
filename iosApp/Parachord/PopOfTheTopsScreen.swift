@@ -198,19 +198,8 @@ struct PopOfTheTopsScreen: View {
         LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(Array(model.visibleAlbums.enumerated()), id: \.element.id) { index, album in
                 NavigationLink(value: PCRoute.album(title: album.title, artist: album.artist)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ZStack(alignment: .topLeading) {
-                            albumArt(album.artworkUrl, seed: album.title + album.artist)
-                            Text("#\(album.rank > 0 ? Int(album.rank) : index + 1)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(Color.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4))
-                                .padding(6)
-                        }
-                        Text(album.title).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1)
-                            .lineLimit(1).padding(.horizontal, 2)
-                        Text(album.artist).font(.system(size: 12)).foregroundStyle(PC.fg2)
-                            .lineLimit(1).padding(.horizontal, 2)
-                    }
+                    PCAlbumCard(title: album.title, artist: album.artist, artworkUrl: album.artworkUrl, width: nil,
+                                rank: album.rank > 0 ? Int(album.rank) : index + 1)
                 }
                 .buttonStyle(.plain)
                 .pcAlbumContextMenu(title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,

@@ -353,41 +353,14 @@ fun CollectionScreen(
 
                                     var showMenu by remember { mutableStateOf(false) }
 
-                                    Column(
-                                        modifier = Modifier
-                                            .clip(RoundedCornerShape(8.dp))
-                                            .hapticCombinedClickable(
-                                                onClick = { onNavigateToAlbum(album.title, album.artist) },
-                                                onLongClick = { showMenu = true },
-                                            ),
-                                    ) {
-                                        AlbumArtCard(
-                                            artworkUrl = album.artworkUrl,
-                                            artist = album.artist,
-                                            album = album.title,
-                                            size = 180.dp,
-                                            cornerRadius = 8.dp,
-                                            placeholderName = album.title,
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Text(
-                                            text = album.title,
-                                            style = MaterialTheme.typography.bodySmall.copy(
-                                                fontWeight = FontWeight.Medium,
-                                            ),
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(horizontal = 2.dp),
-                                        )
-                                        Text(
-                                            text = album.artist,
-                                            style = MaterialTheme.typography.labelSmall,
-                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            modifier = Modifier.padding(horizontal = 2.dp),
-                                        )
-                                    }
+                                    com.parachord.android.ui.components.ParachordAlbumCard(
+                                        title = album.title,
+                                        artist = album.artist,
+                                        artworkUrl = album.artworkUrl,
+                                        width = null,
+                                        onOpen = { onNavigateToAlbum(album.title, album.artist) },
+                                        onLongPress = { showMenu = true },
+                                    )
 
                                     if (showMenu) {
                                         com.parachord.android.ui.components.AlbumContextMenu(

@@ -1228,26 +1228,9 @@ struct ArtistScreen: View {
                     // title instead of reusing the prior cell's cached image (bug 7).
                     ForEach(discoFiltered, id: \.discoId) { album in
                         Button { navAlbum = PCAlbumRef(title: album.title, artist: album.artist) } label: {
-                            VStack(alignment: .leading, spacing: 0) {
-                                pcCover(album.artworkUrl, seed: album.title + album.artist, size: nil, radius: 10, artist: album.artist, album: album.title)
-                                    .aspectRatio(1, contentMode: .fit)
-                                    .shadow(color: .black.opacity(0.12), radius: 8, y: 4)
-                                Text(album.title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1)
-                                    .lineLimit(1).padding(.top, 10)
-                                HStack(spacing: 8) {
-                                    // Badge ONLY when typed (Android parity — no "ALBUM" default).
-                                    if let typeKey = album.releaseType?.lowercased() {
-                                        let typeColor = releaseTypeColor(typeKey)
-                                        Text(typeKey.uppercased())
-                                            .font(.system(size: 9, weight: .bold)).tracking(1)
-                                            .foregroundStyle(typeColor)
-                                            .padding(.horizontal, 6).padding(.vertical, 3)
-                                            .background(typeColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 3))
-                                    }
-                                    if let y = album.year { Text(String(y.intValue)).font(.system(size: 12)).foregroundStyle(PC.fg2) }
-                                }
-                                .padding(.top, 4)
-                            }
+                            PCAlbumCard(title: album.title, artist: nil, artworkUrl: album.artworkUrl, width: nil,
+                                        subtitle: album.year.map { String($0.intValue) } ?? "",
+                                        pill: CardPill.companion.releaseType(type: album.releaseType))
                         }
                         .buttonStyle(.plain)
                         .pcAlbumContextMenu(title: album.title, artist: album.artist, artworkUrl: album.artworkUrl,

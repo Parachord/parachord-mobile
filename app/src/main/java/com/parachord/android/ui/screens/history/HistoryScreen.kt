@@ -68,6 +68,7 @@ import com.parachord.shared.model.HistoryTrack
 import com.parachord.shared.model.RecentTrack
 import com.parachord.shared.model.Resource
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ParachordAlbumCard
 import com.parachord.android.ui.components.ShimmerTrackRow
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.components.ResolverIconRow
@@ -327,73 +328,16 @@ private fun TopAlbumsTab(
 
 @Composable
 private fun AlbumGridItem(album: HistoryAlbum, onClick: () -> Unit = {}, onLongClick: () -> Unit = {}) {
-    Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .hapticCombinedClickable(onClick = onClick, onLongClick = onLongClick),
-    ) {
-        Box {
-            AlbumArtCard(
-                artworkUrl = album.artworkUrl,
-                artist = album.artist,
-                album = album.name,
-                size = 180.dp,
-                cornerRadius = 8.dp,
-                placeholderName = album.name,
-            )
-            // Rank badge
-            Box(
-                modifier = Modifier
-                    .padding(6.dp)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.65f),
-                        shape = RoundedCornerShape(4.dp),
-                    )
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .align(Alignment.TopStart),
-            ) {
-                Text(
-                    text = "#${album.rank}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                )
-            }
-            // Play count badge
-            Box(
-                modifier = Modifier
-                    .padding(6.dp)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.65f),
-                        shape = RoundedCornerShape(4.dp),
-                    )
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .align(Alignment.TopEnd),
-            ) {
-                Text(
-                    text = playCountLabel(album.playCount),
-                    style = MaterialTheme.typography.labelSmall,
-                    color = Color.White,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = album.name,
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Text(
-            text = album.artist,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-    }
+    ParachordAlbumCard(
+        title = album.name,
+        artist = album.artist,
+        artworkUrl = album.artworkUrl,
+        width = null,
+        onOpen = onClick,
+        onLongPress = onLongClick,
+        subtitle = playCountLabel(album.playCount),
+        rank = album.rank,
+    )
 }
 
 // ---------- Top Artists Tab ----------

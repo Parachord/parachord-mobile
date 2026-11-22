@@ -55,6 +55,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ParachordAlbumCard
+import com.parachord.shared.ui.CardPill
 import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.ConcertPhoto
 import com.parachord.android.ui.components.ParachordIcon
@@ -301,45 +303,19 @@ fun HomeHalf(
  */
 @Composable
 private fun HalfAlbumCard(card: HomeHalfCard, width: Dp, onOpen: () -> Unit, onPlay: () -> Unit, onLongPress: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-    ) {
-        Box {
-            AlbumArtCard(
-                artworkUrl = card.imageUrl,
-                size = width,
-                cornerRadius = DesignTokens.RADIUS_ART.dp,
-                placeholderName = card.title,
-                contentDescription = null,
-                artist = card.artist,
-                album = card.title,
-            )
-            card.releaseType?.let { label ->
-                Text(
-                    text = label,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OnFill,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(4.dp)
-                        .clip(RoundedCornerShape(DesignTokens.RADIUS_BADGE.dp))
-                        .background(releaseTypeColor(card.releaseTypeKey).copy(alpha = 0.9f))
-                        .padding(horizontal = 6.dp, vertical = 2.dp),
-                )
-            }
-            card.review?.let { review ->
-                ReasonBadge(review, Modifier.align(Alignment.BottomStart), label = HomeCopy.WHAT_THE_CRITICS_SAID)
-            }
-            ArtPlayButton(card.title, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(card.title, primary = true)
-        CardText(card.artist)
-    }
+    ParachordAlbumCard(
+        title = card.title,
+        artist = card.artist,
+        artworkUrl = card.imageUrl,
+        width = width,
+        onOpen = onOpen,
+        onLongPress = onLongPress,
+        onPlay = onPlay,
+        pill = CardPill.releaseType(card.releaseTypeKey),
+        artBadge = card.review?.let { review ->
+            { ReasonBadge(review, Modifier.align(Alignment.BottomStart), label = HomeCopy.WHAT_THE_CRITICS_SAID) }
+        },
+    )
 }
 
 /** A half's compact error (desktop `ErrorState compact`): what failed, why, and Try again. */

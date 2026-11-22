@@ -216,17 +216,8 @@ struct HistoryScreen: View {
         LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(Array(model.topAlbums.enumerated()), id: \.offset) { _, a in
                 NavigationLink(value: PCRoute.album(title: a.name, artist: a.artist)) {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ZStack(alignment: .topLeading) {
-                            pcCover(a.artworkUrl, seed: a.name + a.artist, size: nil, radius: 10, artist: a.artist, album: a.name)
-                                .aspectRatio(1, contentMode: .fit).shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                            Text("#\(a.rank)").font(.system(size: 11, weight: .bold)).foregroundStyle(.white)
-                                .padding(.horizontal, 6).padding(.vertical, 2)
-                                .background(.black.opacity(0.65), in: RoundedRectangle(cornerRadius: 4)).padding(6)
-                        }
-                        Text(a.name).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).padding(.horizontal, 2)
-                        Text("\(a.artist) · \(FormattersKt.playCountLabel(count: a.playCount))").font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1).padding(.horizontal, 2)
-                    }
+                    PCAlbumCard(title: a.name, artist: a.artist, artworkUrl: a.artworkUrl, width: nil,
+                                subtitle: FormattersKt.playCountLabel(count: a.playCount), rank: Int(a.rank))
                 }
                 .buttonStyle(.plain)
                 .pcAlbumContextMenu(title: a.name, artist: a.artist, artworkUrl: a.artworkUrl,

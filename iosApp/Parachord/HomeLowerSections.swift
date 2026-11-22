@@ -140,34 +140,13 @@ private struct HomeHalfCard: View {
     @Environment(QueuePlaybackCoordinator.self) private var coordinator
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                pcCover(card.imageUrl, seed: card.title, size: width, radius: CGFloat(DesignTokens.shared.RADIUS_ART),
-                        artist: card.artist, album: card.title)
-                if let badge = card.badge {
-                    if let rgb = card.badgeColorRgb {
-                        Text(badge)
-                            .font(.system(size: 11, weight: .semibold)).foregroundStyle(PC.onAccent).lineLimit(1)
-                            .padding(.horizontal, 6).padding(.vertical, 2)
-                            .background(RoundedRectangle(cornerRadius: CGFloat(DesignTokens.shared.RADIUS_BADGE)).fill(pcToken(rgb.int32Value).opacity(0.9)))
-                            .padding(4)
-                            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
-                    } else {
-                        HomeReasonBadge(text: badge, label: HomeCopy.shared.WHAT_THE_CRITICS_SAID)
-                    }
-                }
-                PCArtPlayButton(title: card.title, onPlay: onPlay)
-                    .padding(4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            }
-            .frame(width: width, height: width)
-            Spacer().frame(height: 8)
-            RecCardText(text: card.title, primary: true)
-            RecCardText(text: card.artist)
+        let pill: CardPill? = card.badgeColorRgb.flatMap { rgb in
+            card.badge.map { CardPill(text: $0, color: rgb.int32Value, alpha: 0.9) }
         }
-        .frame(width: width)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
+        let review: AnyView? = (card.badge != nil && card.badgeColorRgb == nil)
+            ? AnyView(HomeReasonBadge(text: card.badge!, label: HomeCopy.shared.WHAT_THE_CRITICS_SAID)) : nil
+        PCAlbumCard(title: card.title, artist: card.artist, artworkUrl: card.imageUrl, width: width,
+                    pill: pill, artBadge: review, onOpen: onOpen, onPlay: onPlay)
         .accessibilityElement(children: .contain)
         .accessibilityLabel(HomeCopy.shared.openLabel(title: card.title))
         .accessibilityAction(.default, onOpen)
