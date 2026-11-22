@@ -11,18 +11,34 @@ import com.parachord.shared.home.PlaybackLimit
  * (`recommendations_off_resolvers`, any plug-in with
  * `capabilities.recommendations`). Each list holds an id only while its switch
  * is off. Pure.
+ *
+ * **Signed out (#782, desktop parachord#1615).** A plug-in that needs a
+ * sign-in never shows as enabled until it's signed in. [signedIn] is what the
+ * app knows ([signedInMap]: the host's own sign-ins with each status plug-in's
+ * reply over them). Only `false` locks: Enable and the three nested switches
+ * then read off and locked, "Sign in to X first" ([signInFirstHint]). No
+ * verdict (`null`) is the stored state as before. Display only: the plug-in
+ * stays in `active_resolvers` and no saved list changes, so signing in shows
+ * everything as it was. A plan limit still wins for Play from.
  */
 data class PluginSwitchState(
     /** The row is drawn. */
     val shown: Boolean,
     val checked: Boolean,
-    /** Can't be changed (a plan limit). */
+    /** Can't be changed (a plan limit, or the plug-in is signed out). */
     val disabled: Boolean,
     val hint: String,
 )
 
 private fun PluginManager.PluginInfo.cap(name: String) = capabilities[name] == true
 private val PluginManager.PluginInfo.isMetaService get() = type == "meta-service"
+
+/** The hint on a signed-out plug-in's switches (desktop's `Sign in to ${plugin.name} first`). */
+fun signInFirstHint(name: String): String = "Sign in to $name first"
+
+/** Port of `signedOutState`: off and locked, saying to sign in. */
+private fun signedOutState(plugin: PluginManager.PluginInfo, shown: Boolean) =
+    PluginSwitchState(shown, checked = false, disabled = true, hint = signInFirstHint(plugin.name))
 
 /** "Enable X", the sheet's top switch. */
 fun enableSwitchLabel(name: String): String = "Enable $name"
@@ -56,9 +72,21 @@ fun enableSwitchHint(plugin: PluginManager.PluginInfo): String {
 }
 
 /**
+ * Port of `pluginSwitchState`'s music plug-in branch: "Enable X". [active] is
+ * whether it's in the active list. Signed out ([signedIn] false) it reads off
+ * and locked, "Sign in to X first", even while it's active. A meta-service's
+ * own on/off stays with each app.
+ */
+fun enableSwitchState(plugin: PluginManager.PluginInfo, active: Boolean, signedIn: Boolean? = null): PluginSwitchState {
+    if (signedIn == false) return signedOutState(plugin, shown = true)
+    return PluginSwitchState(shown = true, checked = active, disabled = false, hint = enableSwitchHint(plugin))
+}
+
+/**
  * Port of `playbackSwitchState`: "Play from X", for a music plug-in that's on.
  * Off, it stays on for search, covers and links and leaves the priority
  * order. A plan limit ([limit] blocked) switches it off and locks it, saying why.
+ * [signedIn] false (and no plan limit) reads off and locked, "Sign in to X first".
  */
 fun playbackSwitchState(
     plugin: PluginManager.PluginInfo,
@@ -66,6 +94,7 @@ fun playbackSwitchState(
     playbackOff: Boolean,
     limit: PlaybackLimit? = null,
     hostCannotPlay: Boolean = false,
+    signedIn: Boolean? = null,
 ): PluginSwitchState {
     val shown = !plugin.isMetaService && plugin.cap("resolve") && active
     if (limit != null && limit.blocked) {
@@ -76,6 +105,7 @@ fun playbackSwitchState(
     if (hostCannotPlay) {
         return PluginSwitchState(shown, checked = false, disabled = true, hint = HOST_CANNOT_PLAY_MESSAGE)
     }
+    if (signedIn == false) return signedOutState(plugin, shown)
     return if (playbackOff) {
         PluginSwitchState(shown, checked = false, disabled = false, hint = "Off: found in search, played from other plug-ins")
     } else {
@@ -84,8 +114,14 @@ fun playbackSwitchState(
 }
 
 /** Port of `metadataSwitchState`: "Use metadata from X", for a music plug-in that's on. */
-fun metadataSwitchState(plugin: PluginManager.PluginInfo, active: Boolean, metadataOff: Boolean): PluginSwitchState {
+fun metadataSwitchState(
+    plugin: PluginManager.PluginInfo,
+    active: Boolean,
+    metadataOff: Boolean,
+    signedIn: Boolean? = null,
+): PluginSwitchState {
     val shown = !plugin.isMetaService && plugin.cap("resolve") && active
+    if (signedIn == false) return signedOutState(plugin, shown)
     return if (metadataOff) {
         PluginSwitchState(shown, checked = false, disabled = false, hint = "Covers and artist photos come from other plug-ins")
     } else {
@@ -97,8 +133,14 @@ fun metadataSwitchState(plugin: PluginManager.PluginInfo, active: Boolean, metad
  * Port of `recommendationsSwitchState`: "Use recommendations from X", for a
  * plug-in that's on and offers recommendations, music or not.
  */
-fun recommendationsSwitchState(plugin: PluginManager.PluginInfo, active: Boolean, recommendationsOff: Boolean): PluginSwitchState {
+fun recommendationsSwitchState(
+    plugin: PluginManager.PluginInfo,
+    active: Boolean,
+    recommendationsOff: Boolean,
+    signedIn: Boolean? = null,
+): PluginSwitchState {
     val shown = plugin.cap("recommendations") && active
+    if (signedIn == false) return signedOutState(plugin, shown)
     return if (recommendationsOff) {
         PluginSwitchState(shown, checked = false, disabled = false, hint = "Its picks are left out of Recommendations and Home")
     } else {

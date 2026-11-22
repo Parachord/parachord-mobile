@@ -3298,14 +3298,31 @@ class IosContainer private constructor() {
      * nested switches (shared `PluginSwitch` rules) and the account row's
      * buttons. [active] is whether it's on ("Enable X"). A plugin that hasn't
      * loaded stands in as a music plug-in ([isResolver]) or a meta-service.
+     * [hostSignedIn] / [hostSignedOut] are the host's own sign-ins the app has
+     * checked (Spotify, SoundCloud, Apple Music; one still being checked is in
+     * neither), for [pluginAccounts].
      */
-    fun pluginSheet(id: String, name: String, isResolver: Boolean, active: Boolean, lists: IosPluginSwitchLists): IosPluginSheet {
+    fun pluginSheet(
+        id: String,
+        name: String,
+        isResolver: Boolean,
+        active: Boolean,
+        lists: IosPluginSwitchLists,
+        hostSignedIn: List<String>,
+        hostSignedOut: List<String>,
+    ): IosPluginSheet {
         val info = pluginManager.plugins.value.firstOrNull { it.id == id } ?: PluginManager.PluginInfo(
             id = id, name = name, version = "",
             type = if (isResolver) "" else "meta-service",
             capabilities = if (isResolver) mapOf("resolve" to true) else emptyMap(),
         )
         val limit = pluginStatusStore.limits.value[id]
+        // Signed out (#782, desktop parachord#1615), Enable and the switches
+        // under it read off and locked; no verdict changes nothing.
+        val signedIn = pluginAccounts(hostSignedIn, hostSignedOut)[id]
+        val enable = com.parachord.shared.plugin.enableSwitchState(info, active, signedIn)
+        // The nested switches show while Enable reads on.
+        val shownActive = if (isResolver) enable.checked else active
         // iOS has no plugin DRM engine and its Apple Music follows iOS's own
         // setting, so no line here follows Playback Quality: the settings
         // passed don't change the answer.
@@ -3318,15 +3335,18 @@ class IosContainer private constructor() {
         return IosPluginSheet(
             enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
             enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
+            enable = enable,
+            accountFirst = com.parachord.shared.plugin.accountFirst(info),
             playbackLabel = com.parachord.shared.plugin.playbackSwitchLabel(name),
             playback = com.parachord.shared.plugin.playbackSwitchState(
-                info, active, id in lists.playbackOff, limit,
+                info, shownActive, id in lists.playbackOff, limit,
                 hostCannotPlay = com.parachord.shared.plugin.hostCannotPlay(info, com.parachord.shared.plugin.HostPlayback.IOS),
+                signedIn = signedIn,
             ),
             metadataLabel = com.parachord.shared.plugin.metadataSwitchLabel(name),
-            metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff),
+            metadata = com.parachord.shared.plugin.metadataSwitchState(info, shownActive, id in lists.metadataOff, signedIn),
             recommendationsLabel = com.parachord.shared.plugin.recommendationsSwitchLabel(name),
-            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, active, id in lists.recommendationsOff),
+            recommendations = com.parachord.shared.plugin.recommendationsSwitchState(info, shownActive, id in lists.recommendationsOff, signedIn),
             hasStatus = info.capabilities["status"] == true,
             canSignIn = info.hasSignIn,
             canSignOut = info.hasSignOut,
@@ -3338,6 +3358,30 @@ class IosContainer private constructor() {
             qualityDetail = (quality as? com.parachord.shared.playback.drm.PlaybackQualityLine.ExternalControl)?.detail,
         )
     }
+
+    /**
+     * What the app knows about each plug-in's sign-in (shared `signedInMap`):
+     * the host's checked sign-ins with each status plug-in's reply over them.
+     */
+    fun pluginAccounts(hostSignedIn: List<String>, hostSignedOut: List<String>): Map<String, Boolean> =
+        com.parachord.shared.plugin.signedInMap(
+            hostSignedOut.associateWith { false } + hostSignedIn.associateWith { true },
+            pluginStatusStore.statuses.value,
+        )
+
+    /** The plug-ins that are on (in [activeIds]) but signed out ([pluginAccounts] false). */
+    fun signedOutPlugins(activeIds: List<String>, hostSignedIn: List<String>, hostSignedOut: List<String>): List<String> {
+        val accounts = pluginAccounts(hostSignedIn, hostSignedOut)
+        return activeIds.filter { com.parachord.shared.plugin.pluginSignedOut(it, true, accounts) }
+    }
+
+    /**
+     * The priority list's two parts (shared `pluginTileOrder`): [onInOrder] split
+     * into the numbered ones that play and the unnumbered ones (not playing, or
+     * in [signedOut]).
+     */
+    fun pluginTileOrder(onInOrder: List<String>, notPlaying: List<String>, signedOut: List<String>): com.parachord.shared.plugin.PluginTileOrder =
+        com.parachord.shared.plugin.pluginTileOrder(onInOrder, notPlaying, signedOut.associateWith { false })
 
     /** A resolver tile's status line (`tileStatus`): the plan's label, or "Search and links only"; null for none. */
     fun pluginTileStatus(id: String, playbackOff: List<String>): String? =
@@ -4663,6 +4707,10 @@ data class IosPluginSwitchLists(
 data class IosPluginSheet(
     val enableLabel: String,
     val enableHint: String,
+    /** "Enable X" for a music plug-in (shared `enableSwitchState`): signed out, off and locked. */
+    val enable: com.parachord.shared.plugin.PluginSwitchState,
+    /** The account and keys come before Enable (shared `accountFirst`). */
+    val accountFirst: Boolean,
     val playbackLabel: String,
     val playback: com.parachord.shared.plugin.PluginSwitchState,
     val metadataLabel: String,

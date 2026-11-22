@@ -1568,7 +1568,15 @@ and **Use recommendations from X**; a meta-service's own on/off (`disabled_plugi
 is its "Enable X", with "Use recommendations from X" under it when it offers them.
 Labels, hints and visibility come from `IosContainer.pluginSheet` (the shared
 `PluginSwitch` rules, flattened to `IosPluginSheet`); `setPluginSwitch(kind:id:on:)`
-writes the three lists. The priority list numbers only the plug-ins that play
+writes the three lists. Signed out (#782, desktop parachord#1615: shared
+`signedInMap` over `hostSignedIn` / `hostSignedOut`, which stay empty until
+`loadAll` has read the tokens, `hostChecked`), Enable (`IosPluginSheet.enable`)
+and the three are drawn `locked`, off, "Sign in to X first"; `switchRow`'s
+binding ignores a set while locked. A plug-in that needs a sign-in
+(`IosPluginSheet.accountFirst`) shows its account row and service section before
+Enable. In the priority list an active signed-out plug-in (`signedOutOrder`) is
+an unnumbered greyed row saying "Sign in" (`IosContainer.pluginTileOrder`).
+The priority list numbers only the plug-ins that play
 (`playingOrder`); one on but not playing (`ResolverPrefs.notPlaying`, from
 `PluginStatusStore.notPlaying`) sits under them unnumbered with
 `pluginTileStatus`'s line, keeping its `resolver_order` slot. Saving the order
