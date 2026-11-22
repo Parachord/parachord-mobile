@@ -732,6 +732,25 @@ Net: keep iOS build bumps on a branch so `main`'s CI isn't churned by
 TestFlight-only changes, ship TestFlight from that branch, and fold the bump into
 `main` whenever it's convenient (or alongside other work) — never tag `v*` for an
 iOS-only change.
+
+### Tagging an iOS build: `ios-<version>-<build>`
+
+Every TestFlight build is tagged `ios-<version>-<build>` (`ios-0.3.0-11`) on the
+commit it was archived from: the build-bump branch's tip. `scripts/testflight.sh`
+does it after a successful archive and pushes the tag (`--no-tag` skips it), so
+git records what each TestFlight build was made from, separate from Android's
+`v…` release tags.
+
+- **Never a `v` prefix.** `v…` tags start the Android release workflow, which
+  publishes to Google Play. That workflow only runs for `v<major>.<minor>.<patch>…`
+  (`.github/workflows/build.yml`), so an `ios-…` tag can't start it.
+- **The build number is in the name** because several builds of one version go
+  to TestFlight, and each needs its own tag.
+- **The script won't tag a dirty tree** (the tag couldn't say what was built) and
+  won't move a tag that already names another commit (bump the build number
+  instead). Either case warns and leaves the archive as it is.
+- **Tag by hand** only when the script couldn't:
+  `git tag -a ios-0.3.0-11 -m "iOS TestFlight 0.3.0 (11)" <commit> && git push origin ios-0.3.0-11`.
 ---
 
 ## Deep links & Universal Links (`parachord://` + `https://parachord.com`)

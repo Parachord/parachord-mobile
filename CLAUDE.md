@@ -1266,6 +1266,7 @@ The desktop supports dark/light mode toggle. Android should follow system theme 
 - **After installing, force-stop the app** — Android keeps the old process alive with old code in memory. Either swipe away from recents or run: `adb shell am force-stop com.parachord.android.debug` (debug builds get a `.debug` suffix per the `applicationIdSuffix` in `app/build.gradle.kts`; targeting `com.parachord.android` silently no-ops on a debug install and you'll keep seeing the old code)
 - **If code changes aren't reflected on device**, Android may cache optimized dex from a prior install. Do a full uninstall/reinstall: `adb uninstall com.parachord.android && adb install app/build/outputs/apk/debug/app-debug.apk` (clears app data)
 - **Clean build if all else fails:** `./gradlew clean installDebug`
+- **Release tags:** Android releases are `v<major>.<minor>.<patch>` tags (the "Release vX" commit on main, then the tag; the tag's CI run publishes to Google Play). iOS TestFlight builds are tagged `ios-<version>-<build>` by `iosApp/scripts/testflight.sh` on the build branch's commit; never give an iOS build a `v` tag (`iosApp/AGENTS.md` → "Tagging an iOS build").
 - **adb path** (not in shell PATH by default): `/Users/jherskowitz/Library/Android/sdk/platform-tools/adb`
 
 ### Working in a git worktree (`.worktrees/<branch>/`) — MANDATORY rules

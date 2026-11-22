@@ -5,6 +5,12 @@
 #
 #   <repo>/iosApp/scripts/testflight.sh              # archive + export a signed .ipa
 #   <repo>/iosApp/scripts/testflight.sh --upload     # also upload to App Store Connect
+#   <repo>/iosApp/scripts/testflight.sh --no-tag     # skip the git tag (below)
+#
+# After a successful archive the build's commit is tagged ios-<version>-<build>
+# (ios-0.3.0-11) and the tag is pushed, so git records what each TestFlight
+# build was made from. Never a v… tag: v-tags publish Android to Google Play.
+# Run it from the committed build branch; with uncommitted changes it doesn't tag.
 #
 # Invoke by ABSOLUTE path. Shell cwd does not reliably persist between agent
 # tool calls, and a relative `./iosApp/scripts/testflight.sh` resolved against
@@ -42,7 +48,14 @@ EXPORT_DIR="$BUILD_DIR/export"
 EXPORT_OPTIONS="$IOS_DIR/ExportOptions.plist"
 
 UPLOAD=0
-[[ "${1:-}" == "--upload" ]] && UPLOAD=1
+TAG_BUILD=1
+for arg in "$@"; do
+  case "$arg" in
+    --upload) UPLOAD=1 ;;
+    --no-tag) TAG_BUILD=0 ;;
+    *) echo "Unknown option: $arg (use --upload, --no-tag)" >&2; exit 2 ;;
+  esac
+done
 
 # --- preflight ---------------------------------------------------------------
 if [[ ! -f "$IOS_DIR/Parachord/Secrets.xcconfig" ]]; then
@@ -88,6 +101,40 @@ if mkdir -p "$ORGANIZER_DIR" && rm -rf "$ORGANIZER_ARCHIVE" && cp -R "$ARCHIVE" 
 else
   echo "⚠️  Could not copy the archive into $ORGANIZER_DIR — it will NOT appear in Organizer."
   echo "    Do not pick 'the latest archive' in Organizer; upload the exported .ipa with Transporter."
+fi
+
+# --- tag the build's commit --------------------------------------------------
+# ios-<version>-<build> marks the commit this archive was made from. It runs
+# only after a successful archive, and never makes a v… tag (those publish
+# Android). It doesn't tag a dirty tree, since the tag couldn't say what was
+# built, and it never moves a tag that already names another commit (an
+# accepted build number can't be reused anyway). A failure here only warns: the
+# archive is already in Organizer.
+if [[ "$TAG_BUILD" == "1" ]]; then
+  REPO_ROOT="$(git -C "$IOS_DIR" rev-parse --show-toplevel 2>/dev/null || true)"
+  if [[ -z "$AV_SHORT" || -z "$AV_BUILD" ]]; then
+    echo "⚠️  Couldn't read the archive's version and build: not tagging."
+  elif [[ -z "$REPO_ROOT" ]]; then
+    echo "⚠️  Not in a git checkout: not tagging."
+  else
+    BUILD_TAG="ios-$AV_SHORT-$AV_BUILD"
+    HEAD_SHA="$(git -C "$REPO_ROOT" rev-parse HEAD)"
+    EXISTING="$(git -C "$REPO_ROOT" rev-parse -q --verify "refs/tags/$BUILD_TAG^{commit}" 2>/dev/null || true)"
+    if [[ -n "$(git -C "$REPO_ROOT" status --porcelain --untracked-files=no)" ]]; then
+      echo "⚠️  Uncommitted changes: not tagging $BUILD_TAG. Commit, then tag the commit you built by hand."
+    elif [[ -n "$EXISTING" && "$EXISTING" != "$HEAD_SHA" ]]; then
+      echo "⚠️  $BUILD_TAG already tags another commit ($EXISTING). Bump the build number; not moving the tag."
+    else
+      if [[ -z "$EXISTING" ]]; then
+        git -C "$REPO_ROOT" tag -a "$BUILD_TAG" -m "iOS TestFlight $AV_SHORT ($AV_BUILD)"
+      fi
+      if git -C "$REPO_ROOT" push -q origin "refs/tags/$BUILD_TAG"; then
+        echo "✅ Tagged $BUILD_TAG on $(git -C "$REPO_ROOT" rev-parse --short HEAD) and pushed it."
+      else
+        echo "⚠️  Tagged $BUILD_TAG locally, but the push failed: git push origin $BUILD_TAG"
+      fi
+    fi
+  fi
 fi
 
 # --- export ------------------------------------------------------------------
