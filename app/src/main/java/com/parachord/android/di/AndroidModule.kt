@@ -1400,6 +1400,10 @@ val androidModule = module {
                 get<com.parachord.shared.repository.LibraryRepository>().createPlaylistWithTracks(playlist, tracks)
             },
             findPlaylist = { id -> get<com.parachord.shared.db.dao.PlaylistDao>().getById(id) },
+            playlistLookupPluginName = { url -> get<com.parachord.shared.plugin.PluginManager>().playlistLookupPluginName(url) },
+            replaceTracks = { id, tracks, sig ->
+                get<com.parachord.shared.repository.LibraryRepository>().replaceLinkImportTracks(id, tracks, sig)
+            },
         )
     }
     single { com.parachord.android.deeplink.AndroidProtocolPlayTeardown(playbackController = get()) }

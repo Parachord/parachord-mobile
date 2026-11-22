@@ -353,6 +353,43 @@ class LibraryRepository(
     }
 
     /**
+     * A link import's tracks replaced by the link's current tracklist (a
+     * re-import of a link whose tracklist changed), with the link's signature
+     * stored in `sourceContentHash` for the next re-import. Flagged for sync
+     * like any edit, so its mirrors follow.
+     */
+    suspend fun replaceLinkImportTracks(playlistId: String, tracks: List<Track>, signature: String) {
+        val playlistTracks = tracks.mapIndexed { index, track ->
+            PlaylistTrack(
+                playlistId = playlistId,
+                position = index,
+                trackTitle = track.title,
+                trackArtist = track.artist,
+                trackAlbum = track.album,
+                trackDuration = track.duration,
+                trackArtworkUrl = track.artworkUrl,
+                trackSourceUrl = track.sourceUrl,
+                trackResolver = track.resolver,
+                trackSpotifyUri = track.spotifyUri,
+                trackSoundcloudId = track.soundcloudId,
+                trackSpotifyId = track.spotifyId,
+                trackAppleMusicId = track.appleMusicId,
+            )
+        }
+        playlistTrackDao.replaceAll(playlistId, playlistTracks)
+        val playlist = playlistDao.getById(playlistId) ?: return
+        val now = currentTimeMillis()
+        val flag = playlist.locallyModified || hasSyncIntent(playlistId)
+        playlistDao.update(playlist.copy(
+            trackCount = tracks.size,
+            sourceContentHash = signature,
+            updatedAt = now,
+            lastModified = now,
+            locallyModified = flag,
+        ))
+    }
+
+    /**
      * Append tracks to an existing playlist.
      * Positions are assigned after the current max position.
      */

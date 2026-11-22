@@ -8,7 +8,7 @@ import com.parachord.shared.deeplink.classifyPlaylistUrl
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.Track
 import com.parachord.shared.platform.Log
-import com.parachord.shared.platform.randomUUID
+import com.parachord.shared.metadata.PlaylistMosaicPaths
 
 /**
  * Imports a playlist from a link, on both apps (the import field and
@@ -27,7 +27,11 @@ import com.parachord.shared.platform.randomUUID
  *
  * A service playlist is saved with `source = "<providerId>-import"`
  * (`spotify-import`, `applemusic-import`, `soundcloud-import`), the id prefix
- * the old importers used, and no `sourceUrl`, so nothing polls it.
+ * the old importers used, and no `sourceUrl`, so nothing polls it. Its id is
+ * keyed to the link ([linkImportKey]), so the same link is the same playlist,
+ * as desktop's `hosted-<hash(url)>`: a re-import replaces its tracks only when
+ * the link's tracklist changed since the last import (the signature kept in
+ * `sourceContentHash`), and otherwise leaves it, edits included (#778).
  *
  * A save that must happen once (a recommended playlist's Save, which a later
  * visit can tap again) passes a `savedKey`: the playlist is then saved as
@@ -44,6 +48,19 @@ class PlaylistUrlImporter(
     private val createPlaylist: suspend (Playlist, List<Track>) -> Unit,
     /** A saved playlist by id (`PlaylistDao.getById`); checked only for a `savedKey` import. */
     private val findPlaylist: suspend (id: String) -> Playlist?,
+    /**
+     * The name of the plugin that claims a playlist link and can look it up
+     * (`PluginManager.playlistLookupPluginName`), else null. Such a link whose
+     * lookup fails is an error, never an XSPF document (desktop's "Could not
+     * load playlist"; #778: Amazon answers a plain fetch of its page with 400).
+     */
+    private val playlistLookupPluginName: suspend (url: String) -> String? = { null },
+    /**
+     * Replaces a link import's tracks and stores the link's tracklist
+     * signature (`LibraryRepository.replaceLinkImportTracks`), when the link's
+     * tracklist changed since the last import.
+     */
+    private val replaceTracks: suspend (playlistId: String, tracks: List<Track>, signature: String) -> Unit = { _, _, _ -> },
 ) {
     suspend fun importFromUrl(rawUrl: String, savedKey: String? = null): XspfImportResult {
         val url = normalizePlaylistUrl(rawUrl)
@@ -51,27 +68,43 @@ class PlaylistUrlImporter(
         // An Achordion playlist is an XSPF document at its own endpoint: import
         // that, so it's a hosted playlist that follows Achordion's changes.
         (classifyPlaylistUrl(url) as? PlaylistUrlKind.Achordion)?.let { return importHostedXspf(it.xspfUrl) }
-        val play = providerPlaylists.resolve(url) ?: return importHostedXspf(url)
-        return save(play, savedKey?.takeIf { it.isNotBlank() })
+        val play = providerPlaylists.resolve(url)
+        if (play == null) {
+            playlistLookupPluginName(url)?.let { name ->
+                Log.w(TAG, "$name claims $url but couldn't load it")
+                throw PlaylistLookupFailedException(name)
+            }
+            return importHostedXspf(url)
+        }
+        return save(play, url, savedKey?.takeIf { it.isNotBlank() })
     }
 
-    private suspend fun save(play: ResolvedProtocolPlay, savedKey: String?): XspfImportResult {
+    private suspend fun save(play: ResolvedProtocolPlay, url: String, savedKey: String?): XspfImportResult {
         val provider = play.providerId ?: "link"
         val source = "$provider-import"
-        val id = "$source-${savedKey ?: randomUUID()}"
-        if (savedKey != null) {
-            findPlaylist(id)?.let { existing ->
+        val id = "$source-${savedKey ?: linkImportKey(url)}"
+        val tracks = play.tracks.mapIndexed { i, t -> protocolPlayTrack(t, provider, i) }
+        val signature = linkTracklistSignature(tracks)
+        findPlaylist(id)?.let { existing ->
+            // A recommended playlist's Save opens the first copy as it is.
+            if (savedKey != null || existing.sourceContentHash == signature) {
                 Log.d(TAG, "'${existing.name}' is already saved (id=$id)")
                 return XspfImportResult(existing.id, existing.name, existing.trackCount)
             }
+            // The same link again, and its tracklist changed since the last
+            // import: the copy follows it (desktop's re-import of a link).
+            // Unchanged, the user's own edits stay.
+            replaceTracks(id, tracks, signature)
+            Log.d(TAG, "'${existing.name}' re-imported: ${tracks.size} tracks (id=$id)")
+            return XspfImportResult(existing.id, existing.name, tracks.size)
         }
-        val tracks = play.tracks.mapIndexed { i, t -> protocolPlayTrack(t, provider, i) }
         createPlaylist(
             Playlist(
                 id = id,
                 name = play.displayName,
                 artworkUrl = play.albumArt ?: tracks.firstOrNull()?.artworkUrl,
                 trackCount = tracks.size,
+                sourceContentHash = signature,
             ),
             tracks,
         )
@@ -83,6 +116,28 @@ class PlaylistUrlImporter(
         const val TAG = "PlaylistUrlImporter"
     }
 }
+
+/**
+ * The key a link import is saved under, so the same link always maps to the same
+ * playlist (desktop's `hosted-<hash(url)>`): the link without its fragment and
+ * its share-tracking query parameters (`si`, `utm_*`), fingerprinted.
+ */
+fun linkImportKey(url: String): String {
+    val base = normalizePlaylistUrl(url).substringBefore('#')
+    val path = base.substringBefore('?')
+    val query = base.substringAfter('?', "").split('&')
+        .filter { it.isNotBlank() && !it.startsWith("si=") && !it.startsWith("utm_") }
+    val clean = if (query.isEmpty()) path.trimEnd('/') else path.trimEnd('/') + "?" + query.joinToString("&")
+    return "link-" + PlaylistMosaicPaths.coverSignature(listOf(clean))
+}
+
+/** The link's tracklist (artist and title, in order) as a fingerprint, to tell a changed link from an unchanged one. */
+fun linkTracklistSignature(tracks: List<Track>): String =
+    PlaylistMosaicPaths.coverSignature(tracks.map { "${it.artist.lowercase()}\u0000${it.title.lowercase()}" })
+
+/** A plugin claimed the playlist link and couldn't load it (#778). */
+class PlaylistLookupFailedException(val serviceName: String) :
+    Exception("Couldn’t load that playlist from $serviceName. Try again.")
 
 /** `spotify:playlist:<id>` becomes its web link; anything else is trimmed. */
 fun normalizePlaylistUrl(rawUrl: String): String {

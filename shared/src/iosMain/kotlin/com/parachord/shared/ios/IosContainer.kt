@@ -999,10 +999,12 @@ class IosContainer private constructor() {
     }
 
     /** Import a local `.xspf` file's contents (Files-app picker → string). */
+    @Throws(Exception::class)
     suspend fun importLocalXspf(content: String): com.parachord.shared.playlist.XspfImportResult =
         hostedXspfService.importLocalXspf(content)
 
     /** Import an XSPF playlist from an HTTPS URL → a hosted (polled) playlist. */
+    @Throws(Exception::class)
     suspend fun importHostedXspf(url: String): com.parachord.shared.playlist.XspfImportResult =
         hostedXspfService.importHostedXspf(url)
 
@@ -1013,6 +1015,7 @@ class IosContainer private constructor() {
     /** Import a playlist from a link: the shared importer (Android's too), on the
      *  same resolver a play/playlist link uses — native Spotify / Apple Music,
      *  then whichever plugin claims the URL — with hosted XSPF as the fallback. */
+    @Throws(Exception::class)
     suspend fun importPlaylistFromUrl(url: String): com.parachord.shared.playlist.XspfImportResult =
         playlistUrlImporter.importFromUrl(url)
 
@@ -1021,6 +1024,7 @@ class IosContainer private constructor() {
      * a recommended service playlist passes `recommendedPlaylistKey(url)`, so saving
      * it again opens the first copy instead of making another.
      */
+    @Throws(Exception::class)
     suspend fun importPlaylistFromUrl(url: String, savedKey: String): com.parachord.shared.playlist.XspfImportResult =
         playlistUrlImporter.importFromUrl(url, savedKey)
 
@@ -1058,6 +1062,8 @@ class IosContainer private constructor() {
             importHostedXspf = { u -> hostedXspfService.importHostedXspf(u) },
             createPlaylist = { playlist, tracks -> libraryRepository.createPlaylistWithTracks(playlist, tracks) },
             findPlaylist = { id -> playlistDao.getById(id) },
+            playlistLookupPluginName = { u -> pluginManager.playlistLookupPluginName(u) },
+            replaceTracks = { id, tracks, sig -> libraryRepository.replaceLinkImportTracks(id, tracks, sig) },
         )
     }
 
