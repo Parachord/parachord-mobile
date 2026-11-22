@@ -713,6 +713,147 @@ class IosJsRuntime : JsRuntime {
                     },
                 };
                 // </web-session-bridge>
+
+                // <plugin-drm>
+                // ── The plugin-supplied DRM path (Widevine on Android, FairPlay on iOS) ──
+                // desktop docs/architecture/plugins.md "The plugin-supplied Widevine
+                // path" and "FairPlay on a host without Widevine" (#1627): a plugin with
+                // getPlaybackManifest + relayLicense supplies the stream and the licences,
+                // and the host (Android ExoPlayer, app/.../playback/drm/; iOS AVPlayer with
+                // an AVContentKeySession) plays them. `accept` says which reply the host
+                // plays: 'dash-widevine' (the default) or 'hls-fairplay'. Kotlin reaches
+                // these through PluginManager's unique-key poll. The plugin's `context`
+                // and its key headers stay HERE, keyed by session, and go back to
+                // relayLicense with every challenge; they never cross into Kotlin. Every
+                // method answers (never throws): { ok: true, ... } or { ok: false, error:
+                // { reason, planKey, licenseDenied, denialReason, message } } (the
+                // contract's error fields). Identical in Android's bootstrap.html and
+                // iOS's IosJsRuntime; a unit test keeps the two copies in step.
+                window.__pcDrm = (function () {
+                    var sessions = {};
+                    var counter = 0;
+                    function str(v) { return typeof v === 'string' && v ? v : null; }
+                    function fail(e) {
+                        return { ok: false, error: {
+                            reason: (e && str(e.reason)) || 'playback-failed',
+                            planKey: e ? str(e.planKey) : null,
+                            licenseDenied: !!(e && e.licenseDenied === true),
+                            denialReason: e ? str(e.denialReason) : null,
+                            message: String((e && e.message) || e || '').slice(0, 300),
+                            budgetExpired: !!(e && e.budgetExpired === true),
+                        } };
+                    }
+                    function resolver(id) {
+                        return window.__resolverLoader && window.__resolverLoader.getResolver(id);
+                    }
+                    // A plugin hung in its own network code must not leave the play
+                    // loading forever: past the budget the call fails as playback-failed.
+                    function withBudget(promise, ms, what) {
+                        var timer = null;
+                        return Promise.race([
+                            promise,
+                            new Promise(function (_resolve, reject) {
+                                timer = setTimeout(function () {
+                                    var err = new Error(what + ' timed out');
+                                    err.reason = 'playback-failed';
+                                    // The host's budget, not the plugin: the call keeps
+                                    // running, and a manifest retry joins it.
+                                    err.budgetExpired = true;
+                                    reject(err);
+                                }, ms);
+                            }),
+                        ]).finally(function () { if (timer) clearTimeout(timer); });
+                    }
+                    return {
+                        open: async function (resolverId, track, budgetMs, accept) {
+                            var r = resolver(resolverId);
+                            if (!r || typeof r.getPlaybackManifest !== 'function' || typeof r.relayLicense !== 'function') {
+                                return fail({ reason: 'playback-failed', message: 'the plugin has no getPlaybackManifest/relayLicense' });
+                            }
+                            var fairplay = accept === 'hls-fairplay';
+                            try {
+                                var reply = await withBudget(
+                                    Promise.resolve(r.getPlaybackManifest(track, r.config || {})),
+                                    budgetMs || 10000, 'getPlaybackManifest');
+                                if (!reply || typeof reply !== 'object') {
+                                    return fail({ reason: 'playback-failed', message: 'the manifest reply carried no manifest' });
+                                }
+                                if (fairplay) {
+                                    if (reply.type !== 'hls-fairplay' || !str(reply.url) || !str(reply.certificate)) {
+                                        return fail({ reason: 'playback-failed', message: 'the manifest reply is not hls/fairplay' });
+                                    }
+                                } else {
+                                    if (typeof reply.manifest !== 'string' || !reply.manifest) {
+                                        return fail({ reason: 'playback-failed', message: 'the manifest reply carried no manifest' });
+                                    }
+                                    if (reply.type !== 'dash' || reply.drm !== 'widevine') {
+                                        return fail({ reason: 'playback-failed', message: 'the manifest reply is not dash/widevine' });
+                                    }
+                                }
+                                var sessionId = 'drm_' + (++counter) + '_' + Date.now().toString(36);
+                                sessions[sessionId] = { resolverId: resolverId, context: reply.context || null };
+                                var headers = reply.headers || {};
+                                function pairs(v) {
+                                    return (Array.isArray(v) ? v : []).filter(function (h) {
+                                        return h && typeof h.name === 'string' && typeof h.value === 'string';
+                                    }).map(function (h) { return { name: h.name, value: h.value }; });
+                                }
+                                return {
+                                    ok: true,
+                                    sessionId: sessionId,
+                                    manifest: fairplay ? null : reply.manifest,
+                                    // The stream's URL, certificate and the headers its manifest and
+                                    // segments need; the key's headers stay with the plugin.
+                                    fairplay: fairplay ? {
+                                        url: reply.url,
+                                        certificate: reply.certificate,
+                                        manifestHeaders: pairs(headers.manifest),
+                                        segmentHeaders: pairs(headers.segments),
+                                    } : null,
+                                    extras: {
+                                        asin: str(reply.asin),
+                                        substituteAsin: str(reply.substituteAsin),
+                                        cdnType: str(reply.cdnType),
+                                    },
+                                };
+                            } catch (e) {
+                                return fail(e);
+                            }
+                        },
+                        license: async function (sessionId, challengeB64, budgetMs) {
+                            var s = sessions[sessionId];
+                            var r = s && resolver(s.resolverId);
+                            if (!r || typeof r.relayLicense !== 'function') {
+                                return fail({ reason: 'playback-failed', message: 'no live plugin license relay for this session' });
+                            }
+                            try {
+                                var license = await withBudget(
+                                    Promise.resolve(r.relayLicense(challengeB64, s.context)),
+                                    budgetMs || 15000, 'relayLicense');
+                                if (typeof license !== 'string' || !license) {
+                                    return fail({ reason: 'playback-failed', message: 'the plugin’s relayLicense answered empty' });
+                                }
+                                return { ok: true, license: license };
+                            } catch (e) {
+                                return fail(e);
+                            }
+                        },
+                        // The plugin's telemetry (handlePlayerEvent): never reaches playback.
+                        event: function (sessionId, event) {
+                            var s = sessions[sessionId];
+                            var r = s && resolver(s.resolverId);
+                            if (!r || typeof r.handlePlayerEvent !== 'function') return { ok: true, handled: false };
+                            var ev = Object.assign({}, event || {}, { sessionId: sessionId });
+                            try { Promise.resolve(r.handlePlayerEvent(ev)).catch(function () {}); } catch (e) {}
+                            return { ok: true, handled: true };
+                        },
+                        close: function (sessionId) {
+                            delete sessions[sessionId];
+                            return { ok: true };
+                        },
+                    };
+                })();
+                // </plugin-drm>
             })();
         """.trimIndent()
     }

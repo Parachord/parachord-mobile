@@ -28,6 +28,18 @@ private const val LOOKUP_POLL_INTERVAL_MS = 100L
  * past the 5–6 s the apps used to wait (#778).
  */
 const val PLAYLIST_LOOKUP_TIMEOUT_MS = 60_000L
+
+/**
+ * How long a plugin's `getStreamUrl` may take (desktop awaits it with no
+ * limit). Amazon Music's reads the account's purchases first (8 pages, about
+ * 8 s on a fresh session), past the 6 s the apps used to wait.
+ */
+const val STREAM_URL_TIMEOUT_MS = 30_000L
+
+/** [PluginManager.openDrmSession]'s `accept`: the plugin's Widevine DASH reply (Android). */
+const val DRM_ACCEPT_WIDEVINE = "dash-widevine"
+/** [PluginManager.openDrmSession]'s `accept`: the plugin's FairPlay HLS reply (iOS, desktop #1627). */
+const val DRM_ACCEPT_FAIRPLAY = "hls-fairplay"
 /** Album search/lookup polls a little past the catalog loader's 8s step cap, so
  *  the loader's timeout (not the poll) decides when a slow catalog gives up. */
 private const val ALBUM_POLL_ATTEMPTS = 85
@@ -883,7 +895,7 @@ class PluginManager constructor(
                 "return { ok: true, url: (typeof u === 'string' && u) ? u : null }; } " +
                 "catch (e) { return { ok: false, error: { reason: (e && e.reason) || 'playback-failed', " +
                 "message: String((e && e.message) || e).slice(0, 300) } }; } })()",
-            attempts = LOOKUP_POLL_ATTEMPTS,
+            attempts = (STREAM_URL_TIMEOUT_MS / LOOKUP_POLL_INTERVAL_MS).toInt(),
         )
     }
 
@@ -917,6 +929,16 @@ class PluginManager constructor(
      * and `relayLicense` (desktop's presence check). Capability-driven, never
      * by id.
      */
+    /**
+     * The loaded plugin behind [resolverId] when an iOS host plays it as
+     * FairPlay HLS: its DRM pair (`getPlaybackManifest` + `relayLicense`),
+     * which answers an iOS host with `type: 'hls-fairplay'` (desktop #1627).
+     */
+    fun fairPlayPlugin(resolverId: String?): PluginInfo? =
+        resolverId?.let { id ->
+            plugins.value.find { it.id == id && it.capabilities["widevine"] == true && it.hasDrmPair }
+        }
+
     fun widevinePlugin(resolverId: String?): PluginInfo? =
         resolverId?.let { id ->
             plugins.value.find { it.id == id && it.capabilities["widevine"] == true && it.hasDrmPair }
@@ -930,12 +952,19 @@ class PluginManager constructor(
      * or null with no answer. Never log it: the manifest is content.
      */
     @OptIn(ExperimentalEncodingApi::class)
-    suspend fun openDrmSession(resolverId: String, trackJson: String, budgetMs: Long): String? {
+    suspend fun openDrmSession(
+        resolverId: String,
+        trackJson: String,
+        budgetMs: Long,
+        /** Which reply this host plays: `dash-widevine` (Android) or `hls-fairplay` (iOS, desktop #1627). */
+        accept: String = DRM_ACCEPT_WIDEVINE,
+    ): String? {
         ensureInitialized()
+        require(accept == DRM_ACCEPT_WIDEVINE || accept == DRM_ACCEPT_FAIRPLAY) { "unknown DRM reply: $accept" }
         val b64 = Base64.encode(trackJson.encodeToByteArray())
         return pollAsync(
             "drmo",
-            "await window.__pcDrm.open('${escapeForJs(resolverId)}', JSON.parse(atob('$b64')), $budgetMs)",
+            "await window.__pcDrm.open('${escapeForJs(resolverId)}', JSON.parse(atob('$b64')), $budgetMs, '$accept')",
             attempts = ((budgetMs + 3_000) / LOOKUP_POLL_INTERVAL_MS).toInt(),
         )
     }

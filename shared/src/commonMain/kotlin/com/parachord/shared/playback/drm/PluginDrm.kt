@@ -132,6 +132,41 @@ sealed class PluginDrmOpenReply {
     data class Failed(val error: PluginDrmError) : PluginDrmOpenReply()
 }
 
+/**
+ * A plugin's FairPlay HLS stream for one play (`type: 'hls-fairplay'`, desktop
+ * #1627): the playlist [url], the FairPlay application [certificateB64], and the
+ * header lists the playlist and segment requests carry (Amazon: a per-play
+ * `rid` cookie). Per-play credentials: never logged, never saved.
+ */
+data class PluginFairPlayStream(
+    val url: String,
+    val certificateB64: String,
+    val manifestHeaders: List<Pair<String, String>>,
+    val segmentHeaders: List<Pair<String, String>>,
+) {
+    /** The `Cookie` header values, as `name=value` pairs, from both lists (AVPlayer sends cookies, not other headers). */
+    fun cookies(): List<Pair<String, String>> =
+        (manifestHeaders + segmentHeaders)
+            .filter { it.first.equals("Cookie", ignoreCase = true) }
+            .flatMap { (_, v) -> v.split(';') }
+            .mapNotNull { c ->
+                val name = c.substringBefore('=').trim()
+                val value = c.substringAfter('=', "").trim()
+                if (name.isEmpty() || !c.contains('=')) null else name to value
+            }
+            .distinct()
+
+    /** Header names other than `Cookie` (the engine can't send them; logged by name only). */
+    fun otherHeaderNames(): List<String> =
+        (manifestHeaders + segmentHeaders).map { it.first }.filterNot { it.equals("Cookie", ignoreCase = true) }.distinct()
+}
+
+/** `__pcDrm.open(…, 'hls-fairplay')`'s answer. */
+sealed class PluginFairPlayOpenReply {
+    data class Opened(val sessionId: String, val stream: PluginFairPlayStream, val extras: PluginDrmExtras) : PluginFairPlayOpenReply()
+    data class Failed(val error: PluginDrmError) : PluginFairPlayOpenReply()
+}
+
 /** `__pcDrm.license`'s answer: the licence (base64), or the plugin's error. */
 sealed class PluginDrmLicenseReply {
     data class Licensed(val licenseB64: String) : PluginDrmLicenseReply()
@@ -177,6 +212,36 @@ object PluginDrmReplies {
         return PluginDrmOpenReply.Opened(
             sessionId,
             manifest,
+            PluginDrmExtras(
+                asin = extras?.str("asin"),
+                substituteAsin = extras?.str("substituteAsin"),
+                cdnType = extras?.str("cdnType"),
+            ),
+        )
+    }
+
+    /** `__pcDrm.open(…, 'hls-fairplay')`: no answer at all is a failed open. */
+    fun openFairPlay(raw: String?): PluginFairPlayOpenReply {
+        val obj = parse(raw) ?: return PluginFairPlayOpenReply.Failed(PluginDrmError(message = "no answer"))
+        if (!obj.bool("ok")) return PluginFairPlayOpenReply.Failed(error(obj["error"]))
+        val sessionId = obj.str("sessionId")
+        val fp = obj["fairplay"] as? JsonObject
+        val url = fp?.str("url")
+        val certificate = fp?.str("certificate")
+        if (sessionId == null || url == null || certificate == null || !url.startsWith("https://")) {
+            return PluginFairPlayOpenReply.Failed(PluginDrmError(message = "the manifest reply is not hls/fairplay"))
+        }
+        fun pairs(key: String): List<Pair<String, String>> =
+            ((fp[key] as? kotlinx.serialization.json.JsonArray) ?: emptyList()).mapNotNull { el ->
+                val o = el as? JsonObject ?: return@mapNotNull null
+                val n = (o["name"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+                val v = (o["value"] as? JsonPrimitive)?.contentOrNull ?: return@mapNotNull null
+                n to v
+            }
+        val extras = obj["extras"] as? JsonObject
+        return PluginFairPlayOpenReply.Opened(
+            sessionId,
+            PluginFairPlayStream(url, certificate, pairs("manifestHeaders"), pairs("segmentHeaders")),
             PluginDrmExtras(
                 asin = extras?.str("asin"),
                 substituteAsin = extras?.str("substituteAsin"),

@@ -143,29 +143,35 @@ struct PlaybackRouter {
                     onRefused?(embed.SERVICE_NAME, pageLink, reason)
                 }
 
+            case let resolver where IosContainer.companion.shared.playsThroughFairPlay(resolverId: resolver):
+                // A plug-in's DRM pair as FairPlay HLS (#794, desktop #1627):
+                // AVPlayer with an AVContentKeySession relaying each key
+                // request through the plug-in. When it doesn't start (no
+                // licence, an engine error, the simulator, which has no
+                // FairPlay), the plug-in's plain stream plays instead if it
+                // has one (shared drmPlainStreamFallbackAllowed), as on Android.
+                switch await playFairPlay(source, resolver: resolver, title: title, artist: artist, album: album,
+                                          trackId: trackId, durationMs: durationMs, startAtSec: startAtSec) {
+                case .played: return .played(.avPlayer, resolver: source.resolver)
+                case .superseded, .stop: return .noPlayableSource
+                case .next: continue
+                case .plainStream: break
+                }
+                switch await playPluginStream(source, resolver: resolver, title: title, artist: artist, album: album,
+                                              trackId: trackId, durationMs: durationMs, startAtSec: startAtSec) {
+                case .played: return .played(.avPlayer, resolver: source.resolver)
+                case .superseded, .stop: return .noPlayableSource
+                case .next, .plainStream: continue
+                }
+
             case let resolver where IosContainer.companion.shared.playsThroughStreamUrl(resolverId: resolver):
-                // A plug-in played through `getStreamUrl` (#670): the URL is
-                // built now, by capability and method, never by id, and lives
-                // for this play only (AVPlayer's item; never the track, a
-                // cache, the saved queue or a log line).
-                let container = IosContainer.companion.shared
-                let stream = try? await container.pluginStream(source: source, trackId: trackId, title: title,
-                                                               artist: artist, album: album, durationMs: durationMs)
-                guard let stream else {
-                    onPluginStreamFailed?(IosPluginStream.companion.START_FAILED, PlayFailureKt.PLAY_START_FAILED_MESSAGE, resolver)
-                    continue
+                // A plug-in played through `getStreamUrl` (#670).
+                switch await playPluginStream(source, resolver: resolver, title: title, artist: artist, album: album,
+                                              trackId: trackId, durationMs: durationMs, startAtSec: startAtSec) {
+                case .played: return .played(.avPlayer, resolver: source.resolver)
+                case .superseded, .stop: return .noPlayableSource
+                case .next, .plainStream: continue
                 }
-                if stream.kind == IosPluginStream.companion.PLAY, let url = stream.url {
-                    avPlayer.load(url: url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag,
-                                  startAtSec: startAtSec)
-                    return .played(.avPlayer, resolver: source.resolver)
-                }
-                if stream.kind == IosPluginStream.companion.SUPERSEDED { return .noPlayableSource }
-                if stream.kind == IosPluginStream.companion.NOT_SIGNED_IN, let signInFirst, await signInFirst(resolver) {
-                    onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
-                    return .noPlayableSource
-                }
-                onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
 
             case let resolver where Self.avPlayerResolvers.contains(resolver):
                 guard !source.url.isEmpty else { continue }
@@ -203,5 +209,143 @@ struct PlaybackRouter {
             }
         }
         return .noPlayableSource
+    }
+
+    /// What a plug-in path did for one source.
+    enum PluginStep {
+        /// It loaded on AVPlayer: the walk is done.
+        case played
+        /// A newer play took over: stop the walk, report nothing.
+        case superseded
+        /// Stop the walk here (the coordinator asks to sign in, #775).
+        case stop
+        /// The source didn't play: try the next one.
+        case next
+        /// The DRM stream didn't start: try the plug-in's plain stream.
+        case plainStream
+    }
+
+    /// A plug-in played through `getStreamUrl` (#670): the URL is built now,
+    /// by capability and method, never by id, and lives for this play only
+    /// (AVPlayer's item; never the track, a cache, the saved queue or a log line).
+    private func playPluginStream(_ source: ResolvedSource, resolver: String, title: String, artist: String,
+                                  album: String?, trackId: String, durationMs: Int64,
+                                  startAtSec: Double) async -> PluginStep {
+        let container = IosContainer.companion.shared
+        let stream = try? await container.pluginStream(source: source, trackId: trackId, title: title,
+                                                       artist: artist, album: album, durationMs: durationMs)
+        guard let stream else {
+            onPluginStreamFailed?(IosPluginStream.companion.START_FAILED, PlayFailureKt.PLAY_START_FAILED_MESSAGE, resolver)
+            return .next
+        }
+        if stream.kind == IosPluginStream.companion.PLAY, let url = stream.url {
+            avPlayer.load(url: url, title: title, artist: artist, resolver: source.resolver, tag: avLoadTag,
+                          startAtSec: startAtSec)
+            return .played
+        }
+        if stream.kind == IosPluginStream.companion.SUPERSEDED { return .superseded }
+        if stream.kind == IosPluginStream.companion.NOT_SIGNED_IN, let signInFirst, await signInFirst(resolver) {
+            onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
+            return .stop
+        }
+        onPluginStreamFailed?(stream.kind, stream.message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE, stream.serviceName)
+        return .next
+    }
+
+    /// How long a FairPlay start may take: the licence and the item ready
+    /// (Android's `DRM_START_TIMEOUT_MS`, desktop's `untilAudible`).
+    static let fairPlayStartTimeoutSec: Double = 30
+
+    /// A plug-in's FairPlay HLS (#794): open the session, load the stream on
+    /// AVPlayer with its key session, and wait until a licence came back and
+    /// the item is ready to play. It doesn't play here: the coordinator starts
+    /// it, so the engine playing before doesn't run over a start that fails.
+    /// Loaded under a tag of its own until it has started, so a failure
+    /// during the start is this walk's to handle (the plain stream), not the
+    /// coordinator's.
+    private func playFairPlay(_ source: ResolvedSource, resolver: String, title: String, artist: String,
+                              album: String?, trackId: String, durationMs: Int64,
+                              startAtSec: Double) async -> PluginStep {
+        let container = IosContainer.companion.shared
+        let plainNext: PluginStep = container.hasDrmPlainStream(resolverId: resolver) ? .plainStream : .next
+        guard let open = try? await container.openFairPlay(source: source, trackId: trackId, title: title,
+                                                           artist: artist, album: album, durationMs: durationMs) else {
+            return plainNext
+        }
+        if Task.isCancelled { return .superseded }
+        switch open.kind {
+        case IosFairPlayOpen.companion.PLAY:
+            break
+        case IosFairPlayOpen.companion.SUPERSEDED:
+            return .superseded
+        case IosPluginStream.companion.NOT_SIGNED_IN, IosPluginStream.companion.REFUSED:
+            // A plan or sign-in refusal: never the plain stream (the track
+            // isn't the account's to play), as Android and desktop.
+            return await refused(kind: open.kind, message: open.message, service: open.serviceName, resolver: resolver)
+        default:
+            NSLog("FAIRPLAY '%@': %@ didn't open a stream (%@)", title, resolver, open.kind)
+            return plainNext
+        }
+        guard let sessionId = open.sessionId, let url = open.url, let cert = open.certificateB64,
+              let keys = IosFairPlayKeys(sessionId: sessionId, certificateB64: cert, resolverId: resolver) else {
+            return plainNext
+        }
+        let cookies = zip(open.cookieNames, open.cookieValues).map { ($0, $1) }
+        guard avPlayer.load(fairPlayURL: url, cookies: cookies, keys: keys, title: title, artist: artist,
+                            resolver: source.resolver, tag: -1, startAtSec: startAtSec) else {
+            Task { try? await container.closeFairPlay(sessionId: sessionId) }
+            return plainNext
+        }
+        let deadline = Date().addingTimeInterval(Self.fairPlayStartTimeoutSec)
+        while Date() < deadline {
+            if Task.isCancelled {
+                avPlayer.haltAudio()
+                Task { try? await container.closeFairPlay(sessionId: sessionId) }
+                return .superseded
+            }
+            switch keys.state {
+            case .refused(let kind, let message):
+                avPlayer.haltAudio()
+                Task { try? await container.closeFairPlay(sessionId: sessionId) }
+                if kind == IosPluginStream.companion.NOT_SIGNED_IN || kind == IosPluginStream.companion.REFUSED {
+                    return await refused(kind: kind, message: message, service: open.serviceName, resolver: resolver)
+                }
+                NSLog("FAIRPLAY '%@': the licence was refused (%@)", title, kind)
+                return plainNext
+            case .failed(let why):
+                avPlayer.haltAudio()
+                Task { try? await container.closeFairPlay(sessionId: sessionId) }
+                NSLog("FAIRPLAY '%@': the key request failed: %@", title, why)
+                return plainNext
+            case .licensed where avPlayer.status == .ready:
+                NSLog("FAIRPLAY '%@' licensed and ready (%@)", title, resolver)
+                avPlayer.retag(avLoadTag)
+                return .played
+            default:
+                break
+            }
+            if avPlayer.status == .failed {
+                NSLog("FAIRPLAY '%@': the stream failed before it started: %@", title, avPlayer.errorMessage ?? "")
+                avPlayer.haltAudio()
+                Task { try? await container.closeFairPlay(sessionId: sessionId) }
+                return plainNext
+            }
+            try? await Task.sleep(nanoseconds: 150_000_000)
+        }
+        NSLog("FAIRPLAY '%@': no licence and ready item within %.0f s", title, Self.fairPlayStartTimeoutSec)
+        avPlayer.haltAudio()
+        Task { try? await container.closeFairPlay(sessionId: sessionId) }
+        return plainNext
+    }
+
+    /// A plan or sign-in refusal: the sign-in prompt may stop the walk (#775), else a refused source.
+    private func refused(kind: String, message: String?, service: String, resolver: String) async -> PluginStep {
+        let words = message ?? PlayFailureKt.PLAY_START_FAILED_MESSAGE
+        if kind == IosPluginStream.companion.NOT_SIGNED_IN, let signInFirst, await signInFirst(resolver) {
+            onPluginStreamFailed?(kind, words, service)
+            return .stop
+        }
+        onPluginStreamFailed?(kind, words, service)
+        return .next
     }
 }

@@ -26,8 +26,9 @@ class HostPlaybackTest {
 
     @Test
     fun `a plugin's plugin-supplied paths`() {
-        assertEquals(setOf(HostPlayback.WIDEVINE), pluginPlaybackPaths(amazonDrmOnly))
-        assertEquals(setOf(HostPlayback.WIDEVINE, HostPlayback.PLAIN_STREAM), pluginPlaybackPaths(amazon))
+        // The DRM pair is Widevine for Android and FairPlay for iOS (desktop #1627).
+        assertEquals(setOf(HostPlayback.WIDEVINE, HostPlayback.FAIRPLAY), pluginPlaybackPaths(amazonDrmOnly))
+        assertEquals(setOf(HostPlayback.WIDEVINE, HostPlayback.FAIRPLAY, HostPlayback.PLAIN_STREAM), pluginPlaybackPaths(amazon))
         assertEquals(setOf(HostPlayback.HTML5_STREAM), pluginPlaybackPaths(subsonic))
         assertEquals(emptySet(), pluginPlaybackPaths(spotify))
         // Widevine without getPlaybackManifest + relayLicense isn't a path, nor is its getStreamUrl alone.
@@ -42,10 +43,22 @@ class HostPlaybackTest {
         assertEquals(emptyList(), hostUnplayableIds(listOf(spotify, subsonic, amazon), HostPlayback.IOS))
     }
 
+    /** A host with the stream paths but no DRM engine (iOS before #794). */
+    private val noDrmHost = setOf(HostPlayback.HTML5_STREAM, HostPlayback.PLAIN_STREAM)
+
     @Test
-    fun `iOS still can't play a Widevine plugin with no getStreamUrl`() {
-        assertTrue(hostCannotPlay(amazonDrmOnly, HostPlayback.IOS))
-        assertEquals(listOf("amazonmusic"), hostUnplayableIds(listOf(spotify, subsonic, amazonDrmOnly), HostPlayback.IOS))
+    fun `iOS plays a DRM-pair plugin with no getStreamUrl as FairPlay`() {
+        assertFalse(hostCannotPlay(amazonDrmOnly, HostPlayback.IOS))
+        assertTrue(playsThroughFairPlay(amazonDrmOnly, HostPlayback.IOS))
+        assertTrue(playsThroughFairPlay(amazon, HostPlayback.IOS))
+        assertFalse(playsThroughFairPlay(amazon, HostPlayback.ANDROID))
+        assertFalse(playsThroughFairPlay(subsonic, HostPlayback.IOS))
+    }
+
+    @Test
+    fun `a host with no DRM engine can't play a DRM-only plugin`() {
+        assertTrue(hostCannotPlay(amazonDrmOnly, noDrmHost))
+        assertEquals(listOf("amazonmusic"), hostUnplayableIds(listOf(spotify, subsonic, amazonDrmOnly), noDrmHost))
     }
 
     @Test
@@ -55,9 +68,11 @@ class HostPlaybackTest {
 
     @Test
     fun `which plugins play through getStreamUrl first`() {
-        // iOS: Subsonic and Amazon's purchases (no Widevine engine here).
+        // iOS: Subsonic. Amazon goes to FairPlay first; its plain stream is the fallback.
         assertTrue(playsThroughStreamUrl(subsonic, HostPlayback.IOS))
-        assertTrue(playsThroughStreamUrl(amazon, HostPlayback.IOS))
+        assertFalse(playsThroughStreamUrl(amazon, HostPlayback.IOS))
+        // A host without a DRM engine plays Amazon's purchases through getStreamUrl first.
+        assertTrue(playsThroughStreamUrl(amazon, noDrmHost))
         assertFalse(playsThroughStreamUrl(amazonDrmOnly, HostPlayback.IOS))
         assertFalse(playsThroughStreamUrl(spotify, HostPlayback.IOS))
         // Android: Subsonic only; Amazon goes to Widevine first, its plain stream is the fallback.
@@ -69,7 +84,7 @@ class HostPlaybackTest {
     fun `the tile and the Play from switch say so`() {
         assertEquals(TileStatus(HOST_CANNOT_PLAY_LABEL, HOST_CANNOT_PLAY_MESSAGE), tileStatus(emptyMap(), "amazonmusic", emptyList(), listOf("amazonmusic")))
         assertEquals(TileStatus(null, null), tileStatus(emptyMap(), "spotify", emptyList(), listOf("amazonmusic")))
-        val s = playbackSwitchState(amazonDrmOnly, active = true, playbackOff = false, limit = null, hostCannotPlay = true)
+        val s = playbackSwitchState(amazonDrmOnly, active = true, playbackOff = false, limit = null, hostCannotPlay = hostCannotPlay(amazonDrmOnly, noDrmHost))
         assertFalse(s.checked)
         assertTrue(s.disabled)
         assertEquals(HOST_CANNOT_PLAY_MESSAGE, s.hint)

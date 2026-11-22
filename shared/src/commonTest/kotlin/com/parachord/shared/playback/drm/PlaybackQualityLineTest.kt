@@ -45,7 +45,14 @@ class PlaybackQualityLineTest {
     @Test
     fun `widevine needs both DRM methods and android`() {
         assertNull(line(amazon.copy(hasDrmPair = false)))
-        assertNull(line(amazon, platform = PlaybackPlatform.IOS))
+        assertNull(line(amazon.copy(hasDrmPair = false), platform = PlaybackPlatform.IOS))
+    }
+
+    @Test
+    fun `on iOS the DRM pair is FairPlay AAC — it says so`() {
+        val l = line(amazon, platform = PlaybackPlatform.IOS) as PlaybackQualityLine.ExternalControl
+        assertEquals(PlaybackQualityLine.IOS_FAIRPLAY_TITLE, l.title)
+        assertTrue(l.detail!!.startsWith("Amazon Music streams AAC on iPhone and iPad."))
     }
 
     @Test

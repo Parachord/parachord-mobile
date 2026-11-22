@@ -1685,6 +1685,16 @@ shared; iOS supplies AVPlayer and the sheet.
   audio and the bar. **Not checked:** a real Subsonic server. Plain-http servers stay refused (`PluginStreamUrl.isPlayable`), so
   no local-network permission is needed.
 
+## A plug-in's FairPlay HLS (#794, desktop #1627)
+
+iOS plays a plug-in's DRM pair as FairPlay HLS (root `CLAUDE.md` → "On iOS the same pair plays as FairPlay HLS"). Shared: the `__pcDrm` JS (asked with `hls-fairplay`), the reply parser, the outcome rules, the manifest retry, the plain-stream fallback. iOS supplies AVFoundation:
+
+- **Router:** `PlaybackRouter`'s `playsThroughFairPlay` case, ahead of the stream case. `playFairPlay` opens the session (`IosContainer.openFairPlay`), loads the HLS on `IosAVPlayer.load(fairPlayURL:cookies:keys:…)` (the playlist's cookies as `AVURLAssetHTTPCookiesKey` on its host; other headers can't be sent and are logged by name) under a tag of its own (`-1`), and waits up to 30 s (`fairPlayStartTimeoutSec`) for a licence AND the item ready. It doesn't play: the coordinator starts it during the engine handoff, so the engine before it never plays over a failing start. On success `retag` hands the item to the play. A plan or sign-in refusal is a refused source (the sign-in prompt, #775); any other failure plays the plug-in's plain stream if it has one (`playPluginStream`, the old stream case), else the next source.
+- **Keys:** `IosFairPlayKeys` (`FairPlayKeys.swift`): an `AVContentKeySession` (`.fairPlayStreaming`) that builds the SPC with the plug-in's certificate (the `skd://` id as the content identifier, protocol version 1), relays it (`IosContainer.relayFairPlayLicense`, the plug-in's `relayLicense`) and hands the CKC to AVFoundation. Its `state` (waiting, licensed, refused, failed) is what the router waits on. Never logs the SPC, the CKC, the URL or a cookie.
+- **The simulator has no FairPlay**: `AVContentKeySession(keySystem: .fairPlayStreaming)` throws an Objective-C exception there (Swift can't catch it; it crashed the app once). `AppBootstrap` sets `IosContainer.fairPlayAvailable` from `IosFairPlayKeys.isAvailable` (false in the simulator), and `iosPlaybackPaths` then leaves FairPlay out, so a plug-in's plain stream plays first, as before #794; `IosFairPlayKeys.init` also refuses there. Verify FairPlay on a device.
+- **Quality:** FairPlay HLS is AAC only (256 / 128 / 48 kbps). The plug-in's sheet says "Up to 256 kbps AAC" (`PlaybackQualityLine.IOS_FAIRPLAY_TITLE`); the tier doesn't pick a variant yet.
+- **Checked on an iPad (iPad14,8, 22 Nov 2026), Music Unlimited, amazonmusic 1.24.1:** a catalog track (Luke Combs, "Beer Never Broke My Heart") opened a FairPlay session, Amazon's licence server accepted the app's SPC (made with Amazon's certificate) and answered a CKC, and the track played from Amazon on AVPlayer with the lock screen's info. The first try met "Sign in and choose an Amazon Music profile" (`not-signed-in`): the sign-in prompt (#775) asked, and after signing in the track played again by itself. In the simulator a purchase plays its MP3 (`getStreamUrl`, 1.24.1 matches the bought copy on Unlimited). Scrubbing, Next / Previous and playback with the screen locked work on a FairPlay track.
+
 ## The webSession host bridge (#779)
 
 `amazonmusic.axe` requires `this.host.webSession` (root `CLAUDE.md` → "Web

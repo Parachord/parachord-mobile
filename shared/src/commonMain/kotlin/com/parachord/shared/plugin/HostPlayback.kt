@@ -7,6 +7,9 @@ package com.parachord.shared.plugin
  *
  * - [WIDEVINE]: `capabilities.widevine` with `getPlaybackManifest` +
  *   `relayLicense` (ExoPlayer with Widevine; Android only).
+ * - [FAIRPLAY]: the same pair, asked for FairPlay HLS by an iOS host
+ *   (desktop #1627: Amazon Music 1.24.0; AVPlayer with an
+ *   `AVContentKeySession`, parachord-mobile#794).
  * - [HTML5_STREAM]: `capabilities.html5Stream` (a URL the plugin builds at
  *   play time; ExoPlayer on Android, AVPlayer on iOS).
  * - [PLAIN_STREAM]: a Widevine plugin that also implements `getStreamUrl`
@@ -17,20 +20,24 @@ package com.parachord.shared.plugin
  */
 object HostPlayback {
     const val WIDEVINE = "widevine"
+    const val FAIRPLAY = "fairplay"
     const val HTML5_STREAM = "html5Stream"
     const val PLAIN_STREAM = "plainStream"
 
     /** What Android runs. */
     val ANDROID: Set<String> = setOf(WIDEVINE, HTML5_STREAM, PLAIN_STREAM)
 
-    /** What iOS runs: the stream URL paths through AVPlayer, no Widevine. */
-    val IOS: Set<String> = setOf(HTML5_STREAM, PLAIN_STREAM)
+    /** What iOS runs: the stream URL paths and the DRM pair as FairPlay, through AVPlayer. */
+    val IOS: Set<String> = setOf(FAIRPLAY, HTML5_STREAM, PLAIN_STREAM)
 }
 
 /** The plugin-supplied playback paths [plugin] declares ([HostPlayback]). */
 fun pluginPlaybackPaths(plugin: PluginManager.PluginInfo): Set<String> = buildSet {
     val drm = plugin.capabilities[HostPlayback.WIDEVINE] == true && plugin.hasDrmPair
-    if (drm) add(HostPlayback.WIDEVINE)
+    if (drm) {
+        add(HostPlayback.WIDEVINE)
+        add(HostPlayback.FAIRPLAY)
+    }
     if (plugin.capabilities[HostPlayback.HTML5_STREAM] == true) add(HostPlayback.HTML5_STREAM)
     if (drm && plugin.hasStreamUrl) add(HostPlayback.PLAIN_STREAM)
 }
@@ -50,16 +57,24 @@ fun hostCannotPlay(plugin: PluginManager.PluginInfo, hostPaths: Set<String>): Bo
 /**
  * Whether this host plays [plugin] by asking it for `getStreamUrl` first:
  * an `html5Stream` plugin, or a plugin whose plain stream the host runs
- * while it can't run its Widevine path (iOS with Amazon Music). Where the
- * host runs Widevine (Android), the DRM stream goes first and the plain
- * stream is only its fallback ([com.parachord.shared.playback.drm.drmPlainStreamFallbackAllowed]).
+ * while it can't run its DRM pair at all. Where the host runs the pair
+ * (Android's Widevine, iOS's FairPlay), the DRM stream goes first and the
+ * plain stream is only its fallback ([com.parachord.shared.playback.drm.drmPlainStreamFallbackAllowed]).
  */
 fun playsThroughStreamUrl(plugin: PluginManager.PluginInfo, hostPaths: Set<String>): Boolean {
     val paths = pluginPlaybackPaths(plugin)
     if (HostPlayback.HTML5_STREAM in paths && HostPlayback.HTML5_STREAM in hostPaths) return true
     return HostPlayback.PLAIN_STREAM in paths && HostPlayback.PLAIN_STREAM in hostPaths &&
-        HostPlayback.WIDEVINE !in hostPaths
+        HostPlayback.WIDEVINE !in hostPaths && HostPlayback.FAIRPLAY !in hostPaths
 }
+
+/**
+ * Whether this host plays [plugin]'s DRM pair as FairPlay HLS (iOS): the DRM
+ * stream goes first, and its plain stream, if it has one, is the fallback
+ * ([com.parachord.shared.playback.drm.drmPlainStreamFallbackAllowed]), as on Android.
+ */
+fun playsThroughFairPlay(plugin: PluginManager.PluginInfo, hostPaths: Set<String>): Boolean =
+    HostPlayback.FAIRPLAY in pluginPlaybackPaths(plugin) && HostPlayback.FAIRPLAY in hostPaths
 
 /** The ids of [plugins] that [hostCannotPlay], sorted. */
 fun hostUnplayableIds(plugins: List<PluginManager.PluginInfo>, hostPaths: Set<String>): List<String> =

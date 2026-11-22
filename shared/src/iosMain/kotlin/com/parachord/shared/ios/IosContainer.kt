@@ -256,6 +256,37 @@ data class IosPluginStream(val kind: String, val url: String?, val message: Stri
     }
 }
 
+/**
+ * A plug-in's FairPlay session for one play ([IosContainer.openFairPlay]):
+ * [kind] is [PLAY] (with [url], [certificateB64] and the cookies the playlist
+ * and segments need: credentials for this play only), [IosPluginStream.REFUSED]
+ * / [IosPluginStream.NOT_SIGNED_IN] (a refused source, with [message]),
+ * [LICENSE_DENIED] or [START_FAILED] (the plain stream may play instead), or
+ * [SUPERSEDED].
+ */
+data class IosFairPlayOpen(
+    val kind: String,
+    val sessionId: String?,
+    val url: String?,
+    val certificateB64: String?,
+    val cookieNames: List<String>,
+    val cookieValues: List<String>,
+    val message: String?,
+    val serviceName: String,
+) {
+    companion object {
+        const val PLAY = "play"
+        const val START_FAILED = "startFailed"
+        const val LICENSE_DENIED = "licenseDenied"
+        const val SUPERSEDED = "superseded"
+        fun failed(kind: String, message: String?, serviceName: String) =
+            IosFairPlayOpen(kind, null, null, null, emptyList(), emptyList(), message, serviceName)
+    }
+}
+
+/** One FairPlay licence ([IosContainer.relayFairPlayLicense]): the CKC, or a refusal's [kind] and [message]. */
+data class IosFairPlayLicense(val ckcB64: String?, val kind: String?, val message: String?)
+
 /** One field of a plug-in's field editor ([IosContainer.pluginConfigFields]). */
 data class IosPluginField(val key: String, val secret: Boolean, val label: String, val hint: String, val placeholder: String)
 
@@ -3291,7 +3322,158 @@ class IosContainer private constructor() {
      * capability and method, never by id.
      */
     fun playsThroughStreamUrl(resolverId: String): Boolean =
-        pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS) != null
+        pluginManager.streamUrlPlugin(resolverId, iosPlaybackPaths) != null
+
+    // ── A plug-in's FairPlay HLS (desktop #1627, #794) ──────────────────
+
+    /**
+     * Whether this device runs FairPlay. Set from Swift at start-up
+     * (`AppBootstrap`): false in the simulator, whose `AVContentKeySession`
+     * throws for `.fairPlayStreaming`. Without it the DRM pair isn't a path
+     * here and a plug-in's plain stream plays first, as before #794.
+     */
+    @kotlin.concurrent.Volatile
+    var fairPlayAvailable: Boolean = true
+
+    /** The plugin-supplied paths this device runs ([com.parachord.shared.plugin.HostPlayback.IOS], less FairPlay without it). */
+    val iosPlaybackPaths: Set<String>
+        get() = if (fairPlayAvailable) com.parachord.shared.plugin.HostPlayback.IOS
+        else com.parachord.shared.plugin.HostPlayback.IOS - com.parachord.shared.plugin.HostPlayback.FAIRPLAY
+
+    /**
+     * Whether [resolverId]'s plug-in plays here as FairPlay HLS (shared
+     * `playsThroughFairPlay` for `HostPlayback.IOS`): its DRM pair. By
+     * capability and method, never by id.
+     */
+    fun playsThroughFairPlay(resolverId: String): Boolean =
+        pluginManager.fairPlayPlugin(resolverId)?.let {
+            com.parachord.shared.plugin.playsThroughFairPlay(it, iosPlaybackPaths)
+        } == true
+
+    /** [resolverId]'s plug-in also has a plain stream, for when FairPlay didn't start. */
+    fun hasDrmPlainStream(resolverId: String): Boolean = pluginManager.drmPlainStreamPlugin(resolverId) != null
+
+    /**
+     * Opens a FairPlay session for [source]: the plug-in's `getPlaybackManifest`
+     * asked for `hls-fairplay`, within desktop's 10 s budget, asked once more
+     * at once when that budget ran out (`manifestRetryAllowed`, as Android).
+     * The URL and cookies are credentials for this play only: never logged.
+     */
+    @Throws(Throwable::class)
+    suspend fun openFairPlay(
+        source: ResolvedSource,
+        trackId: String,
+        title: String,
+        artist: String,
+        album: String?,
+        durationMs: Long,
+    ): IosFairPlayOpen {
+        val resolverId = source.resolver
+        val plugin = pluginManager.fairPlayPlugin(resolverId)
+            ?: return IosFairPlayOpen.failed(IosFairPlayOpen.START_FAILED, com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE, resolverId)
+        val pluginTrackId = source.pluginTrackId
+            ?: com.parachord.shared.resolver.parsePluginTrackUrl(source.url)?.takeIf { it.first == resolverId }?.second
+        val trackJson = com.parachord.shared.playback.pluginStreamTrackJson(
+            trackId, title, artist, album, durationMs.takeIf { it > 0 }, resolverId, pluginTrackId, source,
+        ).toString()
+        val budget = com.parachord.shared.playback.drm.PluginDrmContract.MANIFEST_BUDGET_MS
+        val ask: suspend () -> com.parachord.shared.playback.drm.PluginFairPlayOpenReply = {
+            com.parachord.shared.playback.drm.PluginDrmReplies.openFairPlay(
+                pluginManager.openDrmSession(resolverId, trackJson, budget, com.parachord.shared.plugin.DRM_ACCEPT_FAIRPLAY),
+            )
+        }
+        var reply = ask()
+        var retries = 0
+        while (reply is com.parachord.shared.playback.drm.PluginFairPlayOpenReply.Failed &&
+            com.parachord.shared.playback.drm.manifestRetryAllowed(reply.error, retries)
+        ) {
+            retries++
+            Log.w("PluginDrm", "FairPlay manifest for '$title' ($resolverId) ran out of its budget; asking again")
+            reply = ask()
+        }
+        return when (reply) {
+            is com.parachord.shared.playback.drm.PluginFairPlayOpenReply.Opened -> {
+                val other = reply.stream.otherHeaderNames()
+                Log.d(
+                    "PluginDrm",
+                    "FairPlay session ${reply.sessionId} opened for '$title' ($resolverId)" +
+                        (if (other.isEmpty()) "" else "; headers it can't send: ${other.joinToString()}"),
+                )
+                IosFairPlayOpen(
+                    kind = IosFairPlayOpen.PLAY,
+                    sessionId = reply.sessionId,
+                    url = reply.stream.url,
+                    certificateB64 = reply.stream.certificateB64,
+                    cookieNames = reply.stream.cookies().map { it.first },
+                    cookieValues = reply.stream.cookies().map { it.second },
+                    message = null,
+                    serviceName = plugin.name,
+                )
+            }
+            is com.parachord.shared.playback.drm.PluginFairPlayOpenReply.Failed -> {
+                val e = reply.error
+                Log.w(
+                    "PluginDrm",
+                    "FairPlay manifest refused by $resolverId for '$title': reason=${e.reason} planKey=${e.planKey} " +
+                        "message=${com.parachord.shared.api.SecretRedaction.redactSecrets(e.message.orEmpty()).take(200)}",
+                )
+                fairPlayFailure(e, resolverId, plugin.name)
+            }
+        }
+    }
+
+    /** How a FairPlay failure plays out (shared `pluginDrmOutcome`), and the words for a refusal. */
+    private fun fairPlayFailure(e: com.parachord.shared.playback.drm.PluginDrmError, resolverId: String, name: String): IosFairPlayOpen {
+        val outcome = com.parachord.shared.playback.drm.pluginDrmOutcome(e)
+        val kind = when (outcome) {
+            com.parachord.shared.playback.drm.PluginDrmOutcome.SUPERSEDED -> IosFairPlayOpen.SUPERSEDED
+            com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN -> IosPluginStream.NOT_SIGNED_IN
+            com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED -> IosPluginStream.REFUSED
+            com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED -> IosFairPlayOpen.LICENSE_DENIED
+            else -> IosFairPlayOpen.START_FAILED
+        }
+        if (outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED ||
+            outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN
+        ) {
+            // A plan limit lands in "not playing" (as Android's noteRefusal).
+            refreshPluginStatus(resolverId)
+        }
+        val message = com.parachord.shared.playback.drm.PluginDrmMessages.refused(
+            outcome, name,
+            planMessage = if (outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED) e.message else null,
+        )
+        return IosFairPlayOpen.failed(kind, message, name)
+    }
+
+    /**
+     * One FairPlay licence through the plug-in's `relayLicense` (the SPC in,
+     * the CKC out, both base64). A refusal answers its kind and words; never
+     * logs the SPC or the CKC.
+     */
+    @Throws(Throwable::class)
+    suspend fun relayFairPlayLicense(sessionId: String, spcB64: String, resolverId: String): IosFairPlayLicense {
+        val reply = com.parachord.shared.playback.drm.PluginDrmReplies.license(
+            pluginManager.relayDrmLicense(sessionId, spcB64, com.parachord.shared.playback.drm.PluginDrmContract.LICENSE_BUDGET_MS),
+        )
+        return when (reply) {
+            is com.parachord.shared.playback.drm.PluginDrmLicenseReply.Licensed -> {
+                Log.d("PluginDrm", "FairPlay licence for $sessionId came back")
+                IosFairPlayLicense(reply.licenseB64, null, null)
+            }
+            is com.parachord.shared.playback.drm.PluginDrmLicenseReply.Failed -> {
+                val e = reply.error
+                Log.w("PluginDrm", "FairPlay licence refused for $sessionId: reason=${e.reason} licenseDenied=${e.licenseDenied} denialReason=${e.denialReason}")
+                val name = pluginManager.plugins.value.firstOrNull { it.id == resolverId }?.name
+                    ?: com.parachord.shared.playback.resolverDisplayName(resolverId)
+                val f = fairPlayFailure(e, resolverId, name)
+                IosFairPlayLicense(null, f.kind, f.message)
+            }
+        }
+    }
+
+    /** Drops a FairPlay session's plug-in context. */
+    @Throws(Throwable::class)
+    suspend fun closeFairPlay(sessionId: String) = pluginManager.closeDrmSession(sessionId)
 
     /**
      * Asks [source]'s plug-in for this play's stream (`getStreamUrl`) and says
@@ -3309,7 +3491,9 @@ class IosContainer private constructor() {
         durationMs: Long,
     ): IosPluginStream {
         val resolverId = source.resolver
-        val plugin = pluginManager.streamUrlPlugin(resolverId, com.parachord.shared.plugin.HostPlayback.IOS)
+        // An html5Stream plug-in, or a DRM plug-in's plain stream (its fallback when FairPlay didn't start).
+        val plugin = pluginManager.streamUrlPlugin(resolverId, iosPlaybackPaths)
+            ?: pluginManager.drmPlainStreamPlugin(resolverId)
             ?: return IosPluginStream(IosPluginStream.START_FAILED, null, com.parachord.shared.playback.PLAY_START_FAILED_MESSAGE, resolverId)
         val html5 = plugin.capabilities[com.parachord.shared.plugin.HostPlayback.HTML5_STREAM] == true
         val pluginTrackId = source.pluginTrackId
@@ -3804,7 +3988,8 @@ class IosContainer private constructor() {
             trackDao = trackDao,
             appleMusicResolver = com.parachord.shared.resolver.AppleMusicCatalogResolver(appleMusicCatalog, settingsStore),
             refreshSoundCloudAfterRejection = { soundCloudAuth.refreshAfterRejection(it) },
-            playsThroughStreamUrl = { playsThroughStreamUrl(it) },
+            // A stream built at play time (no URL in the result): getStreamUrl or FairPlay.
+            playsThroughStreamUrl = { playsThroughStreamUrl(it) || playsThroughFairPlay(it) },
         )
     }
 
