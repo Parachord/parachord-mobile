@@ -790,7 +790,7 @@ private fun RelatedArtistsTab(
         }
     } else {
         LazyVerticalGrid(
-            columns = adaptiveGridCells(circles = true),
+            columns = adaptiveGridCells(),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(12.dp),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -803,48 +803,13 @@ private fun RelatedArtistsTab(
                 val artist = similarArtists[idx]
                 var showMenu by remember { mutableStateOf(false) }
 
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .hapticCombinedClickable(
-                            onClick = { onNavigateToArtist(artist.name) },
-                            onLongClick = { showMenu = true },
-                        ),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .aspectRatio(1f)
-                            .clip(CircleShape)
-                            .background(MaterialTheme.colorScheme.surfaceVariant),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        if (artist.imageUrl != null) {
-                            AsyncImage(
-                                model = artist.imageUrl,
-                                contentDescription = artist.name,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier.fillMaxSize(),
-                            )
-                        } else {
-                            Text(
-                                text = artist.name.take(1).uppercase(),
-                                style = MaterialTheme.typography.headlineMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                        }
-                    }
-                    Spacer(modifier = Modifier.height(6.dp))
-                    Text(
-                        text = artist.name,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2,
-                        overflow = TextOverflow.Ellipsis,
-                        textAlign = TextAlign.Center,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                }
+                com.parachord.android.ui.components.ParachordArtistCard(
+                    name = artist.name,
+                    imageUrl = artist.imageUrl,
+                    width = null,
+                    onOpen = { onNavigateToArtist(artist.name) },
+                    onLongPress = { showMenu = true },
+                )
 
                 if (showMenu) {
                     com.parachord.android.ui.components.ArtistContextMenu(

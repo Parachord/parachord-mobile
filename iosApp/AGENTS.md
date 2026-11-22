@@ -37,6 +37,8 @@ For every UI/UX or behavior task, in this order:
    A page with a hero (Home, Collection, Playlists, History, Recommendations,
    Pop of the Tops, Fresh Drops, Critical Darlings, Concerts, Search) draws `PCPageHero`
    (the shared `PageHero`: its sizes, line and pattern) in place of `PCTopBar`.
+   Every artist card draws `PCArtistCard` (a photo, else the shared `ArtistPattern`
+   through `PCArtistPatternArt`) and its skeleton `PCArtistCardSkeleton`.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

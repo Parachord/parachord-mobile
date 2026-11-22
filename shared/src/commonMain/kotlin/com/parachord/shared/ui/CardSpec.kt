@@ -27,6 +27,12 @@ object CardSpec {
     const val LINE_SIZE = 12
     /** Where a badge sits on the art, from its corner. */
     const val BADGE_INSET = 8
+    /** The artist card's corners (desktop's `rounded-lg`): its photo runs to the edges. */
+    const val ARTIST_RADIUS = 8
+    /** Around the artist card's name and subtitle (desktop's `p-3`). */
+    const val ARTIST_TEXT_PADDING = 12
+    /** The artist card's name (desktop's `text-sm`, 500). */
+    const val ARTIST_NAME_SIZE = 14
     /** A pill's text (the release type, "Coming", "Δ 12"). */
     const val PILL_SIZE = 11
 

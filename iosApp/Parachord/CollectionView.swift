@@ -335,16 +335,10 @@ struct CollectionView: View {
     // ── Artists (3-col grid, circular) ─────────────────────────────────
     private var artistsGrid: some View {
         let items = model.sortedArtists
-        return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3), spacing: 18) {
+        return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(items, id: \.id) { a in
                 Button { path.append(.artist(a.name)) } label: {
-                    VStack(spacing: 6) {
-                        Color.clear.aspectRatio(1, contentMode: .fit)
-                            .overlay { PCArtistImage(url: a.imageUrl.flatMap { URL(string: $0) }, artistName: a.name) { PCArtwork(name: a.name, size: nil, radius: 999) } }
-                            .clipShape(Circle())
-                        Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)
-                            .lineLimit(1).multilineTextAlignment(.center)
-                    }
+                    PCArtistCard(name: a.name, imageUrl: a.imageUrl, width: nil)
                 }
                 .buttonStyle(.plain)
                 .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,

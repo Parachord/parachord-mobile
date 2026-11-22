@@ -509,7 +509,7 @@ private fun FriendTopArtistsTab(
                     EmptyState(UiMessages.FRIEND_ARTISTS_EMPTY)
                 } else {
                     LazyVerticalGrid(
-                        columns = adaptiveGridCells(circles = true),
+                        columns = adaptiveGridCells(),
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         horizontalArrangement = Arrangement.spacedBy(12.dp),
                         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -543,38 +543,15 @@ private fun ArtistGridItem(
     var showMenu by remember { mutableStateOf(false) }
     val shareArtist = com.parachord.android.share.rememberShareArtist()
 
-    Column(
-        horizontalAlignment = Alignment.CenterHorizontally,
-        modifier = Modifier
-            .fillMaxWidth()
-            .hapticCombinedClickable(
-                onClick = onClick,
-                onLongClick = { showMenu = true },
-            ),
-    ) {
-        AlbumArtCard(
-            artworkUrl = artist.imageUrl,
-            size = 96.dp,
-            cornerRadius = 48.dp,
-            placeholderName = artist.name,
-            modifier = Modifier.clip(CircleShape),
-        )
-        Spacer(modifier = Modifier.height(6.dp))
-        Text(
-            text = artist.name,
-            style = MaterialTheme.typography.bodySmall,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.fillMaxWidth(),
-        )
-        Text(
-            text = playCountLabel(artist.playCount),
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-        )
-    }
+    com.parachord.android.ui.components.ParachordArtistCard(
+        name = artist.name,
+        imageUrl = artist.imageUrl,
+        width = null,
+        onOpen = onClick,
+        onLongPress = { showMenu = true },
+        subtitle = playCountLabel(artist.playCount),
+        rank = artist.rank,
+    )
 
     if (showMenu) {
         com.parachord.android.ui.components.ArtistContextMenu(
