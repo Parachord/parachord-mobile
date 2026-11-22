@@ -4022,6 +4022,11 @@ class PlaybackController constructor(
             com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN,
             com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED,
             -> {
+                // Not signed in: ask the person to sign in to this plugin, then
+                // play the track again, once (desktop parachord#1523, #775).
+                if (outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN &&
+                    askToSignIn(track, resolverId, personAsked = !advancing)
+                ) return
                 if (outcome != com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED) {
                     handler.noteRefusalLater(resolverId, scope)
                 } else if (plainStreamInstead()) {
@@ -4092,6 +4097,67 @@ class PlaybackController constructor(
 
     /** The plain stream [playPlainStreamInstead] has ready for the track it names, taken by the next route. */
     private var pendingPlainStream: Pair<String, androidx.media3.common.MediaItem>? = null
+
+    /** The track a sign-in prompt has already played again once: a second refusal isn't asked about. */
+    @Volatile private var signInRetriedTrackId: String? = null
+
+    /**
+     * [resolverId] refused [track] as not signed in. When the shared
+     * [com.parachord.shared.plugin.PluginSignInPrompt] would ask (the plugin
+     * can sign in, a screen shows), playback stops on the track (Play loads
+     * it) and the question is asked outside this play, so the play lock isn't
+     * held while the person signs in. After a sign-in (or the plugin's quiet
+     * retry) the track plays again, once, if nothing else was played
+     * meanwhile. A "Not now" leaves it stopped, as desktop's holdFailedTrack;
+     * Play asks again. False when there's nothing to ask: the refused-source
+     * rule applies as before. Not for a manual source switch.
+     */
+    private suspend fun askToSignIn(track: TrackEntity, resolverId: String, personAsked: Boolean): Boolean {
+        if (activeSwitch != null) return false
+        if (signInRetriedTrackId == track.id) {
+            signInRetriedTrackId = null
+            return false
+        }
+        val handler = router.getPluginDrmHandler()
+        val prompt = handler.signInPromptOrNull() ?: return false
+        if (!prompt.wouldAsk(resolverId, personAsked)) return false
+        val name = handler.serviceName(resolverId)
+        Log.w(TAG, "'${track.title}': $resolverId says not signed in; asking to sign in")
+        playFailure = PlayFailure.START_FAILED
+        stateHolder.update {
+            copy(
+                currentTrack = currentTrack ?: track,
+                isPlaying = false,
+                isBuffering = false,
+                playbackError = com.parachord.shared.playback.drm.PluginDrmMessages.refused(
+                    com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN, name, planMessage = null,
+                ),
+            )
+        }
+        val begun = playsBegun
+        scope.launch {
+            val answer = try {
+                prompt.afterRefusal(resolverId, name, personAsked)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Sign-in prompt failed: ${e.message?.take(120)}")
+                return@launch
+            }
+            answer.message?.let { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+            if (answer.result != com.parachord.shared.plugin.SignInPromptResult.RETRY) return@launch
+            if (stateHolder.state.value.currentTrack?.id != track.id || playsBegun != begun || isPlayStarting ||
+                loadOnPlayTarget(loadOnPlay, track.id) == null
+            ) {
+                Log.d(TAG, "'${track.title}': signed in, but something else was played meanwhile")
+                return@launch
+            }
+            Log.d(TAG, "'${track.title}': signed in to $resolverId; playing it again")
+            signInRetriedTrackId = track.id
+            stateHolder.update { copy(playbackError = null) }
+            togglePlayPause()
+        }
+        return true
+    }
 
     /** A plugin DRM play that didn't start: Play loads it again. */
     private fun startFailedForDrm(track: TrackEntity) {

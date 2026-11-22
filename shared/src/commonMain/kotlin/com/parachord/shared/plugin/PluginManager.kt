@@ -77,6 +77,12 @@ class PluginManager constructor(
         /** The plugin implements `signOut`. */
         val hasSignOut: Boolean = false,
         /**
+         * The plugin implements `signInPromptDecision` (desktop's hiccup rule
+         * before a sign-in prompt, parachord#1523): a not-signed-in while its
+         * session looks live retries quietly instead of asking.
+         */
+        val hasSignInPromptDecision: Boolean = false,
+        /**
          * The plugin implements BOTH `getPlaybackManifest` and `relayLicense`
          * (desktop's plugin-supplied Widevine path: checked by presence, both
          * or neither).
@@ -853,6 +859,28 @@ class PluginManager constructor(
         )
     }
 
+    /**
+     * The plugin's `signInPromptDecision(inputs)` (desktop's sign-in hiccup
+     * rule, parachord#1523): [inputsJson] is `{ reason, cookiesSignedIn,
+     * streak: { firstAt, lastAt }, now }`; answers its `{ prompt, streak }`
+     * JSON, or null when it doesn't implement it. Throws on a failure.
+     */
+    @OptIn(kotlin.io.encoding.ExperimentalEncodingApi::class)
+    suspend fun signInPromptDecision(resolverId: String, inputsJson: String): String? {
+        ensureInitialized()
+        val b64 = Base64.encode(inputsJson.encodeToByteArray())
+        return pollAsync(
+            "sipd",
+            loaderCall(
+                "(function(){var r=window.__resolverLoader.getResolver&&window.__resolverLoader.getResolver('${escapeForJs(resolverId)}');" +
+                    "if(!r||typeof r.signInPromptDecision!=='function')return null;" +
+                    "return r.signInPromptDecision(JSON.parse(atob('$b64')));})()",
+            ),
+            attempts = STATUS_POLL_ATTEMPTS,
+            throwOnFailure = true,
+        )
+    }
+
     // ── The plugin-supplied Widevine path (capabilities.widevine) ──────
 
     /**
@@ -1085,6 +1113,7 @@ class PluginManager constructor(
                 authType = axe.settings?.authType,
                 hasSignIn = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signIn") == true,
                 hasSignOut = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signOut") == true,
+                hasSignInPromptDecision = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.containsKey("signInPromptDecision") == true,
                 hasDrmPair = (axe.implementation as? kotlinx.serialization.json.JsonObject)?.let {
                     it.containsKey("getPlaybackManifest") && it.containsKey("relayLicense")
                 } == true,

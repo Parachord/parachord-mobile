@@ -44,7 +44,12 @@ class PluginDrmHandler(
     private val trackResolverCache: TrackResolverCache,
     private val settingsStore: SettingsStore,
     private val statusStore: Lazy<PluginStatusStore>,
+    /** The sign-in prompt after a not-signed-in refusal (#775). */
+    private val signInPrompt: Lazy<com.parachord.shared.plugin.PluginSignInPrompt>? = null,
 ) : SourceHandler {
+
+    /** The shared sign-in prompt (#775), null in tests that don't wire one. */
+    fun signInPromptOrNull(): com.parachord.shared.plugin.PluginSignInPrompt? = signInPrompt?.value
 
     override fun canHandle(track: TrackEntity): Boolean = pluginManager.widevinePlugin(track.resolver) != null
 

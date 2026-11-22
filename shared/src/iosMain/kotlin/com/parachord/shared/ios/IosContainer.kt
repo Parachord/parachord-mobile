@@ -249,6 +249,8 @@ data class IosPluginStream(val kind: String, val url: String?, val message: Stri
         const val PLAY = "play"
         const val SETTINGS = "settings"
         const val REFUSED = "refused"
+        /** Refused as not signed in: the sign-in prompt may ask (#775), else as [REFUSED]. */
+        const val NOT_SIGNED_IN = "notSignedIn"
         const val START_FAILED = "startFailed"
         const val SUPERSEDED = "superseded"
     }
@@ -3216,7 +3218,12 @@ class IosContainer private constructor() {
                     // A plan or sign-in refusal: read the status again (a plan limit lands in "not playing").
                     refreshPluginStatus(resolverId)
                 }
-                IosPluginStream(IosPluginStream.REFUSED, null, outcome.message, plugin.name)
+                val kind = if (outcome.outcome == com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN) {
+                    IosPluginStream.NOT_SIGNED_IN
+                } else {
+                    IosPluginStream.REFUSED
+                }
+                IosPluginStream(kind, null, outcome.message, plugin.name)
             }
             is com.parachord.shared.playback.PluginStreamOutcome.StartFailed -> {
                 // The plugin's reason and its message, redacted (a URL in it loses its credentials).
@@ -3471,6 +3478,40 @@ class IosContainer private constructor() {
      * resolver's misses, or with `sourcesToo` every saved source of it.
      */
     var resolverSourcesClearer: ((String, Boolean) -> Unit)? = null
+
+    /**
+     * Parachord is the app in front on the phone. Swift keeps it current
+     * (`AppBootstrap`, from the scene's activation), so the sign-in prompt
+     * asks only when someone can answer.
+     */
+    @kotlin.concurrent.Volatile
+    var phoneAppInFront: Boolean = false
+
+    /** Desktop's "sign in to X?" prompt after a not-signed-in refusal (#775, parachord#1523). */
+    val pluginSignInPrompt: com.parachord.shared.plugin.PluginSignInPrompt by lazy {
+        com.parachord.shared.plugin.PluginSignInPrompt.create(
+            pluginManager, pluginStatusStore, screenShowing = { phoneAppInFront },
+        )
+    }
+
+    /** Whether a not-signed-in refusal from [resolverId] would be asked about now. */
+    suspend fun wouldAskSignIn(resolverId: String, personAsked: Boolean): Boolean =
+        pluginSignInPrompt.wouldAsk(resolverId, personAsked)
+
+    /** Asks to sign in to [resolverId]; true = play the track again. [onMessage] gets the sign-in's words. */
+    suspend fun promptPluginSignIn(resolverId: String, personAsked: Boolean, onMessage: (String) -> Unit): Boolean {
+        val name = pluginManager.plugins.value.firstOrNull { it.id == resolverId }?.name
+            ?: com.parachord.shared.playback.resolverDisplayName(resolverId)
+        val outcome = pluginSignInPrompt.afterRefusal(resolverId, name, personAsked)
+        outcome.message?.let(onMessage)
+        return outcome.result == com.parachord.shared.plugin.SignInPromptResult.RETRY
+    }
+
+    /** The question up now (or null), for `RootView`'s alert. */
+    fun watchSignInPrompt(onEach: (com.parachord.shared.plugin.SignInPromptRequest?) -> Unit): Cancellable =
+        FlowWatcher(appScope).watch(pluginSignInPrompt.pending) { onEach(it as? com.parachord.shared.plugin.SignInPromptRequest) }
+
+    fun answerSignInPrompt(requestId: Long, signIn: Boolean) = pluginSignInPrompt.answer(requestId, signIn)
 
     /** Reads every status-capable plugin (app start, Settings) or one ([id], its sheet). */
     fun refreshPluginStatus(id: String?) {

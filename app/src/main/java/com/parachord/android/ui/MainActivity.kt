@@ -433,6 +433,9 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         )
     }
 
+    // "Sign in to X?" after a not-signed-in refusal (#775).
+    com.parachord.android.ui.components.PluginSignInPromptDialog()
+
     var showActionOverlay by rememberSaveable { mutableStateOf(false) }
     var showCreatePlaylistDialog by remember { mutableStateOf(false) }
     var showImportPlaylistDialog by remember { mutableStateOf(false) }
