@@ -1719,3 +1719,8 @@ NSHTTPURLResponse`.
   Android too, and the persisted Spotify cooldown is the safety net.
 - `DevSmokeTestView` (the old phase 1–4 smoke tests, with its own player) is
   only reachable from its `#Preview`; it isn't a tab in the app.
+
+
+## Volume Normalization (Settings → General)
+
+The per-plug-in loudness trim sits on the General tab after the Playback section, with desktop's title and words. A row is enabled by `IosContainer.isResolverVolumeControllable` (shared `ResolverVolume.controllability` over the plug-in's capabilities, `embedVolumeApplies = false`): embedded pages (SoundCloud's widget, Bandcamp's embed) are off as "System vol" because WebKit ignores a media element's `volume` on iOS. A slider move posts `IosVolumeOffsets.changed`; `QueuePlaybackCoordinator` applies it live (AVPlayer gain, Spotify Connect volume) after 250 ms of quiet.

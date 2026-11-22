@@ -89,29 +89,61 @@ class ResolverVolumeTest {
         assertEquals(0.0f, ResolverVolume.effectiveVolumeFraction(0, 0))
     }
 
-    // ── what can't be controlled ─────────────────────────────────────
+    // ── what can't be controlled (decided by capabilities, never an id) ──
+
+    private val appleMusic = mapOf("resolve" to true, "stream" to true, "systemVolume" to true)
+    private val bandcamp = mapOf("resolve" to true, "stream" to false, "embedPlayer" to true)
+    private val soundcloud = mapOf("resolve" to true, "stream" to true, "embedPlayer" to true)
+    private val spotify = mapOf("resolve" to true, "stream" to true)
+    private val browserOnly = mapOf("resolve" to true, "stream" to false)
 
     @Test
-    fun `apple music is not controllable on any platform`() {
-        // iOS has no per-app volume and ApplicationMusicPlayer follows the
-        // system; desktop greys it out for the same reason. A slider here
-        // would be a placebo.
-        assertFalse(ResolverVolume.isVolumeControllable("applemusic"))
-        assertEquals("System vol", ResolverVolume.uncontrollableReason("applemusic"))
-    }
-
-    @Test
-    fun `browser-playback resolvers are not controllable`() {
-        assertFalse(ResolverVolume.isVolumeControllable("bandcamp"))
-        assertFalse(ResolverVolume.isVolumeControllable("youtube"))
-        assertEquals("Opens in browser", ResolverVolume.uncontrollableReason("youtube"))
-    }
-
-    @Test
-    fun `the in-app players are controllable`() {
-        for (id in listOf("spotify", "soundcloud", "localfiles")) {
-            assertTrue(ResolverVolume.isVolumeControllable(id), "$id should be controllable")
-            assertNull(ResolverVolume.uncontrollableReason(id))
+    fun `a system volume plug-in is off with the system vol reason on both platforms`() {
+        for (embedApplies in listOf(true, false)) {
+            val c = ResolverVolume.controllability(appleMusic, embedApplies)
+            assertFalse(c.controllable)
+            assertEquals("System vol", c.reason)
+            assertEquals("Use system volume to control Apple Music", c.tip("Apple Music"))
         }
+    }
+
+    @Test
+    fun `a plug-in with neither stream nor embed is browser playback and off`() {
+        val c = ResolverVolume.controllability(browserOnly, true)
+        assertFalse(c.controllable)
+        assertEquals("Browser", c.reason)
+        assertEquals("Browser playback - volume control not available", c.tip("YouTube"))
+    }
+
+    @Test
+    fun `an embed plug-in is on where the web view applies volume`() {
+        assertTrue(ResolverVolume.controllability(bandcamp, true).controllable)
+        assertTrue(ResolverVolume.controllability(soundcloud, true).controllable)
+    }
+
+    @Test
+    fun `an embed plug-in is off on iOS because WebKit ignores media volume`() {
+        for (caps in listOf(bandcamp, soundcloud)) {
+            val c = ResolverVolume.controllability(caps, false)
+            assertFalse(c.controllable)
+            assertEquals("System vol", c.reason)
+        }
+    }
+
+    @Test
+    fun `stream plug-ins and unknown capabilities are on`() {
+        assertTrue(ResolverVolume.controllability(spotify, false).controllable)
+        assertTrue(ResolverVolume.controllability(spotify, true).controllable)
+        val unknown = ResolverVolume.controllability(null, false)
+        assertTrue(unknown.controllable)
+        assertNull(unknown.reason)
+        assertNull(unknown.tip("X"))
+    }
+
+    @Test
+    fun `a changed offset re-applies only to the playing resolver`() {
+        assertTrue(ResolverVolume.reappliesLive("spotify", "spotify"))
+        assertFalse(ResolverVolume.reappliesLive("spotify", "bandcamp"))
+        assertFalse(ResolverVolume.reappliesLive("spotify", null))
     }
 }

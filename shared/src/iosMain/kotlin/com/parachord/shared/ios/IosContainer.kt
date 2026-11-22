@@ -882,11 +882,20 @@ class IosContainer private constructor() {
     /** Whether a slider should be offered at all — false for Apple Music
      *  (system volume) and browser-playback resolvers. */
     fun isResolverVolumeControllable(resolverId: String): Boolean =
-        ResolverVolume.isVolumeControllable(resolverId)
+        resolverVolumeControl(resolverId).controllable
 
     /** Short reason shown beside a disabled slider, or null when controllable. */
     fun resolverVolumeDisabledReason(resolverId: String): String? =
-        ResolverVolume.uncontrollableReason(resolverId)
+        resolverVolumeControl(resolverId).reason
+
+    /** Decided by the plug-in's declared capabilities (shared rule); embed
+     *  pages can't take a volume on iOS (WebKit ignores a media element's
+     *  `volume`), so `embedVolumeApplies` is false here. */
+    private fun resolverVolumeControl(resolverId: String): ResolverVolume.VolumeControl =
+        ResolverVolume.controllability(
+            pluginManager.plugins.value.firstOrNull { it.id == resolverId }?.capabilities,
+            embedVolumeApplies = false,
+        )
 
     suspend fun lastSyncAtMs(): Long = settingsStore.lastSyncAtFlow.first()
 

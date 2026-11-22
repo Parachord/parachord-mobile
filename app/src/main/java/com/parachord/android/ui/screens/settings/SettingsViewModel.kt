@@ -45,6 +45,7 @@ class SettingsViewModel constructor(
     private val syncEngine: com.parachord.android.sync.SyncEngine,
     private val pluginUserConfig: com.parachord.shared.plugin.PluginUserConfig,
     private val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore,
+    private val playbackController: com.parachord.android.playback.PlaybackController,
 ) : ViewModel() {
 
     // ── N-way multimaster (dev) ──────────────────────────────────────
@@ -767,6 +768,8 @@ class SettingsViewModel constructor(
         viewModelScope.launch {
             settingsStore.setResolverVolumeOffsets(_resolverVolumeOffsets.value)
         }
+        // Playing from this resolver now? Apply it at once (debounced there).
+        playbackController.onResolverVolumeOffsetChanged(resolverId)
     }
 
     private val _appleMusicConnecting = MutableStateFlow(false)

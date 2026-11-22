@@ -82,6 +82,8 @@ spotify:     0    applemusic:  0    localfiles:  0    subsonic: 0
 soundcloud:  0    bandcamp:   -3    youtube:    -6
 ```
 
+**Where and how (desktop's Settings → General → Volume Normalization, after Playback Quality; both apps).** One slider per enabled plug-in in resolver order, -12 to +6 dB (`ResolverVolume`). **Whether a row works is decided by the plug-in's capabilities, never its id** (`ResolverVolume.controllability`, desktop parachord#1522): `capabilities.systemVolume` (Apple Music) is off with "System vol"; neither `stream` nor `embedPlayer` is off with "Browser". **iOS also turns off `embedPlayer` plug-ins (SoundCloud, Bandcamp) as "System vol":** their pages set an HTML media element's `volume`, which WebKit on iOS ignores; Android's WebView applies it, so Bandcamp and SoundCloud sliders work there. **A changed offset applies at once** to the playing track when it came from that resolver (`ResolverVolume.reappliesLive`; desktop's use-volume.js): ExoPlayer's gain (never the silent keep-alive loop), the embed page, Spotify's Connect volume (honoring `rateLimitRemainingMs()`), after 250 ms of quiet so a drag sends one request (Android `PlaybackController.onResolverVolumeOffsetChanged`, iOS `QueuePlaybackCoordinator.reapplyVolumeLive`). A play applies it at its start as before.
+
 ### Playback Routing
 
 Each resolver type routes to a specific playback mechanism:

@@ -284,6 +284,7 @@ final class IosSpotifyConnect {
 
     // Spotify Connect device-resolution state (mirrors Android
     // SpotifyPlaybackHandler). Plumbing — not observable UI state.
+    @ObservationIgnored private var lastPlayDeviceId: String?
     @ObservationIgnored private var deviceVerified = false
     @ObservationIgnored private var lastResolvedLocalId: String?
     /// Whether `lastResolvedLocalId` is this phone's own Spotify device (not a
@@ -727,6 +728,7 @@ final class IosSpotifyConnect {
         case 200...204:
             lastAction = "Spotify playback started"
             isPlaying = true
+            lastPlayDeviceId = deviceId
             await applyConnectVolume(client, deviceId: deviceId)
             return true
         case 403: lastAction = "Spotify Premium required"; return false
@@ -750,6 +752,12 @@ final class IosSpotifyConnect {
     /// Fire-and-forget by contract: a volume failure must NEVER fail playback.
     /// Spotify Free devices are `restricted` and 403 this endpoint, and the
     /// music is already playing by the time we get here.
+    /// A changed offset, applied to the device now playing (fire-and-forget).
+    func reapplyConnectVolume() async {
+        guard let deviceId = lastPlayDeviceId else { return }
+        await applyConnectVolume(IosContainer.companion.shared.spotifyClient, deviceId: deviceId)
+    }
+
     private func applyConnectVolume(_ client: SpotifyClient, deviceId: String) async {
         // Advisory cooldown check. Volume is an interactive PUT and so bypasses
         // RateLimitGate (CLAUDE.md), but poking a throttled account is what
@@ -1587,6 +1595,8 @@ private extension MusicAuthorization.Status {
 /// hopping actors on the play path.
 final class IosVolumeOffsets: @unchecked Sendable {
     static let shared = IosVolumeOffsets()
+    /// Posted when a slider moves; `userInfo["resolver"]` is the resolver id.
+    static let changed = Notification.Name("pc.resolverVolumeChanged")
     private let lock = NSLock()
     private var offsets: [String: Int] = [:]
 
@@ -1627,6 +1637,14 @@ final class IosAVPlayer {
     }
 
     private var player: AVPlayer?
+    /// The resolver whose offset the loaded item was started at ([applyVolume]).
+    private var loadedResolver: String?
+
+    /// A changed offset, applied to the item now playing (desktop re-applies live).
+    func applyVolume(for resolver: String) {
+        guard loadedResolver == resolver else { return }
+        player?.volume = IosVolumeOffsets.shared.fraction(for: resolver)
+    }
     private var timeObserver: Any?
     private var statusObservation: NSKeyValueObservation?
     private var endObservation: NSObjectProtocol?
@@ -1761,6 +1779,7 @@ final class IosAVPlayer {
         // gain independent of system volume, so this is the half of desktop's
         // normalizer that genuinely ports to iOS.
         newPlayer.volume = IosVolumeOffsets.shared.fraction(for: resolver)
+        loadedResolver = resolver
         // KVO on `status` — when item becomes `.readyToPlay`, durationis known
         // and we can publish it. `.failed` surfaces the error to the UI.
         statusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
@@ -2437,6 +2456,23 @@ final class QueuePlaybackCoordinator {
         }
     }
 
+    @ObservationIgnored private var volumeObserver: NSObjectProtocol?
+    @ObservationIgnored private var volumeReapplyTask: Task<Void, Never>?
+
+    @MainActor private func reapplyVolumeLive(_ resolver: String) {
+        volumeReapplyTask?.cancel()
+        volumeReapplyTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(nanoseconds: 250_000_000)
+            guard let self, !Task.isCancelled else { return }
+            guard ResolverVolume.shared.reappliesLive(changedResolver: resolver, currentResolver: self.currentTrack?.resolver) else { return }
+            if resolver == "spotify" {
+                await self.spotify.reapplyConnectVolume()
+            } else {
+                self.player.applyVolume(for: resolver)
+            }
+        }
+    }
+
     // ── Resolver deck (Now Playing "Playing From") ─────────────────────
 
     /// The resolver currently producing audio, for the Now Playing deck.
@@ -2637,6 +2673,13 @@ final class QueuePlaybackCoordinator {
         }
         self.musicKit.onTrackEnded = { [weak self] in
             self?.autoAdvance()
+        }
+        // A slider moved: apply it to what plays now when it's that
+        // resolver's track, after 250 ms of quiet (one Spotify request per drag).
+        volumeObserver = NotificationCenter.default.addObserver(
+            forName: IosVolumeOffsets.changed, object: nil, queue: .main) { [weak self] note in
+            guard let resolver = note.userInfo?["resolver"] as? String else { return }
+            MainActor.assumeIsolated { self?.reapplyVolumeLive(resolver) }
         }
         self.soundCloud.onTrackEnded = { [weak self] in
             self?.autoAdvance()

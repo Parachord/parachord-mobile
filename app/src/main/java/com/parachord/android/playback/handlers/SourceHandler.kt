@@ -67,6 +67,9 @@ interface EmbedPlaybackHandler : ExternalPlaybackHandler {
     /** Gain (0..1) for the next [play]: the resolver's dB offset, set by the controller. */
     var volumeFraction: Float
 
+    /** Re-apply [fraction] to the playing page now (a changed offset); [volumeFraction] is for the next play. */
+    suspend fun setVolume(fraction: Float) {}
+
     /** Length of the current track in ms, from the player; 0 when unknown. */
     fun getDuration(): Long
 

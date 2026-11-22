@@ -310,6 +310,34 @@ fun SettingsScreen(
             windowInsets = WindowInsets(0),
         )
 
+        // Volume Normalization rows (General tab): enabled, connected resolver
+        // plug-ins in the user's resolver order, as the Plug-Ins tab's priority list.
+        val axePluginsForVolume by viewModel.loadedPlugins.collectAsStateWithLifecycle()
+        val disabledPluginsForVolume by viewModel.disabledPlugins.collectAsStateWithLifecycle()
+        val activeResolversForVolume by viewModel.activeResolvers.collectAsStateWithLifecycle()
+        val notPlayingForVolume by viewModel.notPlayingResolvers.collectAsStateWithLifecycle()
+        val spotifyClientIdForVolume by viewModel.spotifyClientId.collectAsStateWithLifecycle()
+        val volumeRows = remember(
+            axePluginsForVolume, disabledPluginsForVolume, activeResolversForVolume, notPlayingForVolume,
+            resolverOrder, spotifyConnected, spotifyClientIdForVolume, soundCloudConnected,
+            appleMusicConfigured, appleMusicAuthorized,
+        ) {
+            val resolvers = buildPluginList(axePluginsForVolume).filter { it.category == PluginCategory.RESOLVER }
+            fun connected(p: PluginInfo): Boolean = p.id !in disabledPluginsForVolume && when (p.id) {
+                "spotify" -> spotifyConnected && spotifyClientIdForVolume.isNotBlank()
+                "soundcloud" -> soundCloudConnected
+                "applemusic" -> appleMusicConfigured && appleMusicAuthorized
+                "local-files", "localfiles", "bandcamp" -> true
+                else -> axePluginsForVolume.any { it.id == p.id }
+            }
+            val on = resolvers.filter {
+                connected(it) && (activeResolversForVolume.isEmpty() || it.resolverId in activeResolversForVolume) &&
+                    it.resolverId !in notPlayingForVolume
+            }
+            val rank = { id: String -> resolverOrder.indexOf(id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+            on.sortedBy { rank(it.resolverId) }.map { VolumeRow(it.resolverId, it.name, it.shared?.capabilities) }
+        }
+
         // A plug-in sheet's quality line opens General's Playback Quality.
         var tabRequest by remember { mutableStateOf<Int?>(null) }
         SwipeableTabLayout(
@@ -331,8 +359,6 @@ fun SettingsScreen(
                     libreFmConnected = libreFmConnected,
                     soundCloudConnected = soundCloudConnected,
                     resolverOrder = resolverOrder,
-                    resolverVolumeOffsets = resolverVolumeOffsets,
-                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                     onResolverOrderChanged = { viewModel.setResolverOrder(it) },
                     onSpotifyToggle = {
                         if (spotifyConnected) viewModel.disconnectSpotify()
@@ -409,12 +435,18 @@ fun SettingsScreen(
                     onPlaybackSpatialChanged = { viewModel.setPlaybackSpatial(it) },
                     playbackQualityCopy = playbackQualityCopy,
                     canPlayAtmos = viewModel.audioCapabilities.canPlayAtmos,
+                    volumeRows = volumeRows,
+                    resolverVolumeOffsets = resolverVolumeOffsets,
+                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                 )
                 3 -> AboutTab()
             }
         }
     }
 }
+
+/** One Volume Normalization row: the plug-in and what it declares (decides if its slider works). */
+private data class VolumeRow(val id: String, val name: String, val capabilities: Map<String, Boolean>?)
 
 // ── Plug-Ins Tab ───────────────────────────────────────────────────
 
@@ -434,8 +466,6 @@ private fun PlugInsTab(
     onSpotifyToggle: () -> Unit,
     onLastFmToggle: () -> Unit,
     resolverOrder: List<String> = emptyList(),
-    resolverVolumeOffsets: Map<String, Int> = emptyMap(),
-    onResolverVolumeOffsetChanged: (String, Int) -> Unit = { _, _ -> },
     onResolverOrderChanged: (List<String>) -> Unit = {},
     soundCloudCredentialsSaved: Boolean = false,
     onSoundCloudSaveCredentials: (String, String) -> Unit = { _, _ -> },
@@ -782,60 +812,6 @@ private fun PlugInsTab(
         item { Spacer(modifier = Modifier.height(24.dp)) }
 
         // Meta Services section
-        // Volume Balance — per-resolver loudness trim (desktop parity).
-        if (orderedEnabled.isNotEmpty()) {
-            item { SettingsGroupLabel("Volume Balance") }
-            item {
-                Text(
-                    text = "Trim louder sources so switching between them doesn't jump. " +
-                        "Negative values reduce volume.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            items(orderedEnabled.toList(), key = { "vol-$it" }) { id ->
-                val plugin = findPlugin(id)
-                // Apple Music is listed but DISABLED, as on desktop and iOS:
-                // MusicKit's `music.volume` is inert on Android WebView (DRM
-                // audio bypasses the JS pipeline), so a working slider is
-                // impossible. Hiding the row would be worse — users would ask
-                // why the loudest source is missing from the loudness control.
-                val controllable = ResolverVolume.isVolumeControllable(id)
-                val reason = ResolverVolume.uncontrollableReason(id)
-                val offset = resolverVolumeOffsets[id] ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .alpha(if (controllable) 1f else 0.5f),
-                ) {
-                    Text(
-                        text = plugin?.name ?: id,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.width(96.dp),
-                    )
-                    Slider(
-                        value = offset.toFloat(),
-                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
-                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
-                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
-                        enabled = controllable,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = if (controllable) "$offset dB" else (reason ?: ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(72.dp),
-                        textAlign = TextAlign.End,
-                    )
-                }
-            }
-        }
-
         item { SettingsGroupLabel("Meta Services") }
         item {
             Text(
@@ -3451,6 +3427,9 @@ private fun GeneralTab(
     onPlaybackSpatialChanged: (Boolean) -> Unit,
     playbackQualityCopy: com.parachord.shared.playback.drm.PlaybackQualityCopy,
     canPlayAtmos: Boolean,
+    volumeRows: List<VolumeRow>,
+    resolverVolumeOffsets: Map<String, Int>,
+    onResolverVolumeOffsetChanged: (String, Int) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SettingsGroupLabel("Appearance") }
@@ -3532,6 +3511,64 @@ private fun GeneralTab(
                     headlineContent = { Text(com.parachord.shared.playback.drm.PlaybackQualityCopy.NO_ATMOS_DECODER) },
                     supportingContent = { Text("Dolby Atmos mixes need an E-AC-3 decoder, which this phone doesn’t have.") },
                 )
+            }
+        }
+        // Volume Normalization (desktop's General tab, after Playback Quality):
+        // per-plug-in loudness trim.
+        if (volumeRows.isNotEmpty()) {
+            item { SettingsGroupLabel("Volume Normalization") }
+            item {
+                Text(
+                    text = "Balance loudness between different sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Text(
+                    text = "Adjust each plug-in\u2019s volume to balance loudness. Negative values reduce volume for louder sources.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            items(volumeRows, key = { "vol-${it.id}" }) { (id, name, capabilities) ->
+                // Apple Music is listed but DISABLED, as on desktop and iOS:
+                // MusicKit's `music.volume` is inert on Android WebView (DRM
+                // audio bypasses the JS pipeline), so a working slider is
+                // impossible. Hiding the row would be worse.
+                val control = ResolverVolume.controllability(capabilities, embedVolumeApplies = true)
+                val controllable = control.controllable
+                val reason = control.reason
+                val offset = resolverVolumeOffsets[id] ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .alpha(if (controllable) 1f else 0.5f),
+                ) {
+                    Text(
+                        text = name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(96.dp),
+                    )
+                    Slider(
+                        value = offset.toFloat(),
+                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
+                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
+                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
+                        enabled = controllable,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = if (controllable) "$offset dB" else (reason ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(72.dp),
+                        textAlign = TextAlign.End,
+                    )
+                }
             }
         }
     }

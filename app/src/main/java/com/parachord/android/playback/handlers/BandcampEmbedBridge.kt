@@ -212,6 +212,12 @@ class BandcampEmbedBridge constructor(
     }
 
     /** The script's result as WebView reports it; null when the Main thread didn't get to it in time. */
+    /** Re-apply the gain to the page already playing (a changed offset). */
+    suspend fun setVolume(volume: Float) {
+        if (tracker == null) return
+        evaluate(BandcampEmbed.volumeScript(volume.toDouble()))
+    }
+
     private suspend fun evaluate(script: String): String? = withTimeoutOrNull(EVALUATE_TIMEOUT_MS) {
         withContext(Dispatchers.Main) {
             suspendCancellableCoroutine { continuation ->
