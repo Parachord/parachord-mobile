@@ -1061,6 +1061,7 @@ class IosContainer private constructor() {
             createPlaylist = { playlist, tracks -> libraryRepository.createPlaylistWithTracks(playlist, tracks) },
             findPlaylist = { id -> playlistDao.getById(id) },
             playlistLookupPluginName = { u -> pluginManager.playlistLookupPluginName(u) },
+            replaceTracks = { id, tracks, sig -> libraryRepository.replaceLinkImportTracks(id, tracks, sig) },
         )
     }
 

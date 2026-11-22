@@ -354,7 +354,15 @@ Common Mistakes #6 — don't reimplement plugin logic natively — applied to *d
   `soundcloud-import`: the provider comes from `ResolvedProtocolPlay.providerId`) and the
   native ids the tracklist carries (`ProtocolTrack.spotifyId` / `appleMusicId`, plus album
   id, length and cover); anything else is a hosted XSPF (`HostedXspfService.importHostedXspf`). A link a plugin claims (`PluginManager.playlistLookupPluginName`) whose lookup fails is an error (`PlaylistLookupFailedException`, "Couldn’t load that playlist from X. Try again."), never an XSPF fetch, as on desktop: Amazon answers a plain fetch of its page with 400 (#778). A plugin's `lookupPlaylist` gets up to 60 s on both apps (`PLAYLIST_LOOKUP_TIMEOUT_MS`; desktop sets no limit): Amazon's waits behind its other page loads, and took 9.6 s in the iOS simulator.
-  Its id is `<source>-<uuid>` (`spotify-import-…`), which no provider owns: sync reads a
+  **The same link is the same playlist (#778, desktop's `hosted-<hash(url)>`).** Its id is
+  `<source>-link-<fingerprint of the link>` (`linkImportKey`: the link without its fragment or
+  `si` / `utm_*` parameters), and the row's `sourceContentHash` holds a fingerprint of the link's
+  tracklist (`linkTracklistSignature`; a link import has no `sourceUrl`, so the XSPF poller never
+  reads it). Importing the link again returns that playlist: unchanged since the last import, it
+  stays as it is, with the user's edits; changed, its tracks are replaced by the link's
+  (`LibraryRepository.replaceLinkImportTracks`, flagged for sync like any edit). Before this every
+  import of a link made a new playlist. Imports from before keep their `<source>-<uuid>` ids.
+  The id is one no provider owns: sync reads a
   playlist's provider from its id only through the shared `impliedPlaylistProvider`
   (`shared/.../sync/PlaylistIdProvider.kt`), which answers null for `<provider>-import-…`
   ids (saved recommendations' `-import-rec-…` too). So a link import has no pull source,

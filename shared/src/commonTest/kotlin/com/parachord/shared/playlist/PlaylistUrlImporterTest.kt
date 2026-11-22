@@ -54,6 +54,7 @@ class PlaylistUrlImporterTest {
 
     private val saved = mutableListOf<Pair<Playlist, List<Track>>>()
     private val hostedImports = mutableListOf<String>()
+    private val replaced = mutableListOf<Pair<String, List<Track>>>()
     private var spotifyConnected = true
 
     private fun importer(
@@ -86,6 +87,11 @@ class PlaylistUrlImporterTest {
             createPlaylist = { p, t -> saved.add(p to t) },
             findPlaylist = { id -> saved.firstOrNull { it.first.id == id }?.first },
             playlistLookupPluginName = claimingPlugin,
+            replaceTracks = { id, t, sig ->
+                replaced.add(id to t)
+                val i = saved.indexOfFirst { it.first.id == id }
+                saved[i] = saved[i].first.copy(sourceContentHash = sig, trackCount = t.size) to t
+            },
         )
     }
 
@@ -115,10 +121,30 @@ class PlaylistUrlImporterTest {
         assertEquals(first.playlistId, again.playlistId)
         assertEquals(first.trackCount, again.trackCount)
         assertEquals(1, saved.size)
-        // Without a key every import is a new playlist, as before.
+        // Without a key the link is the key: a second import of it is the same playlist.
         val other = imp.importFromUrl("https://open.spotify.com/playlist/P1")
         assertTrue(other.playlistId != first.playlistId)
         assertEquals(2, saved.size)
+        val otherAgain = imp.importFromUrl("https://open.spotify.com/playlist/P1?si=abc")
+        assertEquals(other.playlistId, otherAgain.playlistId)
+        assertEquals(2, saved.size)
+    }
+
+    @Test fun `a re-import keeps the copy when the link didn't change — and follows it when it did`() = runTest {
+        var tracks = """[{"title":"A","artist":"X"},{"title":"B","artist":"Y"}]"""
+        val imp = importer(pluginLookup = { """{"resolverId":"amazonmusic","playlist":{"name":"Mix","tracks":$tracks}}""" })
+        val first = imp.importFromUrl("https://music.amazon.com/playlists/B1")
+        assertTrue(first.playlistId.startsWith("amazonmusic-import-link-"))
+        assertEquals(2, first.trackCount)
+        imp.importFromUrl("https://music.amazon.com/playlists/B1")
+        assertEquals(1, saved.size)
+        assertTrue(replaced.isEmpty())
+        tracks = """[{"title":"A","artist":"X"},{"title":"C","artist":"Z"},{"title":"D","artist":"W"}]"""
+        val again = imp.importFromUrl("https://music.amazon.com/playlists/B1")
+        assertEquals(first.playlistId, again.playlistId)
+        assertEquals(3, again.trackCount)
+        assertEquals(1, saved.size)
+        assertEquals(listOf("C", "D"), replaced.single().second.drop(1).map { it.title })
     }
 
     @Test fun `a Spotify playlist imports with its Spotify ids`() = runTest {
