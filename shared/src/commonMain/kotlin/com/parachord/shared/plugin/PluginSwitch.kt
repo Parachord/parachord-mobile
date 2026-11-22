@@ -65,10 +65,16 @@ fun playbackSwitchState(
     active: Boolean,
     playbackOff: Boolean,
     limit: PlaybackLimit? = null,
+    hostCannotPlay: Boolean = false,
 ): PluginSwitchState {
     val shown = !plugin.isMetaService && plugin.cap("resolve") && active
     if (limit != null && limit.blocked) {
         return PluginSwitchState(shown, checked = false, disabled = true, hint = limit.message ?: limit.label ?: "Your plan can’t play from it")
+    }
+    // Mobile addition: this host can't run the plugin's only way to play
+    // (shared hostCannotPlay), so the switch is off and locked.
+    if (hostCannotPlay) {
+        return PluginSwitchState(shown, checked = false, disabled = true, hint = HOST_CANNOT_PLAY_MESSAGE)
     }
     return if (playbackOff) {
         PluginSwitchState(shown, checked = false, disabled = false, hint = "Off: found in search, played from other plug-ins")

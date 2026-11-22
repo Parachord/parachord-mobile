@@ -310,11 +310,17 @@ class WebSessionHost(
 
     private suspend fun runLoad(url: String, options: LoadOptions): LoadResult {
         val startedAt = nowMs()
+        var outcome = "failed"
         try {
-            return runLoadTimed(url, options)
+            val result = runLoadTimed(url, options)
+            outcome = "ended on ${WebSessionRules.logPath(result.finalUrl)}, ${result.captures?.size ?: 0} captures"
+            return result
+        } catch (e: WebSessionException) {
+            outcome = "failed: ${e.reason} (${e.message})"
+            throw e
         } finally {
-            // The debug aid for slow page flows: the path only, never a query or a body.
-            com.parachord.shared.platform.Log.d("WebSession", "load ${WebSessionRules.logPath(url)} took ${nowMs() - startedAt}ms")
+            // The debug aid for slow page flows: paths only, never a query or a body.
+            com.parachord.shared.platform.Log.d("WebSession", "load ${WebSessionRules.logPath(url)} took ${nowMs() - startedAt}ms, $outcome")
         }
     }
 

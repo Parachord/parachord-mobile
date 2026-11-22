@@ -4020,6 +4020,22 @@ enum JsPolyfills {
             DispatchQueue.main.async { UIApplication.shared.open(link) }
         }
         bridge.setObject(openExternal, forKeyedSubscript: "openExternal" as NSString)
+        // The `webSession` host bridge (#779, desktop parachord#1356): the
+        // bootstrap's `web-session-bridge` block (the same text as Android's)
+        // calls these. The shared `WebSessionJsCalls` runs each call and
+        // answers `window.__wsCallbacks[callbackId]`; a sign-in tick's verdict
+        // comes back through `webSessionDecide`. Android parity:
+        // NativeBridge.webSessionCall / webSessionDecide. No value is logged.
+        let webSessionCall: @convention(block) (String, String, String) -> Void = { callbackId, method, argsJson in
+            if !IosContainer.companion.shared.webSessionCall(callbackId: callbackId, method: method, argsJson: argsJson) {
+                NSLog("webSessionCall: refused a malformed callback id")
+            }
+        }
+        let webSessionDecide: @convention(block) (String, Bool) -> Void = { callbackId, verdict in
+            IosContainer.companion.shared.webSessionDecide(callbackId: callbackId, verdict: verdict)
+        }
+        bridge.setObject(webSessionCall, forKeyedSubscript: "webSessionCall" as NSString)
+        bridge.setObject(webSessionDecide, forKeyedSubscript: "webSessionDecide" as NSString)
         context.setObject(bridge, forKeyedSubscript: "NativeBridge" as NSString)
     }
 

@@ -44,10 +44,11 @@ private const val TAG = "DarwinResponseGuard"
  * session; `configureRequest` still applies.
  */
 @OptIn(UnsafeNumber::class)
-fun DarwinClientEngineConfig.useResponseTypeGuard() {
+fun DarwinClientEngineConfig.useResponseTypeGuard(configure: NSURLSessionConfiguration.() -> Unit = {}) {
     val ktorDelegate = KtorNSURLSessionDelegate()
     val configuration = NSURLSessionConfiguration.defaultSessionConfiguration().apply {
         setHTTPCookieStorage(null)
+        configure()
     }
     val session = NSURLSession.sessionWithConfiguration(
         configuration,

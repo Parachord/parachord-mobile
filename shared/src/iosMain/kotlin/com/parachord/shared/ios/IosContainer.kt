@@ -137,6 +137,7 @@ import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
 import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.CoroutineExceptionHandler
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -3029,13 +3030,72 @@ class IosContainer private constructor() {
      */
     val pluginJsRuntime: IosJsRuntime by lazy { IosJsRuntime() }
 
+    // ── webSession host bridge (desktop parachord#1356) ─────────────────
+
+    /**
+     * Set from Swift at start-up (`AppBootstrap`, before the plugin host
+     * starts): the hidden `WKWebView` and sign-in screen behind the shared
+     * web-session engine. Unset, every webSession call answers the bridge's
+     * own refusal.
+     */
+    var webSessionView: com.parachord.shared.websession.IosWebSessionView? = null
+
+    /**
+     * The `webSession` host bridge: one shared [com.parachord.shared.websession.WebSessionHost]
+     * per session (Amazon Music's, desktop's `amazon-web-session.js` config)
+     * over [webSessionView], as Android's Koin graph builds it.
+     */
+    val webSessionBridge: com.parachord.shared.websession.WebSessionBridge by lazy {
+        val config = com.parachord.shared.websession.WebSessionConfigs.AMAZON_MUSIC
+        val view = webSessionView
+        if (view == null) {
+            Log.w("WebSession", "no web view installed; webSession calls will be refused")
+            com.parachord.shared.websession.WebSessionBridge(emptyMap())
+        } else {
+            val host = com.parachord.shared.websession.WebSessionHost(
+                config = config,
+                platform = com.parachord.shared.websession.IosWebSessionPlatform(config, view),
+                httpClient = com.parachord.shared.websession.createWebSessionHttpClient(),
+                scope = appScope,
+            )
+            com.parachord.shared.websession.WebSessionBridge(mapOf(config.id to host))
+        }
+    }
+
+    private val webSessionJs: com.parachord.shared.websession.WebSessionJsCalls by lazy {
+        com.parachord.shared.websession.WebSessionJsCalls(
+            bridge = webSessionBridge,
+            scope = appScope,
+            evaluate = { script -> withContext(Dispatchers.Main) { pluginJsRuntime.evaluate(script) } },
+        )
+    }
+
+    /** `NativeBridge.webSessionCall` (the bootstrap's `__wsCall`); false for a malformed callback id. */
+    fun webSessionCall(callbackId: String, method: String, argsJson: String): Boolean =
+        webSessionJs.call(callbackId, method, argsJson)
+
+    /** `NativeBridge.webSessionDecide`: the plugin's verdict for a sign-in tick. */
+    fun webSessionDecide(callbackId: String, verdict: Boolean) = webSessionJs.decide(callbackId, verdict)
+
+    /** The cookie-domain rule the web view's navigation policy and message handler check (shared). */
+    fun webSessionUrlUnderCookieDomains(url: String?): Boolean =
+        com.parachord.shared.websession.WebSessionRules.urlUnderCookieDomains(
+            url, com.parachord.shared.websession.WebSessionConfigs.AMAZON_MUSIC.cookieDomains,
+        )
+
     /**
      * Shared [PluginManager] — common to all platforms. Reads bundled
      * `.axe` files via [PluginFileAccess] (NSBundle on iOS) and drives
      * them through [pluginJsRuntime].
      */
     val pluginManager: PluginManager by lazy {
-        PluginManager(PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios").apply {
+        PluginManager(
+            PluginFileAccess(), pluginJsRuntime, appVersion = appVersionString(), platform = "ios",
+            // Each needs its JS object in BOOTSTRAP_JS (window.__parachordBridge_<name>).
+            // No `widevine`: iOS has no Widevine, and amazonmusic.axe only
+            // declares it optional.
+            hostBridges = setOf("webSession"),
+        ).apply {
             // soundcloud.axe searches, resolves and looks up URLs only with the
             // sign-in token in its config (desktop's getResolverConfig).
             // lastfm.axe and listenbrainz.axe read the username for
@@ -3171,14 +3231,15 @@ class IosContainer private constructor() {
 
     /**
      * The status-capable plugins' replies and the one "not playing" list
-     * (#707), shared with Android. No status-capable plugin loads on iOS
-     * today (Amazon Music needs the web-session bridge iOS doesn't have), so
-     * the list is the user's "Play from X" switches alone.
+     * (#707), shared with Android. iOS runs no plugin-supplied playback
+     * path ([com.parachord.shared.plugin.HostPlayback.IOS]), so a plugin that
+     * plays only that way (Amazon Music, Widevine) is in the list too.
      */
     val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by lazy {
         com.parachord.shared.plugin.PluginStatusStore.create(
             pluginManager, settingsStore, appScope,
             clearResolver = { id, sourcesToo -> resolverSourcesClearer?.invoke(id, sourcesToo) },
+            hostPlaybackPaths = com.parachord.shared.plugin.HostPlayback.IOS,
         )
     }
 
@@ -3258,7 +3319,10 @@ class IosContainer private constructor() {
             enableLabel = com.parachord.shared.plugin.enableSwitchLabel(name),
             enableHint = com.parachord.shared.plugin.enableSwitchHint(info),
             playbackLabel = com.parachord.shared.plugin.playbackSwitchLabel(name),
-            playback = com.parachord.shared.plugin.playbackSwitchState(info, active, id in lists.playbackOff, limit),
+            playback = com.parachord.shared.plugin.playbackSwitchState(
+                info, active, id in lists.playbackOff, limit,
+                hostCannotPlay = com.parachord.shared.plugin.hostCannotPlay(info, com.parachord.shared.plugin.HostPlayback.IOS),
+            ),
             metadataLabel = com.parachord.shared.plugin.metadataSwitchLabel(name),
             metadata = com.parachord.shared.plugin.metadataSwitchState(info, active, id in lists.metadataOff),
             recommendationsLabel = com.parachord.shared.plugin.recommendationsSwitchLabel(name),
@@ -3277,7 +3341,9 @@ class IosContainer private constructor() {
 
     /** A resolver tile's status line (`tileStatus`): the plan's label, or "Search and links only"; null for none. */
     fun pluginTileStatus(id: String, playbackOff: List<String>): String? =
-        com.parachord.shared.plugin.tileStatus(pluginStatusStore.limits.value, id, playbackOff).statusLabel
+        com.parachord.shared.plugin.tileStatus(
+            pluginStatusStore.limits.value, id, playbackOff, pluginStatusStore.hostUnplayable.value,
+        ).statusLabel
 
 
     /**

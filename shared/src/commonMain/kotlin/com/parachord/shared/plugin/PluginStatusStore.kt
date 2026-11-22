@@ -35,8 +35,9 @@ import kotlinx.serialization.json.contentOrNull
  * plugin's sheet opens, and after Sign in / Sign out.
  *
  * [notPlaying] is the one "not playing" list (shared [notPlayingIds]): the
- * plan-blocked plugins and the ones whose "Play from" is off. Source selection,
- * badges, the priority numbers and Home read it.
+ * plan-blocked plugins, the ones whose "Play from" is off, and the ones this
+ * host can't play from at all ([hostUnplayable], shared [hostCannotPlay]).
+ * Source selection, badges, the priority numbers and Home read it.
  *
  * After each successful read, a plan change runs [limitTransition] against the
  * resolver's remembered state ([getLimitState] / [setLimitState], desktop's
@@ -63,6 +64,11 @@ class PluginStatusStore(
      * with `sourcesToo` its found sources as well. The platform's resolver cache.
      */
     private val clearResolver: suspend (id: String, sourcesToo: Boolean) -> Unit = { _, _ -> },
+    /**
+     * The loaded plugins this host can't play from ([hostUnplayableIds]): on
+     * iOS, Amazon Music (Widevine only). Empty on Android.
+     */
+    val hostUnplayable: StateFlow<List<String>> = MutableStateFlow(emptyList()),
 ) {
     private val _statuses = MutableStateFlow<Map<String, PluginStatusEntry>>(emptyMap())
     /** Plugin id to its last reply. A plugin not read yet has no entry ("Checking…"). */
@@ -74,16 +80,19 @@ class PluginStatusStore(
         .distinctUntilChanged()
         .stateIn(scope, SharingStarted.Eagerly, emptyMap())
 
-    /** The plug-ins that are on but don't play: [notPlayingIds] of the plan blocks and `playback_off_resolvers`. */
-    val notPlaying: StateFlow<List<String>> = combine(limits, playbackOffFlow) { l, off ->
-        notPlayingIds(planBlockedIds(l), off)
+    /**
+     * The plug-ins that are on but don't play: [notPlayingIds] of the plan
+     * blocks and `playback_off_resolvers`, plus [hostUnplayable].
+     */
+    val notPlaying: StateFlow<List<String>> = combine(limits, playbackOffFlow, hostUnplayable) { l, off, host ->
+        notPlayingIds(planBlockedIds(l), off + host)
     }
         .distinctUntilChanged()
         .stateIn(scope, SharingStarted.Eagerly, emptyList())
 
     /** [notPlaying] as it stands now, reading the switch from storage (not a flow's last value). */
     suspend fun notPlayingNow(): List<String> =
-        notPlayingIds(planBlockedIds(pluginStatusLimits(_statuses.value)), getPlaybackOff())
+        notPlayingIds(planBlockedIds(pluginStatusLimits(_statuses.value)), getPlaybackOff() + hostUnplayable.value)
 
     private val inFlightMutex = Mutex()
     private val inFlight = mutableSetOf<String>()
@@ -192,6 +201,8 @@ class PluginStatusStore(
             settingsStore: SettingsStore,
             scope: CoroutineScope,
             clearResolver: suspend (id: String, sourcesToo: Boolean) -> Unit = { _, _ -> },
+            /** The plugin-supplied playback paths this host runs ([HostPlayback]). */
+            hostPlaybackPaths: Set<String> = HostPlayback.ANDROID,
         ): PluginStatusStore =
             PluginStatusStore(
                 statusPluginIds = { pluginManager.ensureInitialized(); pluginManager.statusPlugins().map { it.id } },
@@ -203,6 +214,10 @@ class PluginStatusStore(
                 getLimitState = { settingsStore.getPlaybackLimitState(it) },
                 setLimitState = { id, state -> settingsStore.setPlaybackLimitState(id, state) },
                 clearResolver = clearResolver,
+                hostUnplayable = pluginManager.plugins
+                    .map { hostUnplayableIds(it, hostPlaybackPaths) }
+                    .distinctUntilChanged()
+                    .stateIn(scope, SharingStarted.Eagerly, hostUnplayableIds(pluginManager.plugins.value, hostPlaybackPaths)),
             )
     }
 }

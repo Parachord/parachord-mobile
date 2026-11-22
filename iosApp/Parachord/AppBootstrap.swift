@@ -46,6 +46,12 @@ final class AppBootstrap {
         container.pluginJsRuntime.nativeBridgeInstaller = { ctx in
             JsPolyfills.installNativeBridge(to: ctx)
         }
+        // The webSession host bridge's web view (#779): amazonmusic.axe needs
+        // it, and the shared engine is built on first use, so it's set before
+        // the plugins load.
+        if container.webSessionView == nil {
+            container.webSessionView = WebSessionWebView()
+        }
         // A plan change (a purchases-only plan, an upgrade) clears the
         // resolver's saved sources (shared limitTransition, #1494). Set before
         // the plugins load: their status is read once they have.
