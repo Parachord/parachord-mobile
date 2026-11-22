@@ -54,13 +54,8 @@ fun freshChangeLine(p: Playlist, nowMs: Long, tz: TimeZone = TimeZone.currentSys
     return "${p.name} picked up $n new ${if (n == 1) "track" else "tracks"} ${whenPhrase(p.tracksChangedAt!!, nowMs, tz)}"
 }
 
-/** A playlist row's two lines: "Refreshed 2h ago" and, when known, "Since 2023". */
-data class PlaylistSubtitle(val refreshed: String, val since: String?)
+/** A playlist card's line under its name: "Refreshed 2h ago". */
+data class PlaylistSubtitle(val refreshed: String)
 
-fun playlistSubtitle(p: Playlist, nowMs: Long): PlaylistSubtitle {
-    val refreshed = "Refreshed ${TimeAgo.ago(playlistFreshness(p), nowMs)}"
-    val since = if (p.createdAt > 0) {
-        "Since ${Instant.fromEpochMilliseconds(p.createdAt).toLocalDateTime(TimeZone.UTC).year}"
-    } else null
-    return PlaylistSubtitle(refreshed, since)
-}
+fun playlistSubtitle(p: Playlist, nowMs: Long): PlaylistSubtitle =
+    PlaylistSubtitle("Refreshed ${TimeAgo.ago(playlistFreshness(p), nowMs)}")

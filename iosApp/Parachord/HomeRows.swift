@@ -171,7 +171,7 @@ struct HomePlaylistsRow: View {
                     ForEach(page.playlists, id: \.id) { card in
                         HomeRowCard(
                             title: card.name,
-                            lines: [HomeCardLine(text: card.line1, maxLines: 2), HomeCardLine(text: card.line2 ?? "")],
+                            lines: [HomeCardLine(text: card.line1, maxLines: 2)],
                             badge: card.badge,
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) },

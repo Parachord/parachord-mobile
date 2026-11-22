@@ -163,7 +163,7 @@ fun HomeMixesRow(
 
 /**
  * "Your playlists, freshest first": the "Δ N" badge for the latest change's
- * new tracks, "Refreshed …" / "Since YYYY". Long-press opens the playlist menu.
+ * new tracks and "Refreshed …". Long-press opens the playlist menu.
  */
 @Composable
 fun HomePlaylistsRow(
@@ -205,7 +205,7 @@ private fun PlaylistCard(
     val playlist = card.playlist
     HomeCard(
         title = playlist.name,
-        lines = listOf(CardLine(card.subtitle.refreshed, maxLines = 2), CardLine(card.subtitle.since.orEmpty())),
+        lines = listOf(CardLine(card.subtitle.refreshed, maxLines = 2)),
         onOpen = { onOpen(playlist) },
         onPlay = { onPlay(playlist) },
         onLongPress = { onLongPress(playlist) },
