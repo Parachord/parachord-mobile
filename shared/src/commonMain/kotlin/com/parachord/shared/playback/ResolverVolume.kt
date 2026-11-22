@@ -42,23 +42,57 @@ object ResolverVolume {
         effectiveVolumePercent(baseVolume, offsetDb) / 100f
 
     /**
-     * Whether a resolver's loudness can actually be controlled in-app.
+     * What a plug-in's volume row offers, decided by the plug-in's declared
+     * capabilities and never by its id (desktop parachord#1522, settings-page.js).
      *
-     * **Apple Music cannot be**, on any platform, and a slider that pretended
-     * otherwise would be a placebo. iOS has no per-app volume and
-     * `ApplicationMusicPlayer` follows the system volume; desktop reached the
-     * same conclusion and greys the row out as "System vol". Resolvers that
-     * hand playback to a browser (bandcamp, youtube) are equally out of reach.
+     * - `capabilities.systemVolume` (its player follows the system volume:
+     *   Apple Music's MusicKit): off, reason "System vol".
+     * - Neither `stream` nor `embedPlayer` (it plays in the browser): off,
+     *   reason "Browser".
+     * - **iOS difference ([embedVolumeApplies] false):** a plug-in that plays in
+     *   an embedded page (`embedPlayer`: SoundCloud's widget, Bandcamp's embed)
+     *   is off too, reason "System vol". Both pages set an HTML media element's
+     *   `volume`, which WebKit on iOS ignores (the element follows the device
+     *   volume), so a slider there would be a placebo. Android's WebView
+     *   applies it, so Android passes true.
+     * - Otherwise on. Unknown capabilities ([capabilities] null, the plug-in
+     *   not loaded yet) count as on.
      */
-    fun isVolumeControllable(resolverId: String): Boolean =
-        resolverId !in UNCONTROLLABLE_RESOLVERS
-
-    /** Why [isVolumeControllable] said no — shown next to a disabled slider. */
-    fun uncontrollableReason(resolverId: String): String? = when (resolverId) {
-        "applemusic" -> "System vol"
-        in UNCONTROLLABLE_RESOLVERS -> "Opens in browser"
-        else -> null
+    fun controllability(capabilities: Map<String, Boolean>?, embedVolumeApplies: Boolean): VolumeControl {
+        if (capabilities == null) return VolumeControl.ON
+        val systemVolume = capabilities["systemVolume"] == true
+        val stream = capabilities["stream"] == true
+        val embed = capabilities["embedPlayer"] == true
+        return when {
+            systemVolume -> VolumeControl(false, REASON_SYSTEM, TipKind.SYSTEM)
+            !stream && !embed -> VolumeControl(false, REASON_BROWSER, TipKind.BROWSER)
+            embed && !embedVolumeApplies -> VolumeControl(false, REASON_SYSTEM, TipKind.SYSTEM)
+            else -> VolumeControl.ON
+        }
     }
 
-    private val UNCONTROLLABLE_RESOLVERS = setOf("applemusic", "bandcamp", "youtube")
+    const val REASON_SYSTEM = "System vol"
+    const val REASON_BROWSER = "Browser"
+
+    /**
+     * A changed offset is re-applied at once only to the playback it belongs
+     * to: the track now playing came from [changedResolver].
+     */
+    fun reappliesLive(changedResolver: String, currentResolver: String?): Boolean =
+        currentResolver != null && currentResolver == changedResolver
+
+    enum class TipKind { SYSTEM, BROWSER }
+
+    data class VolumeControl(val controllable: Boolean, val reason: String?, val tipKind: TipKind?) {
+        /** Desktop's tooltip for a disabled row. */
+        fun tip(pluginName: String): String? = when (tipKind) {
+            TipKind.SYSTEM -> "Use system volume to control $pluginName"
+            TipKind.BROWSER -> "Browser playback - volume control not available"
+            null -> null
+        }
+
+        companion object {
+            val ON = VolumeControl(true, null, null)
+        }
+    }
 }

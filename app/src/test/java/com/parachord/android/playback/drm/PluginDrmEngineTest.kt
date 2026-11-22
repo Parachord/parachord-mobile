@@ -263,6 +263,65 @@ class PluginDrmEngineTest {
         assertEquals(210L, (json["duration"] as kotlinx.serialization.json.JsonPrimitive).content.toLong())
     }
 
+    // ── The manifest's budget retry (desktop parachord#1603) ─────────
+
+    private class ScriptedOpen(vararg replies: String?) : PluginDrmJs {
+        private val queue = ArrayDeque(replies.toList())
+        var opens = 0
+        override suspend fun open(resolverId: String, trackJson: String, budgetMs: Long): String? {
+            opens++
+            return queue.removeFirstOrNull()
+        }
+        override suspend fun license(sessionId: String, challengeB64: String, budgetMs: Long): String? = null
+        override suspend fun event(sessionId: String, eventJson: String) {}
+        override suspend fun close(sessionId: String) {}
+    }
+
+    private fun handler(js: PluginDrmJs): PluginDrmHandler {
+        val cache = mockk<com.parachord.android.resolver.TrackResolverCache>(relaxed = true)
+        io.mockk.every { cache.trackSources } returns kotlinx.coroutines.flow.MutableStateFlow(emptyMap())
+        val settings = mockk<com.parachord.android.data.store.SettingsStore>(relaxed = true)
+        io.mockk.coEvery { settings.getPlaybackQualitySettings() } returns PlaybackQualitySettings()
+        return PluginDrmHandler(mockk(relaxed = true), sessions(js), js, cache, settings, lazy { mockk(relaxed = true) })
+    }
+
+    private val amazonTrack = TrackEntity(id = "t1", title = "Unison", artist = "Björk", resolver = "amazonmusic")
+    private val budgetRanOut =
+        """{"ok":false,"error":{"reason":"playback-failed","message":"getPlaybackManifest timed out","budgetExpired":true}}"""
+    private val opened = """{"ok":true,"sessionId":"drm_1","manifest":"<MPD/>","extras":{}}"""
+
+    @Test
+    fun `a manifest whose budget ran out is asked for once more and plays`() {
+        val js = ScriptedOpen(budgetRanOut, opened)
+        val item = kotlinx.coroutines.runBlocking { handler(js).createMediaItem(amazonTrack) }
+        assertEquals(2, js.opens)
+        assertEquals("t1", item.mediaId)
+    }
+
+    @Test
+    fun `a second budget timeout fails the play`() {
+        val js = ScriptedOpen(budgetRanOut, budgetRanOut, opened)
+        try {
+            kotlinx.coroutines.runBlocking { handler(js).createMediaItem(amazonTrack) }
+            fail("expected the play to fail")
+        } catch (e: PluginDrmPlaybackException) {
+            assertTrue(e.error.budgetExpired)
+        }
+        assertEquals(2, js.opens)
+    }
+
+    @Test
+    fun `a failure the plugin reported is not asked for again`() {
+        val js = ScriptedOpen("""{"ok":false,"error":{"reason":"plan-ineligible","planKey":"prime"}}""", opened)
+        try {
+            kotlinx.coroutines.runBlocking { handler(js).createMediaItem(amazonTrack) }
+            fail("expected the play to fail")
+        } catch (e: PluginDrmPlaybackException) {
+            assertEquals("plan-ineligible", e.error.reason)
+        }
+        assertEquals(1, js.opens)
+    }
+
     // ── The start rule and refusals (Pixel test of #762) ─────────────
 
     @Test

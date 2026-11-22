@@ -524,6 +524,9 @@ class SpotifyPlaybackHandler constructor(
      * Spotify Free devices are `restricted` and 403 this endpoint, and the
      * music is already playing by the time we get here.
      */
+    /** Re-apply the offset to the device now playing (a changed offset); fire-and-forget like the start's. */
+    suspend fun reapplyConnectVolume() = applyConnectVolume(null)
+
     private suspend fun applyConnectVolume(deviceId: String?) {
         // Advisory cooldown check. Volume is an interactive PUT and so bypasses
         // RateLimitGate (CLAUDE.md), but poking a throttled account is what

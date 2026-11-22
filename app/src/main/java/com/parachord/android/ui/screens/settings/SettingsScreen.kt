@@ -129,6 +129,7 @@ import androidx.compose.material3.Slider
 import com.parachord.android.ui.components.SettingsGroupLabel
 import androidx.compose.ui.draw.alpha
 import com.parachord.shared.playback.ResolverVolume
+import com.parachord.shared.playback.drm.settingsLabel
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.screens.sync.ProviderSyncConfigSheet
 import com.parachord.android.ui.screens.sync.SyncSetupSheet
@@ -281,6 +282,7 @@ fun SettingsScreen(
     val playbackQuality by viewModel.playbackQuality.collectAsStateWithLifecycle()
     val playbackAbr by viewModel.playbackAbr.collectAsStateWithLifecycle()
     val playbackSpatial by viewModel.playbackSpatial.collectAsStateWithLifecycle()
+    val playbackQualityCopy by viewModel.playbackQualityCopy.collectAsStateWithLifecycle()
     val libreFmAuthError by viewModel.libreFmAuthError.collectAsStateWithLifecycle()
     val listenBrainzAuthError by viewModel.listenBrainzAuthError.collectAsStateWithLifecycle()
     val disabledMetaProviders by viewModel.disabledMetaProviders.collectAsStateWithLifecycle()
@@ -308,12 +310,45 @@ fun SettingsScreen(
             windowInsets = WindowInsets(0),
         )
 
+        // Volume Normalization rows (General tab): enabled, connected resolver
+        // plug-ins in the user's resolver order, as the Plug-Ins tab's priority list.
+        val axePluginsForVolume by viewModel.loadedPlugins.collectAsStateWithLifecycle()
+        val disabledPluginsForVolume by viewModel.disabledPlugins.collectAsStateWithLifecycle()
+        val activeResolversForVolume by viewModel.activeResolvers.collectAsStateWithLifecycle()
+        val notPlayingForVolume by viewModel.notPlayingResolvers.collectAsStateWithLifecycle()
+        val spotifyClientIdForVolume by viewModel.spotifyClientId.collectAsStateWithLifecycle()
+        val volumeRows = remember(
+            axePluginsForVolume, disabledPluginsForVolume, activeResolversForVolume, notPlayingForVolume,
+            resolverOrder, spotifyConnected, spotifyClientIdForVolume, soundCloudConnected,
+            appleMusicConfigured, appleMusicAuthorized,
+        ) {
+            val resolvers = buildPluginList(axePluginsForVolume).filter { it.category == PluginCategory.RESOLVER }
+            fun connected(p: PluginInfo): Boolean = p.id !in disabledPluginsForVolume && when (p.id) {
+                "spotify" -> spotifyConnected && spotifyClientIdForVolume.isNotBlank()
+                "soundcloud" -> soundCloudConnected
+                "applemusic" -> appleMusicConfigured && appleMusicAuthorized
+                "local-files", "localfiles", "bandcamp" -> true
+                else -> axePluginsForVolume.any { it.id == p.id }
+            }
+            val on = resolvers.filter {
+                connected(it) && (activeResolversForVolume.isEmpty() || it.resolverId in activeResolversForVolume) &&
+                    it.resolverId !in notPlayingForVolume
+            }
+            val rank = { id: String -> resolverOrder.indexOf(id).let { i -> if (i < 0) Int.MAX_VALUE else i } }
+            on.sortedBy { rank(it.resolverId) }.map { VolumeRow(it.resolverId, it.name, it.shared?.capabilities) }
+        }
+
+        // A plug-in sheet's quality line opens General's Playback Quality.
+        var tabRequest by remember { mutableStateOf<Int?>(null) }
         SwipeableTabLayout(
             tabs = listOf("Plug-Ins", "Sync", "General", "About"),
             initialPage = settingsTabIndex(initialTab),
+            requestedPage = tabRequest,
+            onPageRequestHandled = { tabRequest = null },
         ) { page ->
             when (page) {
                 0 -> PlugInsTab(
+                    onOpenPlaybackQuality = { tabRequest = settingsTabIndex(com.parachord.shared.settings.SettingsTab.GENERAL) },
                     initialPluginId = pendingPluginId,
                     onInitialPluginOpened = { pendingPluginId = null },
                     spotifyConnected = spotifyConnected,
@@ -324,8 +359,6 @@ fun SettingsScreen(
                     libreFmConnected = libreFmConnected,
                     soundCloudConnected = soundCloudConnected,
                     resolverOrder = resolverOrder,
-                    resolverVolumeOffsets = resolverVolumeOffsets,
-                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                     onResolverOrderChanged = { viewModel.setResolverOrder(it) },
                     onSpotifyToggle = {
                         if (spotifyConnected) viewModel.disconnectSpotify()
@@ -400,6 +433,11 @@ fun SettingsScreen(
                     onPlaybackAbrChanged = { viewModel.setPlaybackAbr(it) },
                     playbackSpatial = playbackSpatial,
                     onPlaybackSpatialChanged = { viewModel.setPlaybackSpatial(it) },
+                    playbackQualityCopy = playbackQualityCopy,
+                    canPlayAtmos = viewModel.audioCapabilities.canPlayAtmos,
+                    volumeRows = volumeRows,
+                    resolverVolumeOffsets = resolverVolumeOffsets,
+                    onResolverVolumeOffsetChanged = viewModel::setResolverVolumeOffset,
                 )
                 3 -> AboutTab()
             }
@@ -407,11 +445,15 @@ fun SettingsScreen(
     }
 }
 
+/** One Volume Normalization row: the plug-in and what it declares (decides if its slider works). */
+private data class VolumeRow(val id: String, val name: String, val capabilities: Map<String, Boolean>?)
+
 // ── Plug-Ins Tab ───────────────────────────────────────────────────
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 private fun PlugInsTab(
+    onOpenPlaybackQuality: () -> Unit = {},
     initialPluginId: String? = null,
     onInitialPluginOpened: () -> Unit = {},
     spotifyConnected: Boolean,
@@ -424,8 +466,6 @@ private fun PlugInsTab(
     onSpotifyToggle: () -> Unit,
     onLastFmToggle: () -> Unit,
     resolverOrder: List<String> = emptyList(),
-    resolverVolumeOffsets: Map<String, Int> = emptyMap(),
-    onResolverVolumeOffsetChanged: (String, Int) -> Unit = { _, _ -> },
     onResolverOrderChanged: (List<String>) -> Unit = {},
     soundCloudCredentialsSaved: Boolean = false,
     onSoundCloudSaveCredentials: (String, String) -> Unit = { _, _ -> },
@@ -503,9 +543,11 @@ private fun PlugInsTab(
     val metadataOff by settingsViewModel.metadataOffResolvers.collectAsStateWithLifecycle()
     val recommendationsOff by settingsViewModel.recommendationsOffResolvers.collectAsStateWithLifecycle()
     val pluginStatuses by settingsViewModel.pluginStatuses.collectAsStateWithLifecycle()
+    val pluginAccounts by settingsViewModel.pluginAccounts.collectAsStateWithLifecycle()
     val playbackLimits by settingsViewModel.playbackLimits.collectAsStateWithLifecycle()
     val notPlaying by settingsViewModel.notPlayingResolvers.collectAsStateWithLifecycle()
     val pluginSessionBusy by settingsViewModel.pluginSessionBusy.collectAsStateWithLifecycle()
+    val playbackQualitySettings by settingsViewModel.playbackQualitySettings.collectAsStateWithLifecycle()
     val sessionContext = androidx.compose.ui.platform.LocalContext.current
     LaunchedEffect(Unit) {
         settingsViewModel.refreshPluginStatus()
@@ -583,24 +625,39 @@ private fun PlugInsTab(
     // A connected resolver the saved order doesn't know (a plugin added after
     // the order was last written — subsonic) must not fall through both the
     // enabled list and the not-connected one: append it (plan #664).
+    // On but signed out (#782, desktop parachord#1615): the tile reads as off,
+    // says "Sign in", sits with the unnumbered ones and isn't draggable. It
+    // stays in the active list (display only); no verdict never counts.
+    fun signedOut(id: String): Boolean {
+        val pluginId = findPlugin(id)?.id ?: id
+        return pluginId !in disabledPlugins &&
+            com.parachord.shared.plugin.pluginSignedOut(pluginId, isResolverEnabled(id), pluginAccounts)
+    }
+    fun onTile(id: String): Boolean = (isConnected(id) || signedOut(id)) && isResolverEnabled(id)
     val savedOrderMissing = resolverPlugins
-        .filter { it.resolverId !in resolverOrder && isConnected(it.resolverId) && isResolverEnabled(it.resolverId) }
+        .filter { it.resolverId !in resolverOrder && onTile(it.resolverId) }
         .map { it.resolverId }
     val onResolverIds = (resolverOrder + savedOrderMissing).filter { id ->
         val plugin = findPlugin(id)
-        plugin != null && plugin.category == PluginCategory.RESOLVER &&
-            isConnected(id) && isResolverEnabled(id)
+        plugin != null && plugin.category == PluginCategory.RESOLVER && onTile(id)
     }
     // A plug-in that's on but doesn't play (a plan limit, or "Play from" off;
-    // #707) sits with the unnumbered tiles, keeping its saved slot.
-    val enabledResolverIds = onResolverIds.filter { it !in notPlaying }
-    val notPlayingResolverPlugins = onResolverIds.filter { it in notPlaying }.mapNotNull { findPlugin(it) }
+    // #707) or is signed out sits with the unnumbered tiles, keeping its saved
+    // slot; the playing ones number 1, 2, … with no gap (shared pluginTileOrder).
+    val tileOrder = com.parachord.shared.plugin.pluginTileOrder(
+        onResolverIds,
+        notPlaying,
+        // Keyed by the tiles' own ids (resolver ids), as the order is.
+        onResolverIds.filter { signedOut(it) }.associateWith { false },
+    )
+    val enabledResolverIds = tileOrder.numbered
+    val notPlayingResolverPlugins = tileOrder.unnumbered.mapNotNull { findPlugin(it) }
     // Connected but turned off by the user — distinct from "not connected".
     val offResolverPlugins = resolverPlugins.filter {
         isConnected(it.resolverId) && !isResolverEnabled(it.resolverId)
     }
     // Easiest-to-set-up first (Spotify), in the canonical resolver order (#400).
-    val disabledResolverPlugins = resolverPlugins.filter { !isConnected(it.resolverId) }
+    val disabledResolverPlugins = resolverPlugins.filter { !isConnected(it.resolverId) && !onTile(it.resolverId) }
         .sortedBy { p ->
             com.parachord.shared.resolver.ResolverScoring.CANONICAL_RESOLVER_ORDER.indexOf(p.resolverId).let { if (it < 0) Int.MAX_VALUE else it }
         }
@@ -658,14 +715,18 @@ private fun PlugInsTab(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     notPlayingResolverPlugins.forEach { plugin ->
+                        // Signed out: greyed, no Enabled check, "Sign in" in the
+                        // warning colour; it still opens its sheet.
+                        val signInNeeded = signedOut(plugin.resolverId)
                         val status = com.parachord.shared.plugin.tileStatus(playbackLimits, plugin.id, playbackOff)
                         PluginTile(
                             plugin = plugin,
-                            isConnected = true,
+                            isConnected = !signInNeeded,
                             priorityNumber = null,
                             onClick = { selectedPlugin = plugin },
                             modifier = Modifier.width(100.dp),
-                            statusLabel = status.statusLabel,
+                            grayed = signInNeeded,
+                            statusLabel = if (signInNeeded) com.parachord.shared.plugin.SIGN_IN_TILE_LABEL else status.statusLabel,
                             statusLabelColor = SetupRequiredAmber,
                         )
                     }
@@ -771,60 +832,6 @@ private fun PlugInsTab(
         item { Spacer(modifier = Modifier.height(24.dp)) }
 
         // Meta Services section
-        // Volume Balance — per-resolver loudness trim (desktop parity).
-        if (orderedEnabled.isNotEmpty()) {
-            item { SettingsGroupLabel("Volume Balance") }
-            item {
-                Text(
-                    text = "Trim louder sources so switching between them doesn't jump. " +
-                        "Negative values reduce volume.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 16.dp),
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-            }
-            items(orderedEnabled.toList(), key = { "vol-$it" }) { id ->
-                val plugin = findPlugin(id)
-                // Apple Music is listed but DISABLED, as on desktop and iOS:
-                // MusicKit's `music.volume` is inert on Android WebView (DRM
-                // audio bypasses the JS pipeline), so a working slider is
-                // impossible. Hiding the row would be worse — users would ask
-                // why the loudest source is missing from the loudness control.
-                val controllable = ResolverVolume.isVolumeControllable(id)
-                val reason = ResolverVolume.uncontrollableReason(id)
-                val offset = resolverVolumeOffsets[id] ?: 0
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .alpha(if (controllable) 1f else 0.5f),
-                ) {
-                    Text(
-                        text = plugin?.name ?: id,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.width(96.dp),
-                    )
-                    Slider(
-                        value = offset.toFloat(),
-                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
-                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
-                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
-                        enabled = controllable,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Text(
-                        text = if (controllable) "$offset dB" else (reason ?: ""),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.width(72.dp),
-                        textAlign = TextAlign.End,
-                    )
-                }
-            }
-        }
-
         item { SettingsGroupLabel("Meta Services") }
         item {
             Text(
@@ -984,10 +991,21 @@ private fun PlugInsTab(
             metadataOff = plugin.id in metadataOff,
             recommendationsOff = plugin.id in recommendationsOff,
             playbackLimit = playbackLimits[plugin.id],
+            qualityLine = com.parachord.shared.playback.drm.PlaybackQualityLine.forPlugin(
+                plugin.sharedInfo,
+                com.parachord.shared.playback.drm.PlaybackPlatform.ANDROID,
+                playbackQualitySettings,
+                settingsViewModel.audioCapabilities,
+            ),
+            onOpenPlaybackQuality = {
+                selectedPlugin = null
+                onOpenPlaybackQuality()
+            },
             onPlaybackOn = { settingsViewModel.setPlaybackOn(plugin.id, it) },
             onMetadataOn = { settingsViewModel.setMetadataOn(plugin.id, it) },
             onRecommendationsOn = { settingsViewModel.setRecommendationsOn(plugin.id, it) },
             pluginStatus = pluginStatuses[plugin.id],
+            pluginAccount = pluginAccounts[plugin.id],
             sessionBusy = pluginSessionBusy == plugin.id,
             onSignIn = { settingsViewModel.pluginSession(plugin.id, plugin.name, signIn = true) },
             onSignOut = { settingsViewModel.pluginSession(plugin.id, plugin.name, signIn = false) },
@@ -1308,10 +1326,15 @@ private fun PluginConfigSheet(
     metadataOff: Boolean = false,
     recommendationsOff: Boolean = false,
     playbackLimit: com.parachord.shared.home.PlaybackLimit? = null,
+    /** The sheet's Playback quality line (shared rule); null for a plug-in with none. */
+    qualityLine: com.parachord.shared.playback.drm.PlaybackQualityLine? = null,
+    onOpenPlaybackQuality: () -> Unit = {},
     onPlaybackOn: (Boolean) -> Unit = {},
     onMetadataOn: (Boolean) -> Unit = {},
     onRecommendationsOn: (Boolean) -> Unit = {},
     pluginStatus: com.parachord.shared.plugin.PluginStatusEntry? = null,
+    /** Shared `signedInMap`'s verdict for this plug-in; null = none. */
+    pluginAccount: Boolean? = null,
     sessionBusy: Boolean = false,
     onSignIn: () -> Unit = {},
     onSignOut: () -> Unit = {},
@@ -1437,228 +1460,256 @@ private fun PluginConfigSheet(
 
             Spacer(modifier = Modifier.height(20.dp))
 
-            // "Enable X" (#707, desktop parachord#1505): a music plug-in's one
-            // on switch (`active_resolvers`), and under it, while it's on,
-            // "Play from X", "Use metadata from X" and "Use recommendations
-            // from X". A meta-service keeps its own on/off below; it gets the
-            // recommendations switch when it offers them.
             val info = plugin.sharedInfo
-            if (isResolver) {
-                Spacer(modifier = Modifier.height(16.dp))
-                PluginSwitchRow(
-                    label = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
-                    hint = com.parachord.shared.plugin.enableSwitchHint(info),
-                    checked = resolverOn,
-                    onCheckedChange = onResolverEnabledChange,
-                )
-            }
-            val playState = com.parachord.shared.plugin.playbackSwitchState(info, isResolver && resolverOn, playbackOff, playbackLimit)
-            if (playState.shown) {
-                PluginSwitchRow(
-                    label = com.parachord.shared.plugin.playbackSwitchLabel(plugin.name),
-                    hint = playState.hint,
-                    checked = playState.checked,
-                    enabled = !playState.disabled,
-                    nested = true,
-                    onCheckedChange = onPlaybackOn,
-                )
-            }
-            val metaState = com.parachord.shared.plugin.metadataSwitchState(info, isResolver && resolverOn, metadataOff)
-            if (metaState.shown) {
-                PluginSwitchRow(
-                    label = com.parachord.shared.plugin.metadataSwitchLabel(plugin.name),
-                    hint = metaState.hint,
-                    checked = metaState.checked,
-                    nested = true,
-                    onCheckedChange = onMetadataOn,
-                )
-            }
-            val recState = com.parachord.shared.plugin.recommendationsSwitchState(
-                info, if (isResolver) resolverOn else isConnected, recommendationsOff,
-            )
-            if (recState.shown) {
-                if (!isResolver) Spacer(modifier = Modifier.height(16.dp))
-                PluginSwitchRow(
-                    label = com.parachord.shared.plugin.recommendationsSwitchLabel(plugin.name),
-                    hint = recState.hint,
-                    checked = recState.checked,
-                    nested = isResolver,
-                    onCheckedChange = onRecommendationsOn,
-                )
-            }
-
-            // The account row for a status-capable plugin (desktop's AccountRow,
-            // capabilities.status): its own status line, and Sign in / Sign out
-            // when it implements them.
-            if (info.capabilities["status"] == true) {
-                Spacer(modifier = Modifier.height(16.dp))
-                HorizontalDivider()
-                Spacer(modifier = Modifier.height(16.dp))
-                PluginAccountRow(
-                    name = plugin.name,
-                    color = plugin.bgColor,
-                    status = pluginStatus,
-                    canSignIn = info.hasSignIn,
-                    canSignOut = info.hasSignOut,
-                    busy = sessionBusy,
-                    onSignIn = onSignIn,
-                    onSignOut = onSignOut,
-                )
-            }
-
-            // Plugin-specific config. A plugin with `settings.configurable`
-            // fields and no settings of the app's own (Subsonic's server URL /
-            // username / password) gets the generic field editor; the plugins
-            // the app sets up itself keep their own UI (`usesGenericSettings`).
-            if (plugin.configFields.isNotEmpty() &&
-                com.parachord.shared.plugin.PluginUserConfig.usesGenericSettings(plugin.id)
-            ) {
-                PluginFieldsConfig(
-                    plugin = plugin,
-                    savedValues = pluginConfigValues[plugin.id] ?: emptyMap(),
-                    configured = pluginConfigured[plugin.id] ?: !plugin.requiresAuth,
-                    connectionTest = pluginConnectionTests[plugin.id],
-                    onSave = { values -> onSavePluginConfig(plugin.id, values) },
-                    onTestConnection = { onTestPluginConnection(plugin.id) },
-                )
-            } else when (plugin.id) {
-                "spotify" -> SpotifyConfig(
-                    isConnected = isConnected,
-                    onToggle = onToggleConnection,
-                    clientId = spotifyClientId,
-                    onSaveClientId = onSaveSpotifyClientId,
-                    onClearClientId = onClearSpotifyClientId,
-                    error = spotifyError,
-                    hasPreferredDevice = hasPreferredSpotifyDevice,
-                    onClearPreferredDevice = onClearPreferredSpotifyDevice,
-                )
-
-                "soundcloud" -> SoundCloudConfig(
-                    isConnected = isConnected,
-                    credentialsSaved = soundCloudCredentialsSaved,
-                    error = soundCloudError,
-                    onSaveCredentials = onSoundCloudSaveCredentials,
-                    onConnect = onSoundCloudConnect,
-                    onDisconnect = onSoundCloudDisconnect,
-                    onClearCredentials = onSoundCloudClearCredentials,
-                )
-                "applemusic" -> AppleMusicConfig(
-                    hasToken = appleMusicHasToken,
-                    configured = appleMusicConfigured,
-                    authorized = appleMusicAuthorized,
-                    connecting = appleMusicConnecting,
-                    onSaveToken = onAppleMusicSaveToken,
-                    onSaveStorefront = onAppleMusicSaveStorefront,
-                    onConnect = onAppleMusicAuthorize,
-                    onDisconnect = onAppleMusicDisconnect,
-                )
-                "local-files", "localfiles" -> LocalFilesConfig(
-                    scanProgress = scanProgress,
-                    onScanLocalFiles = onScanLocalFiles,
-                )
-                "lastfm" -> LastFmConfig(
-                    isConnected = isConnected,
-                    onToggle = onToggleConnection,
-                    scrobbling = scrobbling,
-                    onScrobblingChanged = onScrobblingChanged,
-                    lovePushEnabled = lovePushEnabled,
-                    loveBackfillState = loveBackfillState,
-                    onLovePushToggle = onLovePushToggle,
-                    onLoveBackfillClick = onLoveBackfillClick,
-                    onLoveBackfillDismiss = onLoveBackfillDismiss,
-                )
-                "listenbrainz" -> ListenBrainzConfig(
-                    isConnected = isConnected,
-                    onTokenSubmit = onListenBrainzTokenSubmit,
-                    onDisconnect = onListenBrainzDisconnect,
-                    authError = listenBrainzAuthError,
-                    scrobbling = scrobbling,
-                    onScrobblingChanged = onScrobblingChanged,
-                    lovePushEnabled = lovePushEnabled,
-                    loveBackfillState = loveBackfillState,
-                    onLovePushToggle = onLovePushToggle,
-                    onLoveBackfillClick = onLoveBackfillClick,
-                    onLoveBackfillDismiss = onLoveBackfillDismiss,
-                )
-                "librefm" -> LibreFmConfig(
-                    isConnected = isConnected,
-                    onConnect = onLibreFmConnect,
-                    onDisconnect = onLibreFmDisconnect,
-                    authError = libreFmAuthError,
-                    scrobbling = scrobbling,
-                    onScrobblingChanged = onScrobblingChanged,
-                )
-                "discogs" -> ToggleableMetaConfig(
-                    isEnabled = isConnected,
-                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
-                    onToggle = onToggleConnection,
-                    enabledText = "Discogs metadata provider is active",
-                    disabledText = "Enable Discogs to get artist bios and images from the Discogs community database.",
-                )
-                "wikipedia" -> ToggleableMetaConfig(
-                    isEnabled = isConnected,
-                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
-                    onToggle = onToggleConnection,
-                    enabledText = "Wikipedia metadata provider is active",
-                    disabledText = "Enable Wikipedia to get encyclopedia-style artist bios and images via Wikidata.",
-                )
-                "chatgpt", "claude", "gemini" -> {
-                    val currentModel by getAiModel(plugin.id).collectAsStateWithLifecycle()
-                    AiProviderConfig(
-                        providerId = plugin.id,
-                        isConnected = isConnected,
-                        onSaveConfig = onSaveAiConfig,
-                        onSaveModel = onSaveAiModel,
-                        onClear = onClearAiProvider,
-                        currentModel = currentModel,
+            // What the app knows about its sign-in (#782, desktop parachord#1615
+            // pluginAccounts): signed out, Enable and the switches under it
+            // read off and locked, "Sign in to X first". Display only.
+            val signedIn = pluginAccount
+            val enableState = com.parachord.shared.plugin.enableSwitchState(info, resolverOn, signedIn)
+            val enableSection: @Composable () -> Unit = {
+                // "Enable X" (#707, desktop parachord#1505): a music plug-in's one
+                // on switch (`active_resolvers`), and under it, while it's on,
+                // "Play from X", "Use metadata from X" and "Use recommendations
+                // from X". A meta-service keeps its own on/off below; it gets the
+                // recommendations switch when it offers them.
+                if (isResolver) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    PluginSwitchRow(
+                        label = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                        hint = enableState.hint,
+                        checked = enableState.checked,
+                        enabled = !enableState.disabled,
+                        onCheckedChange = onResolverEnabledChange,
                     )
                 }
-                "ticketmaster" -> ConcertProviderConfig(
-                    isConnected = isConnected,
-                    keyLabel = "API Key",
-                    keyHint = "Enter your Ticketmaster API key",
-                    devPortalLabel = "developer-acct.ticketmaster.com",
-                    devPortalUrl = "https://developer-acct.ticketmaster.com/",
-                    onSubmitKey = onTicketmasterApiKeySubmit,
-                    onDisconnect = onTicketmasterDisconnect,
+                val playState = com.parachord.shared.plugin.playbackSwitchState(info, isResolver && enableState.checked, playbackOff, playbackLimit, signedIn = signedIn)
+                if (playState.shown) {
+                    PluginSwitchRow(
+                        label = com.parachord.shared.plugin.playbackSwitchLabel(plugin.name),
+                        hint = playState.hint,
+                        checked = playState.checked,
+                        enabled = !playState.disabled,
+                        nested = true,
+                        onCheckedChange = onPlaybackOn,
+                    )
+                }
+                val metaState = com.parachord.shared.plugin.metadataSwitchState(info, isResolver && enableState.checked, metadataOff, signedIn = signedIn)
+                if (metaState.shown) {
+                    PluginSwitchRow(
+                        label = com.parachord.shared.plugin.metadataSwitchLabel(plugin.name),
+                        hint = metaState.hint,
+                        checked = metaState.checked,
+                        enabled = !metaState.disabled,
+                        nested = true,
+                        onCheckedChange = onMetadataOn,
+                    )
+                }
+                val recState = com.parachord.shared.plugin.recommendationsSwitchState(
+                    info, if (isResolver) enableState.checked else isConnected, recommendationsOff, signedIn = signedIn,
                 )
-                "seatgeek" -> ConcertProviderConfig(
-                    isConnected = isConnected,
-                    keyLabel = "Client ID",
-                    keyHint = "Enter your SeatGeek Client ID",
-                    devPortalLabel = "seatgeek.com/account/develop",
-                    devPortalUrl = "https://seatgeek.com/account/develop",
-                    onSubmitKey = onSeatGeekClientIdSubmit,
-                    onDisconnect = onSeatGeekDisconnect,
-                )
-                "bandsintown" -> ConcertProviderConfig(
-                    isConnected = isConnected,
-                    keyLabel = "App ID",
-                    keyHint = "Enter your Bandsintown App ID",
-                    devPortalLabel = "artists.bandsintown.com",
-                    devPortalUrl = "https://artists.bandsintown.com/support/api-installation",
-                    onSubmitKey = onBandsintownApiKeySubmit,
-                    onDisconnect = onBandsintownDisconnect,
-                )
-                "songkick" -> ConcertProviderConfig(
-                    isConnected = isConnected,
-                    keyLabel = "API Key",
-                    keyHint = "Enter your Songkick API key",
-                    devPortalLabel = "songkick.com/developer",
-                    devPortalUrl = "https://www.songkick.com/developer",
-                    onSubmitKey = onSongkickApiKeySubmit,
-                    onDisconnect = onSongkickDisconnect,
-                )
-                // Generic .axe plugin: a music plug-in's "Enable X" is above
-                // (#707: it used to get a second "Enabled" switch here); a
-                // meta-service keeps this one as its "Enable X".
-                else -> if (!isResolver) ToggleableMetaConfig(
-                    isEnabled = isConnected,
-                    onToggle = onToggleConnection,
-                    title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
-                    enabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "${plugin.name} is enabled" },
-                    disabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "Enable ${plugin.name}" },
-                )
+                if (recState.shown) {
+                    if (!isResolver) Spacer(modifier = Modifier.height(16.dp))
+                    PluginSwitchRow(
+                        label = com.parachord.shared.plugin.recommendationsSwitchLabel(plugin.name),
+                        hint = recState.hint,
+                        checked = recState.checked,
+                        enabled = !recState.disabled,
+                        nested = isResolver,
+                        onCheckedChange = onRecommendationsOn,
+                    )
+                }
+                // "Playback quality": whether this plug-in follows Settings ›
+                // General › Playback Quality, or who sets its quality instead.
+                if (isResolver && enableState.checked && qualityLine != null) {
+                    PlaybackQualityLineRow(qualityLine, onOpenPlaybackQuality)
+                }
+
+            }
+            val accountSection: @Composable () -> Unit = {
+                // The account row for a status-capable plugin (desktop's AccountRow,
+                // capabilities.status): its own status line, and Sign in / Sign out
+                // when it implements them.
+                if (info.capabilities["status"] == true) {
+                    Spacer(modifier = Modifier.height(16.dp))
+                    HorizontalDivider()
+                    Spacer(modifier = Modifier.height(16.dp))
+                    PluginAccountRow(
+                        name = plugin.name,
+                        color = plugin.bgColor,
+                        status = pluginStatus,
+                        canSignIn = info.hasSignIn,
+                        canSignOut = info.hasSignOut,
+                        busy = sessionBusy,
+                        onSignIn = onSignIn,
+                        onSignOut = onSignOut,
+                    )
+                }
+
+                // Plugin-specific config. A plugin with `settings.configurable`
+                // fields and no settings of the app's own (Subsonic's server URL /
+                // username / password) gets the generic field editor; the plugins
+                // the app sets up itself keep their own UI (`usesGenericSettings`).
+                if (plugin.configFields.isNotEmpty() &&
+                    com.parachord.shared.plugin.PluginUserConfig.usesGenericSettings(plugin.id)
+                ) {
+                    PluginFieldsConfig(
+                        plugin = plugin,
+                        savedValues = pluginConfigValues[plugin.id] ?: emptyMap(),
+                        configured = pluginConfigured[plugin.id] ?: !plugin.requiresAuth,
+                        connectionTest = pluginConnectionTests[plugin.id],
+                        onSave = { values -> onSavePluginConfig(plugin.id, values) },
+                        onTestConnection = { onTestPluginConnection(plugin.id) },
+                    )
+                } else when (plugin.id) {
+                    "spotify" -> SpotifyConfig(
+                        isConnected = isConnected,
+                        onToggle = onToggleConnection,
+                        clientId = spotifyClientId,
+                        onSaveClientId = onSaveSpotifyClientId,
+                        onClearClientId = onClearSpotifyClientId,
+                        error = spotifyError,
+                        hasPreferredDevice = hasPreferredSpotifyDevice,
+                        onClearPreferredDevice = onClearPreferredSpotifyDevice,
+                    )
+
+                    "soundcloud" -> SoundCloudConfig(
+                        isConnected = isConnected,
+                        credentialsSaved = soundCloudCredentialsSaved,
+                        error = soundCloudError,
+                        onSaveCredentials = onSoundCloudSaveCredentials,
+                        onConnect = onSoundCloudConnect,
+                        onDisconnect = onSoundCloudDisconnect,
+                        onClearCredentials = onSoundCloudClearCredentials,
+                    )
+                    "applemusic" -> AppleMusicConfig(
+                        hasToken = appleMusicHasToken,
+                        configured = appleMusicConfigured,
+                        authorized = appleMusicAuthorized,
+                        connecting = appleMusicConnecting,
+                        onSaveToken = onAppleMusicSaveToken,
+                        onSaveStorefront = onAppleMusicSaveStorefront,
+                        onConnect = onAppleMusicAuthorize,
+                        onDisconnect = onAppleMusicDisconnect,
+                    )
+                    "local-files", "localfiles" -> LocalFilesConfig(
+                        scanProgress = scanProgress,
+                        onScanLocalFiles = onScanLocalFiles,
+                    )
+                    "lastfm" -> LastFmConfig(
+                        isConnected = isConnected,
+                        onToggle = onToggleConnection,
+                        scrobbling = scrobbling,
+                        onScrobblingChanged = onScrobblingChanged,
+                        lovePushEnabled = lovePushEnabled,
+                        loveBackfillState = loveBackfillState,
+                        onLovePushToggle = onLovePushToggle,
+                        onLoveBackfillClick = onLoveBackfillClick,
+                        onLoveBackfillDismiss = onLoveBackfillDismiss,
+                    )
+                    "listenbrainz" -> ListenBrainzConfig(
+                        isConnected = isConnected,
+                        onTokenSubmit = onListenBrainzTokenSubmit,
+                        onDisconnect = onListenBrainzDisconnect,
+                        authError = listenBrainzAuthError,
+                        scrobbling = scrobbling,
+                        onScrobblingChanged = onScrobblingChanged,
+                        lovePushEnabled = lovePushEnabled,
+                        loveBackfillState = loveBackfillState,
+                        onLovePushToggle = onLovePushToggle,
+                        onLoveBackfillClick = onLoveBackfillClick,
+                        onLoveBackfillDismiss = onLoveBackfillDismiss,
+                    )
+                    "librefm" -> LibreFmConfig(
+                        isConnected = isConnected,
+                        onConnect = onLibreFmConnect,
+                        onDisconnect = onLibreFmDisconnect,
+                        authError = libreFmAuthError,
+                        scrobbling = scrobbling,
+                        onScrobblingChanged = onScrobblingChanged,
+                    )
+                    "discogs" -> ToggleableMetaConfig(
+                        isEnabled = isConnected,
+                        title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                        onToggle = onToggleConnection,
+                        enabledText = "Discogs metadata provider is active",
+                        disabledText = "Enable Discogs to get artist bios and images from the Discogs community database.",
+                    )
+                    "wikipedia" -> ToggleableMetaConfig(
+                        isEnabled = isConnected,
+                        title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                        onToggle = onToggleConnection,
+                        enabledText = "Wikipedia metadata provider is active",
+                        disabledText = "Enable Wikipedia to get encyclopedia-style artist bios and images via Wikidata.",
+                    )
+                    "chatgpt", "claude", "gemini" -> {
+                        val currentModel by getAiModel(plugin.id).collectAsStateWithLifecycle()
+                        AiProviderConfig(
+                            providerId = plugin.id,
+                            isConnected = isConnected,
+                            onSaveConfig = onSaveAiConfig,
+                            onSaveModel = onSaveAiModel,
+                            onClear = onClearAiProvider,
+                            currentModel = currentModel,
+                        )
+                    }
+                    "ticketmaster" -> ConcertProviderConfig(
+                        isConnected = isConnected,
+                        keyLabel = "API Key",
+                        keyHint = "Enter your Ticketmaster API key",
+                        devPortalLabel = "developer-acct.ticketmaster.com",
+                        devPortalUrl = "https://developer-acct.ticketmaster.com/",
+                        onSubmitKey = onTicketmasterApiKeySubmit,
+                        onDisconnect = onTicketmasterDisconnect,
+                    )
+                    "seatgeek" -> ConcertProviderConfig(
+                        isConnected = isConnected,
+                        keyLabel = "Client ID",
+                        keyHint = "Enter your SeatGeek Client ID",
+                        devPortalLabel = "seatgeek.com/account/develop",
+                        devPortalUrl = "https://seatgeek.com/account/develop",
+                        onSubmitKey = onSeatGeekClientIdSubmit,
+                        onDisconnect = onSeatGeekDisconnect,
+                    )
+                    "bandsintown" -> ConcertProviderConfig(
+                        isConnected = isConnected,
+                        keyLabel = "App ID",
+                        keyHint = "Enter your Bandsintown App ID",
+                        devPortalLabel = "artists.bandsintown.com",
+                        devPortalUrl = "https://artists.bandsintown.com/support/api-installation",
+                        onSubmitKey = onBandsintownApiKeySubmit,
+                        onDisconnect = onBandsintownDisconnect,
+                    )
+                    "songkick" -> ConcertProviderConfig(
+                        isConnected = isConnected,
+                        keyLabel = "API Key",
+                        keyHint = "Enter your Songkick API key",
+                        devPortalLabel = "songkick.com/developer",
+                        devPortalUrl = "https://www.songkick.com/developer",
+                        onSubmitKey = onSongkickApiKeySubmit,
+                        onDisconnect = onSongkickDisconnect,
+                    )
+                    // Generic .axe plugin: a music plug-in's "Enable X" is above
+                    // (#707: it used to get a second "Enabled" switch here); a
+                    // meta-service keeps this one as its "Enable X".
+                    else -> if (!isResolver) ToggleableMetaConfig(
+                        isEnabled = isConnected,
+                        onToggle = onToggleConnection,
+                        title = com.parachord.shared.plugin.enableSwitchLabel(plugin.name),
+                        enabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "${plugin.name} is enabled" },
+                        disabledText = com.parachord.shared.plugin.enableSwitchHint(plugin.sharedInfo).ifEmpty { "Enable ${plugin.name}" },
+                    )
+                }
+            }
+            // A plug-in that needs a sign-in (Spotify, SoundCloud, Apple Music,
+            // a status plug-in) shows its account and keys first, then Enable;
+            // always, so nothing moves after signing in. The rest keep Enable
+            // first (shared accountFirst).
+            if (com.parachord.shared.plugin.accountFirst(info)) {
+                accountSection()
+                enableSection()
+            } else {
+                enableSection()
+                accountSection()
             }
         }
     }
@@ -3052,10 +3103,56 @@ private fun PluginSwitchRow(
         }
         Switch(
             checked = checked,
-            onCheckedChange = onCheckedChange,
+            // A disabled switch never writes its list (a plan limit, signed out).
+            onCheckedChange = { if (enabled) onCheckedChange(it) },
             enabled = enabled,
             modifier = if (nested) Modifier.scale(0.85f) else Modifier,
         )
+    }
+}
+
+/** A music plug-in sheet's "Playback quality" line, nested under its switches. */
+@Composable
+private fun PlaybackQualityLineRow(
+    line: com.parachord.shared.playback.drm.PlaybackQualityLine,
+    onOpenPlaybackQuality: () -> Unit,
+) {
+    val follows = line as? com.parachord.shared.playback.drm.PlaybackQualityLine.Follows
+    val external = line as? com.parachord.shared.playback.drm.PlaybackQualityLine.ExternalControl
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (follows != null) Modifier.clickable(onClick = onOpenPlaybackQuality) else Modifier)
+            .padding(start = 16.dp, top = 12.dp, bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = "Playback quality",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.Medium,
+            )
+            Text(
+                text = follows?.summary ?: external?.title.orEmpty(),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            external?.detail?.let {
+                Text(
+                    text = it,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+        if (follows != null) {
+            com.parachord.android.ui.components.ParachordIcon(
+                com.parachord.shared.ui.icons.AppIcon.ChevronRight,
+                contentDescription = "Open Playback Quality",
+                size = 16.dp,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }
 
@@ -3375,6 +3472,11 @@ private fun GeneralTab(
     onPlaybackAbrChanged: (Boolean) -> Unit,
     playbackSpatial: Boolean,
     onPlaybackSpatialChanged: (Boolean) -> Unit,
+    playbackQualityCopy: com.parachord.shared.playback.drm.PlaybackQualityCopy,
+    canPlayAtmos: Boolean,
+    volumeRows: List<VolumeRow>,
+    resolverVolumeOffsets: Map<String, Int>,
+    onResolverVolumeOffsetChanged: (String, Int) -> Unit,
 ) {
     LazyColumn(modifier = Modifier.fillMaxSize()) {
         item { SettingsGroupLabel("Appearance") }
@@ -3412,13 +3514,12 @@ private fun GeneralTab(
             )
         }
         // Desktop's Settings → General → Playback Quality (desktop's keys).
-        // Only Amazon Music's stream reads it on Android; Apple Music's
-        // quality isn't Parachord's to set here, so desktop's Apple Music
-        // sentences are left out.
+        // Which services follow it comes from the same shared rule as each
+        // plug-in sheet's Playback quality line (`PlaybackQualityCopy`).
         item { SettingsGroupLabel("Playback Quality") }
         item {
             Text(
-                "Amazon Music uses these settings. Other services choose their own quality.",
+                playbackQualityCopy.description,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
@@ -3427,7 +3528,7 @@ private fun GeneralTab(
         items(com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED.size) { i ->
             val tier = com.parachord.shared.playback.drm.PlaybackQualityTier.ORDERED[i]
             ListItem(
-                headlineContent = { Text(playbackQualityLabel(tier)) },
+                headlineContent = { Text(tier.settingsLabel) },
                 trailingContent = {
                     androidx.compose.material3.RadioButton(
                         selected = playbackQuality == tier,
@@ -3440,32 +3541,86 @@ private fun GeneralTab(
         item {
             ListItem(
                 headlineContent = { Text("Adjust to your connection") },
-                supportingContent = { Text("Amazon Music only. Lowers quality when your connection is slow, never above the level you chose.") },
+                supportingContent = { Text(playbackQualityCopy.adjustHint) },
                 trailingContent = { Switch(checked = playbackAbr, onCheckedChange = onPlaybackAbrChanged) },
             )
         }
         item {
-            ListItem(
-                headlineContent = { Text("Prefer Dolby Atmos mixes") },
-                supportingContent = {
+            if (canPlayAtmos) {
+                ListItem(
+                    headlineContent = { Text("Prefer Dolby Atmos mixes") },
+                    supportingContent = { Text(playbackQualityCopy.atmosHint) },
+                    trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
+                )
+            } else {
+                // No E-AC-3 decoder here: the preference would do nothing.
+                ListItem(
+                    headlineContent = { Text(com.parachord.shared.playback.drm.PlaybackQualityCopy.NO_ATMOS_DECODER) },
+                    supportingContent = { Text("Dolby Atmos mixes need an E-AC-3 decoder, which this phone doesn’t have.") },
+                )
+            }
+        }
+        // Volume Normalization (desktop's General tab, after Playback Quality):
+        // per-plug-in loudness trim.
+        if (volumeRows.isNotEmpty()) {
+            item { SettingsGroupLabel("Volume Normalization") }
+            item {
+                Text(
+                    text = "Balance loudness between different sources",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                )
+                Text(
+                    text = "Adjust each plug-in\u2019s volume to balance loudness. Negative values reduce volume for louder sources.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+            }
+            items(volumeRows, key = { "vol-${it.id}" }) { (id, name, capabilities) ->
+                // Apple Music is listed but DISABLED, as on desktop and iOS:
+                // MusicKit's `music.volume` is inert on Android WebView (DRM
+                // audio bypasses the JS pipeline), so a working slider is
+                // impossible. Hiding the row would be worse.
+                val control = ResolverVolume.controllability(capabilities, embedVolumeApplies = true)
+                val controllable = control.controllable
+                val reason = control.reason
+                val offset = resolverVolumeOffsets[id] ?: 0
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 6.dp)
+                        .alpha(if (controllable) 1f else 0.5f),
+                ) {
                     Text(
-                        "Amazon Music only. Plays the 5.1 core of a track’s Atmos mix when there is one. " +
-                            "This isn’t full Atmos: it’s mixed down on stereo output, and it plays instead of lossless FLAC when quality is Max.",
+                        text = name,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.width(96.dp),
                     )
-                },
-                trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
-            )
+                    Slider(
+                        value = offset.toFloat(),
+                        onValueChange = { onResolverVolumeOffsetChanged(id, it.roundToInt()) },
+                        valueRange = ResolverVolume.MIN_OFFSET_DB.toFloat()..ResolverVolume.MAX_OFFSET_DB.toFloat(),
+                        steps = (ResolverVolume.MAX_OFFSET_DB - ResolverVolume.MIN_OFFSET_DB) - 1,
+                        enabled = controllable,
+                        modifier = Modifier.weight(1f),
+                    )
+                    Text(
+                        text = if (controllable) "$offset dB" else (reason ?: ""),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.width(72.dp),
+                        textAlign = TextAlign.End,
+                    )
+                }
+            }
         }
     }
 }
 
-/** Desktop's Playback Quality labels. */
-private fun playbackQualityLabel(tier: com.parachord.shared.playback.drm.PlaybackQualityTier): String = when (tier) {
-    com.parachord.shared.playback.drm.PlaybackQualityTier.MAX -> "Max (best available, lossless where playable)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.HIGH -> "High (up to 500 kbps)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.STANDARD -> "Standard (up to 200 kbps)"
-    com.parachord.shared.playback.drm.PlaybackQualityTier.SAVER -> "Data saver (up to 100 kbps)"
-}
 
 // ── Sync Tab ───────────────────────────────────────────────────────
 

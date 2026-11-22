@@ -81,4 +81,81 @@ class PluginSwitchTest {
         assertFalse(metadataSwitchState(wikipedia, active = true, metadataOff = false).shown)
         assertFalse(metadataSwitchState(spotify, active = false, metadataOff = false).shown)
     }
+
+    // #782, desktop parachord#1615: a plug-in that needs a sign-in never shows
+    // as enabled until it's signed in. Display only; only false locks.
+    private val amazonMusic = PluginManager.PluginInfo(
+        id = "amazonmusic", name = "Amazon Music", version = "1.0.0",
+        capabilities = mapOf("resolve" to true, "search" to true, "recommendations" to true, "status" to true),
+    )
+    private val spotifyNamed = PluginManager.PluginInfo(
+        id = "spotify", name = "Spotify", version = "1.0.0", capabilities = mapOf("resolve" to true, "search" to true),
+    )
+    private val signedOut = PluginSwitchState(true, false, true, "Sign in to Amazon Music first")
+
+    @Test
+    fun `signed out the nested switches are off and locked saying so`() {
+        assertEquals(signedOut, playbackSwitchState(amazonMusic, active = true, playbackOff = false, signedIn = false))
+        assertEquals(signedOut, metadataSwitchState(amazonMusic, active = true, metadataOff = false, signedIn = false))
+        assertEquals(signedOut, recommendationsSwitchState(amazonMusic, active = true, recommendationsOff = false, signedIn = false))
+    }
+
+    @Test
+    fun `a choice switched off stays saved and shows again once signed in`() {
+        assertEquals(signedOut, playbackSwitchState(amazonMusic, active = true, playbackOff = true, signedIn = false))
+        val play = playbackSwitchState(amazonMusic, active = true, playbackOff = true, signedIn = true)
+        assertFalse(play.checked); assertFalse(play.disabled)
+        val meta = metadataSwitchState(amazonMusic, active = true, metadataOff = true, signedIn = true)
+        assertFalse(meta.checked); assertFalse(meta.disabled)
+        val recs = recommendationsSwitchState(amazonMusic, active = true, recommendationsOff = true, signedIn = true)
+        assertFalse(recs.checked); assertFalse(recs.disabled)
+    }
+
+    @Test
+    fun `signed in or no verdict the nested switches work as before`() {
+        for (signedIn in listOf(true, null)) {
+            val play = playbackSwitchState(amazonMusic, active = true, playbackOff = false, signedIn = signedIn)
+            assertTrue(play.checked); assertFalse(play.disabled)
+            val meta = metadataSwitchState(amazonMusic, active = true, metadataOff = false, signedIn = signedIn)
+            assertTrue(meta.checked); assertFalse(meta.disabled)
+            val recs = recommendationsSwitchState(amazonMusic, active = true, recommendationsOff = false, signedIn = signedIn)
+            assertTrue(recs.checked); assertFalse(recs.disabled)
+        }
+    }
+
+    @Test
+    fun `a plan limit still decides Play from with its own message`() {
+        val limit = PlaybackLimit(true, "Prime: no playback", message = "Your plan can’t play from Amazon Music.")
+        assertEquals(
+            PluginSwitchState(true, false, true, "Your plan can’t play from Amazon Music."),
+            playbackSwitchState(amazonMusic, active = true, playbackOff = false, limit = limit, signedIn = false),
+        )
+    }
+
+    @Test
+    fun `a plug-in that is off shows none of them signed in or not`() {
+        assertFalse(playbackSwitchState(amazonMusic, active = false, playbackOff = false, signedIn = false).shown)
+        assertFalse(metadataSwitchState(amazonMusic, active = false, metadataOff = false, signedIn = false).shown)
+        assertFalse(recommendationsSwitchState(amazonMusic, active = false, recommendationsOff = false, signedIn = false).shown)
+    }
+
+    @Test
+    fun `signed out Enable is off and locked even while in the active list`() {
+        assertEquals(
+            PluginSwitchState(true, false, true, "Sign in to Amazon Music first"),
+            enableSwitchState(amazonMusic, active = true, signedIn = false),
+        )
+        assertEquals(
+            PluginSwitchState(true, false, true, "Sign in to Spotify first"),
+            enableSwitchState(spotifyNamed, active = false, signedIn = false),
+        )
+    }
+
+    @Test
+    fun `signed in or no verdict Enable reads the active list as before`() {
+        for (signedIn in listOf(true, null)) {
+            assertEquals(PluginSwitchState(true, true, false, "Include it in search"), enableSwitchState(amazonMusic, active = true, signedIn = signedIn))
+            assertEquals(PluginSwitchState(true, false, false, "Include it in search"), enableSwitchState(amazonMusic, active = false, signedIn = signedIn))
+        }
+    }
 }

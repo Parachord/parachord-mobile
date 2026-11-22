@@ -35,12 +35,6 @@ internal fun fetchErrorLine(call: String, method: String, url: String, error: St
  *  validate `track.mbid` against this same shape; we mirror the regex
  *  here so [NativeBridge.resolveMbidForLove] can short-circuit when JS
  *  already has a valid MBID. */
-/** The JS-minted ids [NativeBridge.webSessionCall] puts into a script. */
-private val CALLBACK_ID = Regex("^[A-Za-z0-9_]{1,64}$")
-
-/** How long a sign-in tick waits for the plugin's decide() verdict. */
-private const val SIGN_IN_DECIDE_TIMEOUT_MS = 2_000L
-
 private val MBID_PATTERN = Regex("^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\$", RegexOption.IGNORE_CASE)
 
 /**
@@ -313,66 +307,36 @@ class NativeBridge(
 
     // ── webSession host bridge ───────────────────────────────────────
 
-    /** signIn verdicts the JS decide() owes, by callId. */
-    private val pendingDecides = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<Boolean>>()
+    /** The shared plumbing behind [webSessionCall] / [webSessionDecide]. */
+    private val webSessionJs = com.parachord.shared.websession.WebSessionJsCalls(
+        bridge = webSessionBridge,
+        scope = scope,
+        evaluate = { script ->
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                webView?.evaluateJavascript(script, null)
+            }
+        },
+    )
 
     /**
      * One `this.host.webSession` call (bootstrap.html's `__wsCall`): runs the
-     * shared [com.parachord.shared.websession.WebSessionBridge] and delivers
-     * its JSON answer to `window.__wsCallbacks[callbackId]`. For signIn, each
-     * tick goes to `window.__pcWsSignInTick` and the verdict comes back
-     * through [webSessionDecide]. No value (cookie, header, body) is logged.
+     * shared [com.parachord.shared.websession.WebSessionBridge] through
+     * [com.parachord.shared.websession.WebSessionJsCalls], which delivers its
+     * JSON answer to `window.__wsCallbacks[callbackId]`. For signIn, each tick
+     * goes to `window.__pcWsSignInTick` and the verdict comes back through
+     * [webSessionDecide]. No value (cookie, header, body) is logged.
      */
     @JavascriptInterface
     fun webSessionCall(callbackId: String, method: String, argsJson: String) {
-        if (!CALLBACK_ID.matches(callbackId)) {
+        if (!webSessionJs.call(callbackId, method, argsJson)) {
             Log.w(TAG, "webSessionCall: refused a malformed callback id")
-            return
-        }
-        scope.launch {
-            val bridge = webSessionBridge
-            val result = if (bridge == null) {
-                """{"success":false,"reason":"not-ready","error":"web sessions aren't available"}"""
-            } else {
-                try {
-                    bridge.call(method, argsJson, decide = if (method == "signIn") signInDecide(callbackId) else null)
-                } catch (e: Exception) {
-                    if (e is kotlinx.coroutines.CancellationException) throw e
-                    """{"success":false,"reason":"invalid","error":${escapeJsonString(e.message ?: "webSession call failed")}}"""
-                }
-            }
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                webView?.evaluateJavascript(
-                    "window.__wsCallbacks && window.__wsCallbacks['$callbackId'] && window.__wsCallbacks['$callbackId']($result)",
-                    null,
-                )
-            }
         }
     }
 
     /** The JS decide()'s verdict for a sign-in tick. */
     @JavascriptInterface
     fun webSessionDecide(callbackId: String, verdict: Boolean) {
-        pendingDecides.remove(callbackId)?.complete(verdict)
-    }
-
-    /** The host's decide for one signIn call: ask the plugin, false if it doesn't answer in time. */
-    private fun signInDecide(callbackId: String): suspend (com.parachord.shared.websession.SignInTick) -> Boolean = { tick ->
-        val answer = kotlinx.coroutines.CompletableDeferred<Boolean>()
-        pendingDecides.put(callbackId, answer)?.complete(false)
-        val tickJson = kotlinx.serialization.json.buildJsonObject {
-            put("url", kotlinx.serialization.json.JsonPrimitive(tick.url))
-            put("cookieNames", kotlinx.serialization.json.JsonArray(tick.cookieNames.map { kotlinx.serialization.json.JsonPrimitive(it) }))
-            put("stableTicks", kotlinx.serialization.json.JsonPrimitive(tick.stableTicks))
-        }
-        try {
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                webView?.evaluateJavascript("window.__pcWsSignInTick && window.__pcWsSignInTick('$callbackId', $tickJson)", null)
-            }
-            kotlinx.coroutines.withTimeoutOrNull(SIGN_IN_DECIDE_TIMEOUT_MS) { answer.await() } ?: false
-        } finally {
-            pendingDecides.remove(callbackId, answer)
-        }
+        webSessionJs.decide(callbackId, verdict)
     }
 
     // ── Links ────────────────────────────────────────────────────────

@@ -45,6 +45,7 @@ class SettingsViewModel constructor(
     private val syncEngine: com.parachord.android.sync.SyncEngine,
     private val pluginUserConfig: com.parachord.shared.plugin.PluginUserConfig,
     private val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore,
+    private val playbackController: com.parachord.android.playback.PlaybackController,
 ) : ViewModel() {
 
     // ── N-way multimaster (dev) ──────────────────────────────────────
@@ -384,6 +385,25 @@ class SettingsViewModel constructor(
     val playbackSpatial: StateFlow<Boolean> = settingsStore.playbackSpatial
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.parachord.shared.playback.drm.DEFAULT_PLAYBACK_SPATIAL)
 
+    /** The three together, for each plug-in sheet's Playback quality line. */
+    val playbackQualitySettings: StateFlow<com.parachord.shared.playback.drm.PlaybackQualitySettings> =
+        kotlinx.coroutines.flow.combine(settingsStore.playbackQuality, settingsStore.playbackAbr, settingsStore.playbackSpatial) { t, a, s ->
+            com.parachord.shared.playback.drm.PlaybackQualitySettings(t, a, s)
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), com.parachord.shared.playback.drm.PlaybackQualitySettings())
+
+    /** This phone's Dolby decoders (read once): no E-AC-3, no Atmos switch. */
+    val audioCapabilities: com.parachord.shared.playback.drm.DeviceAudioCapabilities
+        get() = com.parachord.android.playback.drm.AudioDecoders.capabilities
+
+    /** The Playback Quality section's copy, naming the loaded plug-ins that follow it. */
+    val playbackQualityCopy: StateFlow<com.parachord.shared.playback.drm.PlaybackQualityCopy> =
+        pluginManager.plugins
+            .map { com.parachord.shared.playback.drm.PlaybackQualityCopy.build(it, com.parachord.shared.playback.drm.PlaybackPlatform.ANDROID) }
+            .stateIn(
+                viewModelScope, SharingStarted.WhileSubscribed(5_000),
+                com.parachord.shared.playback.drm.PlaybackQualityCopy.build(emptyList(), com.parachord.shared.playback.drm.PlaybackPlatform.ANDROID),
+            )
+
     fun setPlaybackQuality(tier: com.parachord.shared.playback.drm.PlaybackQualityTier) {
         viewModelScope.launch { settingsStore.setPlaybackQuality(tier) }
     }
@@ -546,6 +566,29 @@ class SettingsViewModel constructor(
 
     /** The plug-ins that are on but don't play: unnumbered in the priority list. */
     val notPlayingResolvers: StateFlow<List<String>> = pluginStatusStore.notPlaying
+
+    /**
+     * What the app knows about each plug-in's sign-in (#782, desktop
+     * parachord#1615 `pluginAccounts`): the host's own sign-ins (Spotify,
+     * SoundCloud, Apple Music) with each status plug-in's reply over them
+     * (shared `signedInMap`). A host sign-in is left out (no verdict) until its
+     * check has answered: the stored token read, or MusicKit configured.
+     */
+    val pluginAccounts: StateFlow<Map<String, Boolean>> = kotlinx.coroutines.flow.combine(
+        settingsStore.getSpotifyAccessTokenFlow().map<String?, Boolean?> { it != null },
+        settingsStore.getSoundCloudTokenFlow().map<String?, Boolean?> { !it.isNullOrBlank() },
+        kotlinx.coroutines.flow.combine(musicKitBridge.configured, musicKitBridge.authorized) { configured, authorized ->
+            if (configured) authorized else null
+        },
+        pluginStatusStore.statuses,
+    ) { spotify, soundCloud, appleMusic, statuses ->
+        val host = buildMap {
+            spotify?.let { put("spotify", it) }
+            soundCloud?.let { put("soundcloud", it) }
+            appleMusic?.let { put("applemusic", it) }
+        }
+        com.parachord.shared.plugin.signedInMap(host, statuses)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyMap())
 
     fun setPlaybackOn(id: String, on: Boolean) {
         viewModelScope.launch { settingsStore.setPluginSwitchOn(SettingsStore.PLAYBACK_OFF_RESOLVERS, id, on) }
@@ -748,6 +791,8 @@ class SettingsViewModel constructor(
         viewModelScope.launch {
             settingsStore.setResolverVolumeOffsets(_resolverVolumeOffsets.value)
         }
+        // Playing from this resolver now? Apply it at once (debounced there).
+        playbackController.onResolverVolumeOffsetChanged(resolverId)
     }
 
     private val _appleMusicConnecting = MutableStateFlow(false)

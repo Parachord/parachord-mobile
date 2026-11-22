@@ -57,6 +57,12 @@ data class PlaybackState(
      * track, and it's dropped when the play from it ends, started or not.
      */
     val pendingSourcePick: com.parachord.shared.resolver.PendingSourcePick? = null,
+    /**
+     * Now Playing's quality chip ("Dolby Atmos", "Lossless"): what the
+     * service's ExoPlayer actually selected for a plugin DRM session (shared
+     * `qualityLabel`). Null for anything else, or a lossy stereo pick.
+     */
+    val playingQualityLabel: String? = null,
 )
 
 /** The play buttons' spinner: the engine is buffering, or a play is still starting. */

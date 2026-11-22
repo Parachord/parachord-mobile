@@ -3,6 +3,7 @@ package com.parachord.shared.plugin
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import com.parachord.shared.platform.Log
 
 /**
  * The minimum app version a plugin declares (#484, desktop parachord#1197).
@@ -60,13 +61,29 @@ object PluginCompat {
         return floor?.takeIf { parseVersion(it) != null }
     }
 
+    private var warnedUnparseable = false
+
+    /**
+     * An app version that isn't `x.y.z` skips every floor (never refused, as
+     * desktop does), so say so once: iOS reported "0.2" and every
+     * `minAppVersion.ios` was silently ignored (#770).
+     */
+    private fun warnUnparseableAppVersion(appVersion: String?, platform: String) {
+        if (warnedUnparseable) return
+        warnedUnparseable = true
+        Log.w("PluginCompat", "App version '$appVersion' ($platform) isn't x.y.z; plug-in minAppVersion floors are skipped")
+    }
+
     /**
      * The floor this app is below, or null when it can run the plugin. An app
      * that can't report its version is not refused on that account.
      */
     fun requiredAppVersion(minAppVersion: JsonElement?, appVersion: String?, platform: String): String? {
         val requires = minAppVersion(minAppVersion, platform) ?: return null
-        if (parseVersion(appVersion) == null) return null
+        if (parseVersion(appVersion) == null) {
+            warnUnparseableAppVersion(appVersion, platform)
+            return null
+        }
         return requires.takeIf { compareVersions(appVersion, it) < 0 }
     }
 

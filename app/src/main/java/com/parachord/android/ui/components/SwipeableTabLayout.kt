@@ -29,10 +29,19 @@ fun SwipeableTabLayout(
     modifier: Modifier = Modifier,
     counts: List<Int>? = null,
     initialPage: Int = 0,
+    /** A page to move to (a link inside one page to another); [onPageRequestHandled] clears it. */
+    requestedPage: Int? = null,
+    onPageRequestHandled: () -> Unit = {},
     content: @Composable (page: Int) -> Unit,
 ) {
     val pagerState = rememberPagerState(initialPage = initialPage, pageCount = { tabs.size })
     val scope = rememberCoroutineScope()
+    androidx.compose.runtime.LaunchedEffect(requestedPage) {
+        if (requestedPage != null) {
+            pagerState.animateScrollToPage(requestedPage)
+            onPageRequestHandled()
+        }
+    }
 
     val tabBarBackground = MaterialTheme.colorScheme.surface
     val activeColor = MaterialTheme.colorScheme.onSurface

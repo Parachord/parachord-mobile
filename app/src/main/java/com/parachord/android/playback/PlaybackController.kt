@@ -31,6 +31,9 @@ import com.parachord.shared.playback.noSourceFailure
 import com.parachord.shared.playback.UnplayableTrackOutcome
 import com.parachord.shared.playback.unplayableTrackOutcome
 import com.parachord.shared.playback.ResolverVolume
+import com.parachord.shared.playback.FailedSwitchRecovery
+import com.parachord.shared.playback.failedSwitchKeepsPlayback
+import com.parachord.shared.playback.failedSwitchRecovery
 import com.parachord.android.data.store.SettingsStore
 import android.widget.Toast
 import androidx.media3.common.C
@@ -111,6 +114,9 @@ class PlaybackController constructor(
 
         /** How long an auto-skip waits before skipping past a track that can't play ([scheduleAutoSkip]). */
         internal const val AUTO_SKIP_DELAY_MS = 600L
+
+        /** Quiet time after a volume-offset change before it is applied to the playing track. */
+        internal const val VOLUME_REAPPLY_DEBOUNCE_MS = 250L
 
         /**
          * How long a plugin DRM play may take to become audible after its
@@ -1626,6 +1632,8 @@ class PlaybackController constructor(
         userRequested: Boolean = !advancing,
         /** Run in the play's place (its failure rules still apply): a DRM refusal handled after the start. */
         instead: (suspend () -> Unit)? = null,
+        /** A manual source switch ([switchSource]): what was playing, given back if the pick can't start. */
+        switchFrom: SwitchOrigin? = null,
     ) {
         // Asked for now: a plugin DRM start still under way gives way to it at once.
         val generation = supersession.next()
@@ -1634,7 +1642,7 @@ class PlaybackController constructor(
         // ([PlaybackState.isStartingPlay]).
         playStartBegan()
         try {
-            playTrackInternalLocked(track, skipReselect, advancing, userRequested, instead, generation)
+            playTrackInternalLocked(track, skipReselect, advancing, userRequested, instead, generation, switchFrom)
         } finally {
             playStartEnded()
         }
@@ -1662,9 +1670,11 @@ class PlaybackController constructor(
         userRequested: Boolean,
         instead: (suspend () -> Unit)?,
         generation: Int,
+        switchFrom: SwitchOrigin? = null,
     ) {
       playMutex.withLock {
         activePlayGeneration = generation
+        activeSwitch = switchFrom
         // A row's source icon picked where this track plays from (#760).
         val picked = applySourcePick(track).takeIf { !advancing }
         @Suppress("NAME_SHADOWING") val track = picked ?: track
@@ -1692,11 +1702,23 @@ class PlaybackController constructor(
         } finally {
             // Nothing plays and the queue isn't moving on: Play loads the
             // track again (the network may be back), as it was asked for.
-            val failure = playFailure
+            var failure = playFailure
             playFailure = null
+            val switch = activeSwitch
+            var gaveBack = false
+            activeSwitch = null
+            // A manual source switch whose pick couldn't start: the playback
+            // goes back to what it was, with nothing recorded as failed.
+            if (switch != null && failedSwitchKeepsPlayback(isManualSwitch = true, failure, superseded = false)) {
+                carStoppedPlay = false
+                failureNotice = null
+                giveBackAfterFailedSwitch(switch, failure!!)
+                gaveBack = true
+                failure = null
+            }
             val stoppedByCar = carStoppedPlay
             carStoppedPlay = false
-            if (completed && failure == null) carRun.started()
+            if (completed && failure == null && !gaveBack) carRun.started()
             // It (or a fallback source) started: repeat all may wrap past an
             // unplayable last track again.
             // Only for the queue this play belongs to: a new queue set while
@@ -1817,14 +1839,24 @@ class PlaybackController constructor(
 
         val action = try {
             // A plugin DRM source's manifest wait gives way to a newer play at once.
-            if (router.getPluginDrmHandler().canHandle(routedTrack)) {
-                supersession.untilSuperseded(activePlayGeneration) { router.route(routedTrack) }
+            // A manual switch leaves the engine that's playing alone until the
+            // pick has started (shared failedSwitchKeepsPlayback).
+            val routeIt: suspend () -> PlaybackAction? = if (activeSwitch != null) {
+                { router.route(routedTrack, stopActive = false) }
             } else {
-                router.route(routedTrack)
+                { router.route(routedTrack) }
+            }
+            if (router.getPluginDrmHandler().canHandle(routedTrack)) {
+                supersession.untilSuperseded(activePlayGeneration) { routeIt() }
+            } else {
+                routeIt()
             }
         } catch (e: com.parachord.android.playback.drm.PluginDrmPlaybackException) {
             // The plugin refused the manifest (its plan, sign-in, a budget).
-            stateHolder.update { copy(currentTrack = routedTrack, isPlaying = false, isBuffering = false) }
+            // A manual switch keeps what plays on screen (playAfterPluginDrmFailure gives it back).
+            if (activeSwitch == null) {
+                stateHolder.update { copy(currentTrack = routedTrack, isPlaying = false, isBuffering = false) }
+            }
             playAfterPluginDrmFailure(routedTrack, e.resolverId, e.error, advancing, sessionId = null)
             return
         } catch (e: com.parachord.android.playback.handlers.PluginStreamStartException) {
@@ -1833,6 +1865,7 @@ class PlaybackController constructor(
             // an https-only build; plan parachord-mobile#664). Play loads the
             // track again once the settings are fixed.
             Log.w(TAG, "'${routedTrack.title}': ${e.userMessage}")
+            if (switchFailed(routedTrack, PlayFailure.START_FAILED)) return
             playFailure = PlayFailure.START_FAILED
             stateHolder.update {
                 copy(
@@ -1855,6 +1888,7 @@ class PlaybackController constructor(
             val online = networkMonitor.isOnline.value
             val failure = noSourceFailure(online, resolversCouldNotAnswer)
             Log.w(TAG, "No playable source for '${routedTrack.title}' (${if (online) "online" else "offline"}, resolvers couldn't answer: $resolversCouldNotAnswer)")
+            if (switchFailed(routedTrack, failure)) return
             playFailure = failure
             // Skip it, stop for Play, or (the car's third in a row) stop here,
             // and what to say (the shared rule, #616): decided before the
@@ -1906,6 +1940,17 @@ class PlaybackController constructor(
                     Log.d(TAG, "'${routedTrack.title}': superseded during its manifest fetch")
                     router.getPluginDrmHandler().closeSession(drmSessionId)
                     throw com.parachord.android.playback.drm.PlaySupersededException()
+                }
+                activeSwitch?.let { switch ->
+                    // A manual switch to a source the local player plays: what
+                    // was playing lets go of the track here (the router left an
+                    // external engine alone), so a failure from now on plays it
+                    // again from its own source ([giveBackAfterFailedSwitch]).
+                    switch.released = true
+                    switch.handler?.let { old ->
+                        old.stop()
+                        if (router.activeExternalHandler === old) router.restoreActiveExternalHandler(null)
+                    }
                 }
                 if (isExternalPlayback || foregroundHeldForPlay) {
                     if (localPlayKeepsHeldForeground(isAppVisible())) {
@@ -1993,8 +2038,23 @@ class PlaybackController constructor(
                 // (Apple Music → Apple Music), DON'T stop — handler.play() replaces
                 // the queue directly, and an async stop() would race with the new
                 // play(), pausing the new track.
-                if (wasAlreadyExternal && oldHandler != null && oldHandler != action.handler) {
+                if (wasAlreadyExternal && oldHandler != null && oldHandler != action.handler && activeSwitch == null) {
                     oldHandler.stop()
+                }
+                activeSwitch?.let { switch ->
+                    val old = switch.handler
+                    when {
+                        // The local player's track: the silent loop below replaces it.
+                        old == null -> switch.released = true
+                        // The same engine is asked to play the pick: it lets go of the old one.
+                        old === action.handler -> switch.released = true
+                        // Another engine: paused, not stopped, so a pick that can't
+                        // start resumes it where it is; stopped once the pick plays.
+                        switch.wasPlaying -> {
+                            old.pause()
+                            switch.paused = true
+                        }
+                    }
                 }
 
                 // Set ExoPlayer metadata so the MediaSession stays active.
@@ -2154,6 +2214,13 @@ class PlaybackController constructor(
                     return
                 }
 
+                // A manual switch's pick plays: the engine it replaced (left
+                // alone, or paused, until now) stops.
+                activeSwitch?.handler?.takeIf { it !== action.handler }?.let { old ->
+                    Log.d(TAG, "'${routedTrack.title}': the picked source plays; stopping ${old::class.simpleName}")
+                    old.stop()
+                }
+
                 // Start the appropriate state polling based on the handler type
                 startStatePolling(action.handler)
             }
@@ -2184,6 +2251,9 @@ class PlaybackController constructor(
 
         // If the track has no artwork, try to fetch it in the background
         enrichArtworkIfMissing(routedTrack)
+
+        // A local file with no other source: find its others once (#769).
+        fillLocalTrackSources(routedTrack)
 
         // Enrich with MusicBrainz MBIDs in the background
         mbidEnrichment.enrichInBackground(routedTrack.id, routedTrack.artist, routedTrack.title)
@@ -2216,6 +2286,39 @@ class PlaybackController constructor(
      * Deliberately NOT applied to the silence keepalive (`ctrl.volume = 0f`),
      * which must stay silent whatever the offsets say.
      */
+    private var volumeReapplyJob: Job? = null
+
+    /**
+     * An offset changed in Settings: if the track now playing came from that
+     * resolver, apply it at once (desktop's use-volume.js re-applies live), not
+     * from the next play. Debounced ([VOLUME_REAPPLY_DEBOUNCE_MS]) so a slider
+     * drag sends one Spotify request, not one per step. ExoPlayer's gain is set
+     * only while it plays a real track: the silent keep-alive loop stays at 0.
+     */
+    fun onResolverVolumeOffsetChanged(resolverId: String) {
+        volumeReapplyJob?.cancel()
+        volumeReapplyJob = scope.launch {
+            delay(VOLUME_REAPPLY_DEBOUNCE_MS)
+            val current = stateHolder.state.value.currentTrack?.resolver
+            if (!ResolverVolume.reappliesLive(resolverId, current)) return@launch
+            val fraction = resolverVolumeFraction(current)
+            try {
+                if (!isExternalPlayback) {
+                    controller?.volume = fraction
+                } else {
+                    activeEmbedHandler?.let {
+                        it.volumeFraction = fraction
+                        it.setVolume(fraction)
+                    }
+                    if (current == "spotify") router.getSpotifyHandler().reapplyConnectVolume()
+                }
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.d(TAG, "Live volume not applied (harmless): ${e.message}")
+            }
+        }
+    }
+
     private suspend fun resolverVolumeFraction(resolverId: String?): Float {
         val id = resolverId ?: return 1f
         return try {
@@ -3528,10 +3631,26 @@ class PlaybackController constructor(
             // it's never written onto the track.
             val pick = com.parachord.shared.resolver.PendingSourcePick(track.id, source.resolver)
             stateHolder.update { copy(pendingSourcePick = pick) }
+            // What plays now: a pick that can't start gives the playback back
+            // to it (shared failedSwitchKeepsPlayback).
+            val now = stateHolder.state.value
+            val origin = SwitchOrigin(
+                track = track,
+                pickedResolver = source.resolver,
+                wasPlaying = now.isPlaying,
+                positionMs = now.position,
+                durationMs = now.duration,
+                wasExternal = isExternalPlayback,
+                handler = if (isExternalPlayback) router.activeExternalHandler else null,
+                loadOnPlay = loadOnPlayTarget(loadOnPlay, track.id),
+                manualPickTrackId = manualPickTrackId,
+                playbackError = now.playbackError,
+                streamingMetadata = now.streamingMetadata,
+            )
             try {
                 // skipReselect=true: the user explicitly chose this source — don't let
                 // reselectBestSource() override it back to the auto-selected best.
-                playTrackInternal(switched, skipReselect = true)
+                playTrackInternal(switched, skipReselect = true, switchFrom = origin)
             } finally {
                 // A later pick replaced it: that one's play clears its own.
                 if (stateHolder.state.value.pendingSourcePick === pick) {
@@ -3539,6 +3658,138 @@ class PlaybackController constructor(
                 }
             }
         }
+    }
+
+    /**
+     * What played before a manual source switch ([switchSource]), given back
+     * if the pick can't start (shared [failedSwitchKeepsPlayback]).
+     */
+    internal class SwitchOrigin(
+        val track: TrackEntity,
+        val pickedResolver: String,
+        val wasPlaying: Boolean,
+        val positionMs: Long,
+        val durationMs: Long,
+        val wasExternal: Boolean,
+        /** The external engine that held the track; null for the local player. */
+        val handler: ExternalPlaybackHandler?,
+        /** The slot Play would have loaded (nothing held the track). */
+        val loadOnPlay: LoadOnPlay?,
+        val manualPickTrackId: String?,
+        val playbackError: String?,
+        val streamingMetadata: StreamingMetadata?,
+    ) {
+        /** The old engine let go of the track (stopped, or its item replaced). */
+        var released = false
+
+        /** The switch paused the old engine so two sources wouldn't play at once. */
+        var paused = false
+    }
+
+    /** The manual switch whose play is under way (set under [playMutex]). */
+    private var activeSwitch: SwitchOrigin? = null
+
+    /**
+     * The play under way is a manual switch and its pick failed with
+     * [failure]: recorded for [playTrackInternal]'s finally, which gives the
+     * playback back ([giveBackAfterFailedSwitch]). True means the caller stops
+     * there: no fallback source, no stop, no message of its own.
+     */
+    private fun switchFailed(track: TrackEntity, failure: PlayFailure): Boolean {
+        if (activeSwitch == null) return false
+        Log.w(TAG, "Manual switch of '${track.title}' to ${track.resolver} didn't start ($failure)")
+        playFailure = failure
+        return true
+    }
+
+    /**
+     * A manual switch's pick couldn't start ([failure]): the playback goes
+     * back to what it was before the switch (shared [failedSwitchRecovery]).
+     * An old engine left alone keeps playing; one the switch paused resumes;
+     * one that had to let go of the track plays it again from its source at
+     * its position, or, if it was paused, waits for Play there. Nothing is
+     * recorded as failed, and the switcher's pick is cleared by [switchSource].
+     */
+    private suspend fun giveBackAfterFailedSwitch(origin: SwitchOrigin, failure: PlayFailure) {
+        val recovery = if (origin.loadOnPlay != null) {
+            FailedSwitchRecovery.UNTOUCHED
+        } else {
+            failedSwitchRecovery(origin.released, origin.paused, origin.wasPlaying)
+        }
+        Log.w(TAG, "'${origin.track.title}': ${origin.pickedResolver} didn't start ($failure); back to ${origin.track.resolver} ($recovery)")
+        // The pick's engine, if it got that far, lets go.
+        router.activeExternalHandler?.takeIf { it !== origin.handler }?.let { failed ->
+            try {
+                failed.stop()
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Stopping the failed pick's engine failed: ${e.message}")
+            }
+        }
+        loadOnPlay = origin.loadOnPlay
+        manualPickTrackId = origin.manualPickTrackId
+        when (recovery) {
+            FailedSwitchRecovery.UNTOUCHED, FailedSwitchRecovery.RESUME_IN_PLACE -> {
+                val old = origin.handler
+                if (origin.wasExternal && old != null && origin.loadOnPlay == null) {
+                    router.restoreActiveExternalHandler(old)
+                    isExternalPlayback = true
+                    notifyExternalMode(true)
+                    if (recovery == FailedSwitchRecovery.RESUME_IN_PLACE) old.resume()
+                    // Its polling (and end-of-track callback) may have been
+                    // cancelled for the pick; starting it again is harmless.
+                    startStatePolling(old)
+                }
+                val resumed = recovery == FailedSwitchRecovery.RESUME_IN_PLACE
+                stateHolder.update {
+                    copy(
+                        currentTrack = origin.track,
+                        isPlaying = origin.wasPlaying,
+                        isBuffering = false,
+                        position = if (resumed) origin.positionMs else position,
+                        duration = if (resumed) origin.durationMs else duration,
+                        playbackError = origin.playbackError,
+                        streamingMetadata = origin.streamingMetadata ?: streamingMetadata,
+                    )
+                }
+                if (origin.wasExternal && !origin.wasPlaying && origin.loadOnPlay == null) startIdleTimeout()
+            }
+            FailedSwitchRecovery.REPLAY_AT_POSITION -> {
+                stateHolder.update {
+                    copy(
+                        currentTrack = origin.track,
+                        isPlaying = true,
+                        isBuffering = true,
+                        position = origin.positionMs,
+                        duration = origin.durationMs,
+                        playbackError = null,
+                        streamingMetadata = origin.streamingMetadata,
+                    )
+                }
+                // After this play's lock is released.
+                launchPlay { playThenSeek(origin.track, origin.positionMs, skipReselect = true) }
+            }
+            FailedSwitchRecovery.HOLD_FOR_PLAY -> {
+                stopBeforeFailedTrack(autoSkip = false)
+                loadOnPlay = LoadOnPlay(origin.track, origin.positionMs, skipReselect = true, why = LoadOnPlay.Why.IDLE_STOPPED)
+                stateHolder.update {
+                    copy(
+                        currentTrack = origin.track,
+                        isPlaying = false,
+                        isBuffering = false,
+                        position = origin.positionMs,
+                        duration = origin.durationMs,
+                        playbackError = null,
+                        streamingMetadata = origin.streamingMetadata,
+                    )
+                }
+            }
+        }
+        _notices.tryEmit(
+            PlaybackNotice(
+                message = PlaybackMessages.couldNotSwitchTo(origin.pickedResolver, origin.track.resolver, origin.wasPlaying),
+            ),
+        )
     }
 
     /**
@@ -3583,6 +3834,8 @@ class PlaybackController constructor(
      * car shows: open Spotify on the phone.
      */
     private suspend fun playWithoutSpotify(track: TrackEntity, advancing: Boolean) {
+        // A manual switch to Spotify: no other source, the old one comes back.
+        if (switchFailed(track, PlayFailure.NO_SOURCE_WITHOUT_SPOTIFY)) return
         if (playFromOtherSource(track, "spotify", advancing) != null) return
         Log.w(TAG, "'${track.title}': Spotify can't start in the background and there's no other source")
         playFailure = PlayFailure.NO_SOURCE_WITHOUT_SPOTIFY
@@ -3758,9 +4011,11 @@ class PlaybackController constructor(
                     playTrackInternalUnsafe(track, skipReselect = true, advancing = advancing, userRequested = false)
                     return
                 }
+                if (switchFailed(track, PlayFailure.START_FAILED)) return
                 startFailedForDrm(track)
             }
-            com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED -> startFailedForDrm(track)
+            com.parachord.shared.playback.drm.PluginDrmOutcome.START_FAILED ->
+                if (!switchFailed(track, PlayFailure.START_FAILED)) startFailedForDrm(track)
             com.parachord.shared.playback.drm.PluginDrmOutcome.PLAN_REFUSED,
             com.parachord.shared.playback.drm.PluginDrmOutcome.NOT_SIGNED_IN,
             com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED,
@@ -3768,6 +4023,8 @@ class PlaybackController constructor(
                 if (outcome != com.parachord.shared.playback.drm.PluginDrmOutcome.LICENSE_DENIED) {
                     handler.noteRefusalLater(resolverId, scope)
                 }
+                // A manual switch: no other source, the old one comes back.
+                if (switchFailed(track, PlayFailure.EMBED_REFUSED)) return
                 val name = handler.serviceName(resolverId)
                 val message = com.parachord.shared.playback.drm.PluginDrmMessages.refused(
                     outcome, name,
@@ -3850,6 +4107,8 @@ class PlaybackController constructor(
         advancing: Boolean,
     ) {
         Log.w(TAG, "'${track.title}': ${e.message}")
+        // A manual switch to the embed: no other source, the old one comes back.
+        if (switchFailed(track, PlayFailure.EMBED_REFUSED)) return
         embedRefusedTrackId = track.id
         val excluded = track.resolver ?: "soundcloud"
         val fallback = playFromOtherSource(track, excluded, advancing)
@@ -4117,6 +4376,50 @@ class PlaybackController constructor(
      * been through the resolver pipeline yet. Caches the result in TrackResolverCache
      * so subsequent plays and queue items benefit.
      */
+    /** Tracks [fillLocalTrackSources] has already asked about this session. */
+    private val playFillTracker = com.parachord.shared.resolver.PlayFillTracker()
+
+    /**
+     * Find the other sources of a track that just started from a local file
+     * and has none (#769, desktop parachord#1604, shared [LocalPlayFill]):
+     * once per track per session, off the main thread, after the play began.
+     * What's found joins the resolver cache, so Now Playing's source switcher
+     * offers it. The background sweep still skips local files, so this never
+     * runs over a whole local library.
+     */
+    private fun fillLocalTrackSources(track: TrackEntity) {
+        val key = trackKey(track.title, track.artist)
+        val cached = trackResolverCache.getSources(track.title, track.artist)
+        if (!com.parachord.shared.resolver.LocalPlayFill.shouldFill(track.resolver, cached)) return
+        if (!playFillTracker.claim(key)) return
+        scope.launch(Dispatchers.IO) {
+            try {
+                val report = resolverManager.resolveReport(
+                    "${track.title} ${track.artist}",
+                    targetTitle = track.title,
+                    targetArtist = track.artist,
+                    targetIsrc = track.isrc,
+                    targetMbid = track.recordingMbid,
+                )
+                val current = trackResolverCache.getSources(track.title, track.artist)
+                val merged = com.parachord.shared.resolver.LocalPlayFill.mergeFoundSources(current, report.sources)
+                if (merged.size == current.orEmpty().size) {
+                    Log.d(TAG, "Play fill: nothing new for '${track.title}'" +
+                        if (report.failed.isNotEmpty()) " (couldn't answer: ${report.failed})" else "")
+                    if (current == null && report.sources.isNotEmpty()) {
+                        trackResolverCache.putSources(track.title, track.artist, report.sources, report.failed)
+                    }
+                    return@launch
+                }
+                Log.d(TAG, "Play fill: '${track.title}' → ${merged.map { it.resolver }}")
+                trackResolverCache.putSources(track.title, track.artist, merged, report.failed)
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+                Log.w(TAG, "Play fill failed for '${track.title}': ${e.message}")
+            }
+        }
+    }
+
     private class OnTheFlyResolve(
         val track: TrackEntity,
         /** Nothing usable came back and a resolver couldn't answer, or the resolve threw (#566). */

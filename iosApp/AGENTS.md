@@ -365,6 +365,12 @@ The runtime split: **Kotlin owns lifecycle, Swift owns polyfills.**
   `window.storage`) must prepend
   `if (typeof window === 'undefined') { globalThis.window = globalThis; }`
   so `.axe` plugins ported from the Android WebView host work unmodified.
+- **JSC has no `URL` or `URLSearchParams` either** (WebCore APIs, like
+  `DOMParser`). `IosJsRuntime` installs a WHATWG-style polyfill
+  (`JsUrlPolyfill`, tested in JSC by `JsUrlPolyfillTest`) before anything
+  else runs. Without it a plug-in's `new URL(...)` threw, and a `try` around
+  it read the page as "not a URL": every Amazon album lookup failed as "not
+  reachable". `DOMParser` is still missing (Bandcamp's page lookups fail).
 - Match Android's `bootstrap.html` Promise/Response shape byte-for-byte
   so plugins don't need per-platform forks.
 - **The plug-in host (`this.host`) comes from `BOOTSTRAP_JS`'s `plugin-host-supplier`
@@ -448,7 +454,7 @@ there**, so several gaps only surface on iOS:
 
 `QueuePlaybackCoordinator` moves the queue through one `advance(_ trigger: AdvanceTrigger)` that follows the shared `advanceAction` (root `CLAUDE.md` → "Queue advance and repeat"). `skipNext` is `advance(.nextPressed)` and a track end is `advance(.trackEnded)`; Listen Along owns an ended track first, then a spinoff pool, then the queue and repeat mode decide. The Swift `RepeatMode` enum and `originalQueue` are gone: repeat is `QueuePlaybackCoordinator.repeatMode`, of the shared `RepeatMode` type; repeat all wraps the queue through `QueueManager.wrapToStart` (so added tracks come round), and Next on the last track wraps under repeat all. Only this queue's tracks wrap: history from before a Clear queue or a new queue (`setQueue` keeps it, and puts the track it replaced on top, #605) and spinoff pool tracks stay reachable by Previous and Next but never wrap (the shared `QueueManager` keeps each track's lap flag in history, Up Next and the current track). The coordinator only reports a pool track starting (`poolTrackStarting` → shared `QueueManager.poolTrackStarted(current:)`, from `advanceSpinoff` and `beginRadio`); the shared `QueueManager` keeps the seed in the lap and the pool tracks out (root `CLAUDE.md` → "Queue advance and repeat"). Unlike Android, a radio link keeps the user's queue suspended under it, so the track that was playing is its seed and the queue resumes after the station. An unplayable last track wraps too, but only when a track has played (`.played`) since the queue was set, restored or last wrapped (`playedSinceWrap`), so a queue where nothing plays stops. At the end of the queue with repeat off the cleared track goes to history (`QueueManager.pushToHistory`), so Previous goes back to it. During Listen Along the session takes the end of its own song first (`onTrackFinished`), so repeat never replays or wraps it, and repeat can't be changed (`repeatAllowed`). Don't add a Swift-side copy of any of this.
 
-A track with nothing resolved yet (no cache entry, or an empty one) plays at once from the Spotify / Apple Music IDs it carries when `IosContainer.storedIdRoute` gives sources (the shared `SourceReselection` rule, as Android's cold start, #452 / #587), and `IosTrackResolverCache.resolve` fills the cache in the background; otherwise `playTrack` waits for `resolveSourcesReport` as before. The Now Playing deck (`availableResolvers`) and a forced pick use `SourceReselection.switchableSources` / `sourceForSwitch`: sources that can play, one per resolver, in the user's order.
+A track with nothing resolved yet (no cache entry, or an empty one) plays at once from the Spotify / Apple Music IDs it carries when `IosContainer.storedIdRoute` gives sources (the shared `SourceReselection` rule, as Android's cold start, #452 / #587), and `IosTrackResolverCache.resolve` fills the cache in the background; otherwise `playTrack` waits for `resolveSourcesReport` as before. The Now Playing deck (`availableResolvers`) and a forced pick use `SourceReselection.switchableSources` / `sourceForSwitch`: sources that can play, one per resolver, in the user's order. A track that started from a local file with no other source asks the resolvers once per session (`IosTrackResolverCache.fillLocalPlay`, from `playTrack`'s `.played` branch, the shared `LocalPlayFill`, #769), so the deck can offer what they find; the background sweep still skips local files.
 
 A track with no playable source follows the shared rule, as on Android (root `CLAUDE.md` → "Queue advance and repeat" → "A track with no source: one rule on both apps"): `playTrack`'s `.noPlayableSource` branch asks `noSourceFailure` (offline, or the play-time resolve couldn't answer, #566: `resolveSourcesReport`), then, after the iOS-only cases (Listen Along, Apple Music not authorized, Spotify or an embed tapped in the car), the shared `unplayableTrackOutcome`, which decides stop or skip, the message and the car's stop (`UnplayableTrackOutcome.Stop` / `.Skip`). A tapped track with no source stops for Play with `PLAY_NO_SOURCE_MESSAGE`; during an advance or a spinoff it skips through `advance(.skippedUnplayable)`. `START_FAILED` stops on the track with `PLAY_START_FAILED_MESSAGE`, advancing or not. Previous on a track no engine holds measures from its slot (`positionForPrevious`) and past 3 s restarts it without playing (`restartedFromTop`); see "Now Playing and remote commands" → "Play on a track no engine holds starts it".
 
@@ -1322,7 +1328,8 @@ reports play, pause, seek and a known duration through `onNowPlayingChanged`.
   and the retry is forced to it unless the cache no longer holds that source,
   when it re-selects. A failed deck switch (a forced resolver that isn't a
   slot's retry, `deckSwitch`) still leaves the playback that was going on as it
-  was. While a deck switch starts, the deck shows the pick
+  was (shared `failedSwitchKeepsPlayback`, Android's rule too) and shows the
+  shared `PlaybackMessages.couldNotSwitchTo`. While a deck switch starts, the deck shows the pick
   (`pendingSourcePick`, through the shared `pickerShownResolver`, read only
   while `isStarting`), never stamped onto the track, so a failed switch goes
   back to the real source; the play buttons spin on `isStarting`. **The direct-URL shortcut** (a track's `sourceUrl` with no cache entry)
@@ -1565,7 +1572,15 @@ and **Use recommendations from X**; a meta-service's own on/off (`disabled_plugi
 is its "Enable X", with "Use recommendations from X" under it when it offers them.
 Labels, hints and visibility come from `IosContainer.pluginSheet` (the shared
 `PluginSwitch` rules, flattened to `IosPluginSheet`); `setPluginSwitch(kind:id:on:)`
-writes the three lists. The priority list numbers only the plug-ins that play
+writes the three lists. Signed out (#782, desktop parachord#1615: shared
+`signedInMap` over `hostSignedIn` / `hostSignedOut`, which stay empty until
+`loadAll` has read the tokens, `hostChecked`), Enable (`IosPluginSheet.enable`)
+and the three are drawn `locked`, off, "Sign in to X first"; `switchRow`'s
+binding ignores a set while locked. A plug-in that needs a sign-in
+(`IosPluginSheet.accountFirst`) shows its account row and service section before
+Enable. In the priority list an active signed-out plug-in (`signedOutOrder`) is
+an unnumbered greyed row saying "Sign in" (`IosContainer.pluginTileOrder`).
+The priority list numbers only the plug-ins that play
 (`playingOrder`); one on but not playing (`ResolverPrefs.notPlaying`, from
 `PluginStatusStore.notPlaying`) sits under them unnumbered with
 `pluginTileStatus`'s line, keeping its `resolver_order` slot. Saving the order
@@ -1573,14 +1588,65 @@ also saves `resolver_order_memory`, and a re-enabled plug-in goes back where it
 was ranked (`ResolverOrderMemory.insertRemembered`). Badges, the deck's sources,
 greyed rows and selection (`resolverScoring`'s `getNotPlaying`) leave the list
 out. The account row (status line, Sign in / Sign out) shows for a plugin with
-`capabilities.status`; none loads on iOS today, since Amazon Music needs the
-web-session bridge iOS doesn't supply. A purchases-only plan (`ownedOnly`,
+`capabilities.status`: Amazon Music, which loads on iOS since the web-session
+bridge landed (#779, "The webSession host bridge" below); its Sign in opens the
+web-session sign-in sheet. iOS can't play from it (Widevine only), so it's in
+the not-playing list with "Search and links only" and a locked Play from
+(shared `hostCannotPlay`, `HostPlayback.IOS`). A purchases-only plan (`ownedOnly`,
 #1494) keeps the plug-in numbered, with `pluginTileStatus`'s label in place of
 "Connected"; entering it drops the resolver's saved sources
 (`IosTrackResolverCache.clearResolver`, called by the shared
 `PluginStatusStore` through `IosContainer.resolverSourcesClearer`, which
 `AppBootstrap` sets; root `CLAUDE.md` → "A plan that plays only what the
 account owns").
+
+Under the switches, while Enable is on, a music plug-in's sheet shows a
+**Playback quality** line (`IosPluginSheet.qualityTitle` / `qualityDetail`, the
+shared `PlaybackQualityLine` with `PlaybackPlatform.IOS`). On iOS it always says
+who else sets it: Apple Music "Set in iOS Settings" (MusicKit's
+`ApplicationMusicPlayer` follows Settings › Music › Audio Quality, not
+`playback_quality`), Spotify "Set in the Spotify app", SoundCloud and Bandcamp
+"Set by its player", Subsonic "Set by your server", local files "Plays the file
+as it is". iOS has no Settings › Playback Quality section and no plugin DRM
+engine, so nothing follows the tier and Now Playing shows no quality chip; the
+chip's rule (`qualityLabel`) is shared for when one lands.
+
+## The webSession host bridge (#779)
+
+`amazonmusic.axe` requires `this.host.webSession` (root `CLAUDE.md` → "Web
+sessions"). The engine is shared (`WebSessionHost`, `WebSessionBridge`); iOS
+adds only the web view:
+
+- **Kotlin owns the rules, Swift drives WebKit.** `IosWebSessionPlatform`
+  (iosMain) implements the shared `WebSessionPlatform` over
+  `IosWebSessionView`, a callback-style interface (no suspend functions
+  implemented in Swift) that `WebSessionWebView.swift` conforms to. Budgets,
+  the capture script (`WebSessionScripts.captureScript`, the same text as
+  Android's), report parsing and the cookie rules (`WebSessionCookies`) stay in
+  Kotlin.
+- **Wiring:** `AppBootstrap` sets `IosContainer.webSessionView` before the
+  plugins load; `IosContainer.webSessionBridge` builds the host on first use;
+  `PluginManager(hostBridges = setOf("webSession"))` (no `widevine`).
+  `JsPolyfills` attaches `NativeBridge.webSessionCall` / `webSessionDecide`,
+  which forward to the shared `WebSessionJsCalls`; the JS side is the
+  `web-session-bridge` block of `BOOTSTRAP_JS`, byte-identical to Android's
+  (`PluginHostContractTest`).
+- **The hidden page** is 1100×800 (a 0×0 app never fires its requests),
+  inserted at the back of the key window, `alpha 0.01`, not touchable. With no
+  window (a CarPlay-only launch) it runs unattached.
+- **The jar is the default `WKWebsiteDataStore`**, shared with the SoundCloud
+  and Bandcamp pages: `clear()` deletes only the cookies `WebSessionCookies.under`
+  picks for the declared domains. Never `removeData` on the whole store.
+- **`pageFetch` is `callAsyncJavaScript`**, which awaits the fetch's promise,
+  so the unique-key poll isn't needed there (JSC's plugin calls still need it).
+- **The webSession `fetch` client** (`createWebSessionHttpClient`) runs the
+  response-type guard; `useResponseTypeGuard { … }` now takes the session
+  options, since `configureSession` is ignored with the guard's session.
+- **Not checked:** a real Amazon sign-in or any discovery call against Amazon
+  (no account in the simulator). Checked in the simulator: `amazonmusic` 1.23.0
+  loads, its sheet shows the account row (the plugin's own status line) with
+  Sign in, Sign in opens the sheet on Amazon's page, and closing it answers
+  "Could not sign in to Amazon Music".
 
 ## Local files are the library, not loves (#705)
 
@@ -1711,3 +1777,8 @@ NSHTTPURLResponse`.
   Android too, and the persisted Spotify cooldown is the safety net.
 - `DevSmokeTestView` (the old phase 1–4 smoke tests, with its own player) is
   only reachable from its `#Preview`; it isn't a tab in the app.
+
+
+## Volume Normalization (Settings → General)
+
+The per-plug-in loudness trim sits on the General tab after the Playback section, with desktop's title and words. A row is enabled by `IosContainer.isResolverVolumeControllable` (shared `ResolverVolume.controllability` over the plug-in's capabilities, `embedVolumeApplies = false`): embedded pages (SoundCloud's widget, Bandcamp's embed) are off as "System vol" because WebKit ignores a media element's `volume` on iOS. A slider move posts `IosVolumeOffsets.changed`; `QueuePlaybackCoordinator` applies it live (AVPlayer gain, Spotify Connect volume) after 250 ms of quiet.

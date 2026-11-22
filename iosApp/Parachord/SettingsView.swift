@@ -220,15 +220,34 @@ final class SettingsViewModel {
     /// On but not playing (a plan limit, or "Play from" off): unnumbered.
     func isNotPlaying(_ id: String) -> Bool { ResolverPrefs.shared.notPlaying.contains(id) }
     /// The priority list's numbered part: the plug-ins that play.
-    var playingOrder: [String] { resolverOrder.filter { !isNotPlaying($0) } }
+    var playingOrder: [String] { tileOrder.numbered }
+    private var tileOrder: PluginTileOrder {
+        container.pluginTileOrder(onInOrder: resolverOrder, notPlaying: Array(ResolverPrefs.shared.notPlaying), signedOut: signedOutOrder)
+    }
     /// On but not playing, in their saved slots.
-    var notPlayingOrder: [String] { resolverOrder.filter { isNotPlaying($0) } }
+    var notPlayingOrder: [String] { tileOrder.unnumbered }
 
     /// The sheet's switches for [svc]; [active] is its "Enable X".
     func pluginSheet(_ svc: PCService, active: Bool) -> IosPluginSheet {
         _ = statusTick
-        return container.pluginSheet(id: svc.id, name: svc.name, isResolver: svc.kind == .resolver, active: active, lists: switchLists)
+        return container.pluginSheet(id: svc.id, name: svc.name, isResolver: svc.kind == .resolver, active: active,
+                                     lists: switchLists, hostSignedIn: hostSignedIn, hostSignedOut: hostSignedOut)
     }
+    /// The host's own sign-ins once checked (#782, shared `signedInMap`): none
+    /// until `loadAll` has read them, so nothing reads signed out at launch.
+    var hostChecked = false
+    private var hostSignIns: [(String, Bool)] {
+        guard hostChecked else { return [] }
+        return [("spotify", spotifyConnected), ("soundcloud", soundCloudConnected), ("applemusic", appleMusicConnected)]
+    }
+    var hostSignedIn: [String] { hostSignIns.filter { $0.1 }.map { $0.0 } }
+    var hostSignedOut: [String] { hostSignIns.filter { !$0.1 }.map { $0.0 } }
+    /// On but signed out (#782): the row reads as off, says "Sign in", unnumbered.
+    var signedOutOrder: [String] {
+        _ = statusTick
+        return container.signedOutPlugins(activeIds: resolverOrder, hostSignedIn: hostSignedIn, hostSignedOut: hostSignedOut)
+    }
+    func isSignedOut(_ id: String) -> Bool { signedOutOrder.contains(id) }
     func tileStatus(_ id: String) -> String? {
         _ = statusTick
         return container.pluginTileStatus(id: id, playbackOff: switchLists.playbackOff)
@@ -368,6 +387,7 @@ final class SettingsViewModel {
             // it correctly (the connected-flow watcher only fires later).
             spotifyConnected = (try? await store.getSpotifyAccessToken()) != nil
             soundCloudConnected = !(((try? await store.getSoundCloudToken()) ?? nil) ?? "").isEmpty
+            hostChecked = true
 
             // Resolver intent (active_resolvers): empty stored = all catalogued.
             // Whether each actually reaches the priority list is gated by
@@ -399,6 +419,8 @@ final class SettingsViewModel {
             // Refresh the synchronous cache the players read, or the change
             // only takes effect after the next app launch.
             await IosVolumeOffsets.shared.refresh()
+            NotificationCenter.default.post(name: IosVolumeOffsets.changed, object: nil,
+                                            userInfo: ["resolver": resolverId])
         }
     }
 
@@ -841,8 +863,6 @@ private struct PlugInsTab: View {
                 }
             }
 
-            volumeBalanceSection
-
             if !model.disabledResolvers.isEmpty {
                 Text("DISABLED").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(PC.fg3)
                     .padding(.horizontal, 20).padding(.top, 14).padding(.bottom, 4)
@@ -862,51 +882,6 @@ private struct PlugInsTab: View {
             pluginUpdates
         }
         .padding(.bottom, 130)
-    }
-
-    /// Per-resolver loudness trim (desktop parity: -12…+6 dB sliders).
-    ///
-    /// Apple Music is listed but DISABLED, exactly as desktop does. iOS has no
-    /// per-app volume and `ApplicationMusicPlayer` follows the system, so a
-    /// working slider is impossible — showing one would be a placebo. Hiding
-    /// the row entirely would be worse: users would wonder why the loudest
-    /// source is missing from the loudness control.
-    @ViewBuilder private var volumeBalanceSection: some View {
-        sectionLabel("Volume Balance")
-        Text("Trim louder sources so switching between them doesn't jump. Negative values reduce volume.")
-            .font(.system(size: 12)).foregroundStyle(PC.fg3)
-            .padding(.horizontal, 20).padding(.bottom, 6)
-        VStack(spacing: 0) {
-            ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
-                if let svc = model.resolverService(id) {
-                    let controllable = IosContainer.companion.shared.isResolverVolumeControllable(resolverId: id)
-                    let reason = IosContainer.companion.shared.resolverVolumeDisabledReason(resolverId: id)
-                    HStack(spacing: 12) {
-                        Text(svc.name)
-                            .font(.system(size: 13, weight: .medium))
-                            .foregroundStyle(controllable ? PC.fg1 : PC.fg3)
-                            .frame(width: 92, alignment: .leading)
-                        Slider(
-                            value: Binding(
-                                get: { Double(model.volumeOffsets[id] ?? 0) },
-                                set: { model.setVolumeOffset(id, Int($0.rounded())) }
-                            ),
-                            in: -12...6,
-                            step: 1
-                        )
-                        .disabled(!controllable)
-                        .tint(PC.accent)
-                        Text(controllable ? "\(model.volumeOffsets[id] ?? 0) dB" : (reason ?? ""))
-                            .font(.system(size: 12))
-                            .foregroundStyle(PC.fg3)
-                            .frame(width: 62, alignment: .trailing)
-                    }
-                    .padding(.horizontal, 20).padding(.vertical, 10)
-                    .opacity(controllable ? 1 : 0.5)
-                    if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 20) }
-                }
-            }
-        }
     }
 
     private func resolverRow(_ svc: PCService, index: Int) -> some View {
@@ -934,12 +909,14 @@ private struct PlugInsTab: View {
     }
 
     private func notPlayingRow(_ svc: PCService) -> some View {
-        HStack(spacing: 12) {
+        // Signed out (#782): greyed, reads as off, "Sign in" in the warning colour.
+        let signedOut = model.isSignedOut(svc.id)
+        return HStack(spacing: 12) {
             Text("").frame(width: 18)
-            tileIcon(svc, size: 34)
+            tileIcon(svc, size: 34).opacity(signedOut ? 0.4 : 1).grayscale(signedOut ? 1 : 0)
             VStack(alignment: .leading, spacing: 1) {
-                Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1)
-                Text(model.tileStatus(svc.id) ?? "Search and links only")
+                Text(svc.name).font(.system(size: 15, weight: .medium)).foregroundStyle(signedOut ? PC.fg3 : PC.fg1)
+                Text(signedOut ? PluginAccountsKt.SIGN_IN_TILE_LABEL : (model.tileStatus(svc.id) ?? "Search and links only"))
                     .font(.system(size: 12)).foregroundStyle(Color(uiColor: UIColor(hex: 0xD97706)))
             }
             Spacer(minLength: 0)
@@ -1045,10 +1022,89 @@ private struct PluginConfigSheet: View {
 
     private var isAi: Bool { ["chatgpt", "claude", "gemini"].contains(service.id) }
 
+    /// "Enable X" and the switches under it (#707); signed out, read off and locked (#782).
+    @ViewBuilder private func enableSections(_ sheet: IosPluginSheet, active: Bool) -> some View {
+        if service.kind == .resolver && (model.isUsable(service.id) || sheet.enable.disabled) {
+            Section {
+                switchRow(sheet.enableLabel, sheet.enable.hint, on: sheet.enable.checked,
+                          locked: sheet.enable.disabled) { model.setResolverEnabled(service.id, $0) }
+                if sheet.playback.shown {
+                    switchRow(sheet.playbackLabel, sheet.playback.hint, on: sheet.playback.checked, nested: true,
+                              locked: sheet.playback.disabled) { model.setPluginSwitch("playback", service.id, $0) }
+                }
+                if sheet.metadata.shown {
+                    switchRow(sheet.metadataLabel, sheet.metadata.hint, on: sheet.metadata.checked, nested: true,
+                              locked: sheet.metadata.disabled) {
+                        model.setPluginSwitch("metadata", service.id, $0)
+                    }
+                }
+                if sheet.recommendations.shown {
+                    switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true,
+                              locked: sheet.recommendations.disabled) {
+                        model.setPluginSwitch("recommendations", service.id, $0)
+                    }
+                }
+                // "Playback quality" (shared `PlaybackQualityLine`): on iOS
+                // something else always sets it (iOS Settings for Apple
+                // Music, the Spotify app, the service's player, the server).
+                if sheet.enable.checked, let title = sheet.qualityTitle {
+                    qualityLine(title, sheet.qualityDetail)
+                }
+            }
+        }
+        if service.kind != .resolver {
+            Section {
+                switchRow(sheet.enableLabel,
+                          sheet.enableHint.isEmpty ? "Turn off to stop using this plugin." : sheet.enableHint,
+                          on: active) { model.setPluginEnabled(service.id, $0) }
+                if sheet.recommendations.shown {
+                    switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true,
+                              locked: sheet.recommendations.disabled) {
+                        model.setPluginSwitch("recommendations", service.id, $0)
+                    }
+                }
+            }
+        }
+    }
+
+    /// The account row for a status-capable plugin (desktop's AccountRow),
+    /// shown whether or not the plug-in is on.
+    @ViewBuilder private func statusAccountSection(_ sheet: IosPluginSheet) -> some View {
+        if sheet.hasStatus {
+            Section {
+                accountRow(sheet)
+            } footer: {
+                if let message = model.sessionMessage { Text(message) }
+            }
+        }
+    }
+
+    /// The plug-in's own settings: its account and keys, or what it needs.
+    @ViewBuilder private var serviceSection: some View {
+        switch service.id {
+        case "spotify": spotifySection
+        case "soundcloud": soundCloudSection
+        case "lastfm": lastFmSection
+        case "librefm": libreFmSection
+        case "applemusic": appleMusicSection
+        case "localfiles": localFilesSection
+        case "bandcamp": infoSection("Bandcamp needs no credentials — tracks play through Bandcamp's own player.")
+        // No key required (matches Android's toggle-only Discogs) — the
+        // public API works unauthenticated; a token would only raise rate
+        // limits, which we don't surface.
+        case "discogs": infoSection("Discogs provides artist bios and images from the community database — no API key required.")
+        // Uncataloged loaded plugins (e.g. Wikipedia, Achordion) have no
+        // BYO-key config — show read-only info instead of a stray key field.
+        case let id where PCServices.find(id) == nil: pluginInfoSection
+        default: keySection
+        }
+    }
+
     /// One of the sheet's switches; nested ones sit indented under "Enable X" (#707).
     private func switchRow(_ label: String, _ hint: String, on: Bool, nested: Bool = false, locked: Bool = false,
                            set: @escaping (Bool) -> Void) -> some View {
-        Toggle(isOn: Binding(get: { on }, set: set)) {
+        // A locked switch (a plan limit, signed out) never writes its list.
+        Toggle(isOn: Binding(get: { on }, set: { if !locked { set($0) } })) {
             VStack(alignment: .leading, spacing: 2) {
                 Text(label).font(.system(size: nested ? 14 : 16))
                 if !hint.isEmpty { Text(hint).font(.system(size: 12)).foregroundStyle(.secondary) }
@@ -1057,6 +1113,17 @@ private struct PluginConfigSheet: View {
         .tint(PC.accent)
         .disabled(locked)
         .padding(.leading, nested ? 16 : 0)
+    }
+
+    /// The sheet's "Playback quality" line, nested under the switches.
+    private func qualityLine(_ title: String, _ detail: String?) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Playback quality").font(.system(size: 14))
+            Text(title).font(.system(size: 12)).foregroundStyle(.secondary)
+            if let detail { Text(detail).font(.system(size: 12)).foregroundStyle(.secondary) }
+        }
+        .padding(.leading, 16)
+        .accessibilityElement(children: .combine)
     }
 
     /// "X account", the status line, and Sign in / Sign out (desktop's AccountRow).
@@ -1109,86 +1176,38 @@ private struct PluginConfigSheet: View {
                     ? model.isResolverEnabled(service.id)
                     : !model.disabledPlugins.contains(service.id)
                 let sheet = model.pluginSheet(service, active: active)
-                if service.kind == .resolver && model.isUsable(service.id) {
-                    Section {
-                        switchRow(sheet.enableLabel, sheet.enableHint, on: active) { model.setResolverEnabled(service.id, $0) }
-                        if sheet.playback.shown {
-                            switchRow(sheet.playbackLabel, sheet.playback.hint, on: sheet.playback.checked, nested: true,
-                                      locked: sheet.playback.disabled) { model.setPluginSwitch("playback", service.id, $0) }
-                        }
-                        if sheet.metadata.shown {
-                            switchRow(sheet.metadataLabel, sheet.metadata.hint, on: sheet.metadata.checked, nested: true) {
-                                model.setPluginSwitch("metadata", service.id, $0)
-                            }
-                        }
-                        if sheet.recommendations.shown {
-                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
-                                model.setPluginSwitch("recommendations", service.id, $0)
-                            }
-                        }
-                    }
-                }
-
-                if service.kind != .resolver {
-                    Section {
-                        switchRow(sheet.enableLabel,
-                                  sheet.enableHint.isEmpty ? "Turn off to stop using this plugin." : sheet.enableHint,
-                                  on: active) { model.setPluginEnabled(service.id, $0) }
-                        if sheet.recommendations.shown {
-                            switchRow(sheet.recommendationsLabel, sheet.recommendations.hint, on: sheet.recommendations.checked, nested: true) {
-                                model.setPluginSwitch("recommendations", service.id, $0)
-                            }
+                // A plug-in that needs a sign-in (Spotify, SoundCloud, Apple
+                // Music, a status plug-in) shows its account and keys first,
+                // then Enable; always, so nothing moves after signing in
+                // (#782, desktop parachord#1615, shared accountFirst).
+                if sheet.accountFirst {
+                    statusAccountSection(sheet)
+                    serviceSection
+                    enableSections(sheet, active: active)
+                } else {
+                    enableSections(sheet, active: active)
+                    statusAccountSection(sheet)
+                    // Scrobbling (#193): the "send my plays" toggle lives in each
+                    // scrobbler's sheet (Android parity) rather than buried in
+                    // General. Shown once the service is connected; backed by the
+                    // single global scrobblingEnabled flag.
+                    if ["lastfm", "listenbrainz", "librefm"].contains(service.id) && model.isConnected(service.id) {
+                        Section {
+                            Toggle("Scrobble my plays", isOn: Binding(
+                                get: { model.scrobblingEnabled },
+                                set: { model.setScrobbling($0) }))
+                        } footer: {
+                            Text("Send your listening history to connected scrobblers (Last.fm, ListenBrainz, Libre.fm).")
                         }
                     }
-                }
 
-                // The account row for a status-capable plugin (desktop's
-                // AccountRow). No such plugin loads on iOS yet: Amazon Music
-                // needs the web-session bridge.
-                if sheet.hasStatus {
-                    Section {
-                        accountRow(sheet)
-                    } footer: {
-                        if let message = model.sessionMessage { Text(message) }
+                    // Loved-tracks push (#125, Android `LovePushControls`): Last.fm and
+                    // ListenBrainz only (Libre.fm has no love endpoint).
+                    if ["lastfm", "listenbrainz"].contains(service.id) && model.isConnected(service.id) {
+                        lovePushSection
                     }
-                }
 
-                // Scrobbling (#193): the "send my plays" toggle lives in each
-                // scrobbler's sheet (Android parity) rather than buried in
-                // General. Shown once the service is connected; backed by the
-                // single global scrobblingEnabled flag.
-                if ["lastfm", "listenbrainz", "librefm"].contains(service.id) && model.isConnected(service.id) {
-                    Section {
-                        Toggle("Scrobble my plays", isOn: Binding(
-                            get: { model.scrobblingEnabled },
-                            set: { model.setScrobbling($0) }))
-                    } footer: {
-                        Text("Send your listening history to connected scrobblers (Last.fm, ListenBrainz, Libre.fm).")
-                    }
-                }
-
-                // Loved-tracks push (#125, Android `LovePushControls`): Last.fm and
-                // ListenBrainz only (Libre.fm has no love endpoint).
-                if ["lastfm", "listenbrainz"].contains(service.id) && model.isConnected(service.id) {
-                    lovePushSection
-                }
-
-                switch service.id {
-                case "spotify": spotifySection
-                case "soundcloud": soundCloudSection
-                case "lastfm": lastFmSection
-                case "librefm": libreFmSection
-                case "applemusic": appleMusicSection
-                case "localfiles": localFilesSection
-                case "bandcamp": infoSection("Bandcamp needs no credentials — tracks play through Bandcamp's own player.")
-                // No key required (matches Android's toggle-only Discogs) — the
-                // public API works unauthenticated; a token would only raise rate
-                // limits, which we don't surface.
-                case "discogs": infoSection("Discogs provides artist bios and images from the community database — no API key required.")
-                // Uncataloged loaded plugins (e.g. Wikipedia, Achordion) have no
-                // BYO-key config — show read-only info instead of a stray key field.
-                case let id where PCServices.find(id) == nil: pluginInfoSection
-                default: keySection
+                    serviceSection
                 }
             }
             .navigationTitle("Configure").navigationBarTitleDisplayMode(.inline)
@@ -1590,8 +1609,58 @@ private struct GeneralTab: View {
             }
             .tint(PC.accent)
             .padding(.horizontal, 20).padding(.top, 4)
+
+            volumeNormalizationSection
         }
         .padding(.bottom, 130)
+    }
+
+    /// Per-resolver loudness trim (desktop parity: -12…+6 dB sliders).
+    ///
+    /// Apple Music is listed but DISABLED, exactly as desktop does. iOS has no
+    /// per-app volume and `ApplicationMusicPlayer` follows the system, so a
+    /// working slider is impossible — showing one would be a placebo. Hiding
+    /// the row entirely would be worse: users would wonder why the loudest
+    /// source is missing from the loudness control.
+    @ViewBuilder private var volumeNormalizationSection: some View {
+        label("Volume Normalization")
+        Text("Balance loudness between different sources")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3)
+            .padding(.horizontal, 20)
+        Text("Adjust each plug-in’s volume to balance loudness. Negative values reduce volume for louder sources.")
+            .font(.system(size: 12)).foregroundStyle(PC.fg3)
+            .padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 6)
+        VStack(spacing: 0) {
+            ForEach(Array(model.resolverOrder.enumerated()), id: \.element) { i, id in
+                if let svc = model.resolverService(id) {
+                    let controllable = IosContainer.companion.shared.isResolverVolumeControllable(resolverId: id)
+                    let reason = IosContainer.companion.shared.resolverVolumeDisabledReason(resolverId: id)
+                    HStack(spacing: 12) {
+                        Text(svc.name)
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundStyle(controllable ? PC.fg1 : PC.fg3)
+                            .frame(width: 92, alignment: .leading)
+                        Slider(
+                            value: Binding(
+                                get: { Double(model.volumeOffsets[id] ?? 0) },
+                                set: { model.setVolumeOffset(id, Int($0.rounded())) }
+                            ),
+                            in: -12...6,
+                            step: 1
+                        )
+                        .disabled(!controllable)
+                        .tint(PC.accent)
+                        Text(controllable ? "\(model.volumeOffsets[id] ?? 0) dB" : (reason ?? ""))
+                            .font(.system(size: 12))
+                            .foregroundStyle(PC.fg3)
+                            .frame(width: 62, alignment: .trailing)
+                    }
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .opacity(controllable ? 1 : 0.5)
+                    if i < model.resolverOrder.count - 1 { Divider().padding(.leading, 20) }
+                }
+            }
+        }
     }
 
     private func label(_ t: String) -> some View {

@@ -49,6 +49,29 @@
     }
 
     /**
+     * Follow the Playback Quality setting (desktop's musickit-web.js
+     * setQuality / _applyBitrate): MusicKit has two bitrates; Kotlin picks
+     * standard (64) for Data saver and high (256) for every other level.
+     * MusicKit's own PlaybackBitrate constants win when it has them.
+     * Returns JSON: { success: bool, bitrate?: number, error?: string }
+     */
+    function setBitrate(kbps) {
+        try {
+            if (!music) return JSON.stringify({ success: false, error: 'Not configured' });
+            if (!('bitrate' in music)) {
+                return JSON.stringify({ success: false, error: 'This MusicKit has no bitrate setting' });
+            }
+            var rates = (MusicKit && MusicKit.PlaybackBitrate) || {};
+            var high = typeof rates.HIGH === 'number' ? rates.HIGH : 256;
+            var standard = typeof rates.STANDARD === 'number' ? rates.STANDARD : 64;
+            music.bitrate = kbps <= 64 ? standard : high;
+            return JSON.stringify({ success: true, bitrate: music.bitrate });
+        } catch (e) {
+            return JSON.stringify({ success: false, error: e.message || String(e) });
+        }
+    }
+
+    /**
      * Prompt Apple ID sign-in.
      * Returns the music user token (MUT) on success so Kotlin can persist it.
      * Returns JSON: { success: bool, authorized: bool, musicUserToken?: string, error?: string }

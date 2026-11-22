@@ -38,6 +38,8 @@ class SoundCloudPlaybackHandler constructor(
 
     @Volatile override var volumeFraction: Float = 1f
 
+    override suspend fun setVolume(fraction: Float) = widget.setVolume(fraction)
+
     override var onFinished: (() -> Unit)?
         get() = widget.onFinished
         set(value) { widget.onFinished = value }
