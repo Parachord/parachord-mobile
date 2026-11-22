@@ -4684,6 +4684,17 @@ class IosContainer private constructor() {
         persistReorderedTracks(id, tracks)
     }
 
+    /** How many later copies of a song [tracks] holds, when the playlist page offers
+     *  the duplicates banner (shared `PlaylistDuplicates`); else 0. */
+    fun playlistDuplicateCount(playlist: Playlist?, tracks: List<PlaylistTrack>): Int {
+        val n = com.parachord.shared.playlist.PlaylistDuplicates.count(tracks)
+        return if (com.parachord.shared.playlist.PlaylistDuplicates.offersRemoval(playlist, n)) n else 0
+    }
+
+    /** Remove the playlist's later copies of each song (`LibraryRepository.removePlaylistDuplicates`). */
+    @Throws(Throwable::class)
+    suspend fun removePlaylistDuplicates(id: String): Int = libraryRepository.removePlaylistDuplicates(id)
+
     @Throws(Throwable::class)
     suspend fun movePlaylistTrack(id: String, from: Int, to: Int) {
         val tracks = playlistTrackDao.getByPlaylistIdSync(id).toMutableList()

@@ -460,6 +460,30 @@ class LibraryRepository(
         ))
     }
 
+    /**
+     * Drop the playlist's later copies of each song, keeping the first copy in
+     * place ([com.parachord.shared.playlist.PlaylistDuplicates]). Saved as an
+     * ordinary edit, so a synced playlist's mirrors get the cleaned list on the
+     * next sync. Returns how many tracks it removed.
+     */
+    suspend fun removePlaylistDuplicates(playlistId: String): Int {
+        val tracks = playlistTrackDao.getByPlaylistIdSync(playlistId)
+        val kept = com.parachord.shared.playlist.PlaylistDuplicates.withoutDuplicates(tracks)
+        val removed = tracks.size - kept.size
+        if (removed == 0) return 0
+        playlistTrackDao.replaceAll(playlistId, kept)
+        val playlist = playlistDao.getById(playlistId) ?: return removed
+        val now = currentTimeMillis()
+        val flag = playlist.locallyModified || hasSyncIntent(playlistId)
+        playlistDao.update(playlist.copy(
+            trackCount = kept.size,
+            updatedAt = now,
+            lastModified = now,
+            locallyModified = flag,
+        ))
+        return removed
+    }
+
     /** Remove a single track from a playlist by position and update the count. */
     suspend fun removeTrackFromPlaylist(playlistId: String, position: Int) {
         playlistTrackDao.deleteTrack(playlistId, position)

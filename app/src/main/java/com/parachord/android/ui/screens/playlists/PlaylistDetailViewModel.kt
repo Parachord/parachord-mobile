@@ -27,6 +27,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.flow.stateIn
@@ -225,6 +226,25 @@ class PlaylistDetailViewModel constructor(
     fun addToPlaylist(targetPlaylist: PlaylistEntity, track: TrackEntity) {
         viewModelScope.launch {
             libraryRepository.addTracksToPlaylist(targetPlaylist.id, listOf(track))
+        }
+    }
+
+    /** How many later copies of a song the playlist holds, when the page offers the
+     *  duplicates banner (shared [com.parachord.shared.playlist.PlaylistDuplicates]); else 0. */
+    val duplicateCount: StateFlow<Int> = combine(playlist, tracks) { p, t ->
+        val n = com.parachord.shared.playlist.PlaylistDuplicates.count(t)
+        if (com.parachord.shared.playlist.PlaylistDuplicates.offersRemoval(p, n)) n else 0
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), 0)
+
+    /** Remove the later copies, keeping the first of each song; says how many went. */
+    fun removeDuplicates() {
+        viewModelScope.launch {
+            val removed = runCatching { libraryRepository.removePlaylistDuplicates(playlistId) }
+                .onFailure { Log.w(TAG, "removePlaylistDuplicates failed", it) }
+                .getOrNull() ?: return@launch
+            if (removed > 0) {
+                _toastEvents.trySend(com.parachord.shared.playlist.PlaylistDuplicateCopy.done(removed))
+            }
         }
     }
 

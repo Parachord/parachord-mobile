@@ -129,6 +129,8 @@ fun PlaylistDetailScreen(
     val sharePlaylist = com.parachord.android.share.rememberSharePlaylist()
     var showPlaylistMenu by remember { mutableStateOf(false) }
     var showDeleteConfirm by remember { mutableStateOf(false) }
+    val duplicateCount by viewModel.duplicateCount.collectAsStateWithLifecycle()
+    var showRemoveDuplicatesConfirm by remember { mutableStateOf(false) }
     var showSyncSheet by remember { mutableStateOf(false) }
 
     // Context menu host with Remove from Playlist support
@@ -233,6 +235,62 @@ fun PlaylistDetailScreen(
                     }
                 }
             }
+        }
+
+        // Duplicates banner: shows while the playlist holds later copies of a song
+        // (shared PlaylistDuplicates). The action asks first, then keeps the first copies.
+        AnimatedVisibility(
+            visible = duplicateCount > 0,
+            enter = expandVertically(expandFrom = Alignment.Top),
+            exit = shrinkVertically(shrinkTowards = Alignment.Top),
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(FillAccent.copy(alpha = 0.10f))
+                    .padding(horizontal = 16.dp, vertical = 10.dp),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    text = com.parachord.shared.playlist.PlaylistDuplicateCopy.banner(duplicateCount),
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f),
+                )
+                Text(
+                    text = com.parachord.shared.playlist.PlaylistDuplicateCopy.REMOVE,
+                    color = FillAccent,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    modifier = Modifier
+                        .clickable { showRemoveDuplicatesConfirm = true }
+                        .padding(horizontal = 8.dp, vertical = 4.dp),
+                )
+            }
+        }
+
+        if (showRemoveDuplicatesConfirm) {
+            val count = duplicateCount
+            AlertDialog(
+                onDismissRequest = { showRemoveDuplicatesConfirm = false },
+                title = { Text(com.parachord.shared.playlist.PlaylistDuplicateCopy.confirmTitle(count)) },
+                text = {
+                    Text(com.parachord.shared.playlist.PlaylistDuplicateCopy.confirmBody(playlist?.name ?: ""))
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        showRemoveDuplicatesConfirm = false
+                        viewModel.removeDuplicates()
+                    }) { Text(com.parachord.shared.playlist.PlaylistDuplicateCopy.REMOVE) }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showRemoveDuplicatesConfirm = false }) {
+                        Text(com.parachord.shared.playlist.PlaylistDuplicateCopy.CANCEL)
+                    }
+                },
+            )
         }
 
         LazyColumn(modifier = Modifier.fillMaxSize()) {
