@@ -103,7 +103,7 @@ class HomeRowsTest {
 
     @Test
     fun `a section with items shows only when its flag is on`() {
-        val p = HomePlaylistCard(Playlist(id = "p", name = "P"), null, PlaylistSubtitle("Refreshed now", null))
+        val p = HomePlaylistCard(Playlist(id = "p", name = "P"), null, PlaylistSubtitle("Refreshed now"))
         val on = homeSectionVisibility(HomeState(sections = allOn, playlists = listOf(p)))
         assertTrue(on.showPlaylists)
         val off = homeSectionVisibility(HomeState(sections = allOn.copy(playlists = false), playlists = listOf(p)))

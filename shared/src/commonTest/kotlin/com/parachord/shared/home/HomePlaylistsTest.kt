@@ -92,13 +92,9 @@ class HomePlaylistsTest {
     }
 
     @Test
-    fun subtitleHasRelativeTimeAndYear() {
+    fun subtitleIsTheRelativeTimeOnly() {
         val s = playlistSubtitle(pl(changed = now - 2 * 3_600_000, created = at(2023, 1, 1)), now)
-        assertEquals(PlaylistSubtitle("Refreshed 2h ago", "Since 2023"), s)
-    }
-
-    @Test
-    fun subtitleOmitsSinceWithoutCreatedAt() {
-        assertEquals(PlaylistSubtitle("Refreshed 3d ago", null), playlistSubtitle(pl(changed = now - 3 * day), now))
+        assertEquals(PlaylistSubtitle("Refreshed 2h ago"), s)
+        assertEquals(PlaylistSubtitle("Refreshed 3d ago"), playlistSubtitle(pl(changed = now - 3 * day), now))
     }
 }

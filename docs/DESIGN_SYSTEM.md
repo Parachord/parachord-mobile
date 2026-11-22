@@ -231,7 +231,7 @@ Desktop redesigned Home in November 2026 (desktop `docs/superpowers/specs/2026-1
 2. Greeting by time of day, with one line on the freshest playlist change ("Daily Brew picked up 12 new tracks this morning"); a "Finish setting up · N of M" button (dismissable setup items, plus the "What's new" row) and "Play Collection Radio".
 3. **Jump back in**: four tiles: the freshest playlist, Recent Loves (last 50 loves), the album behind the latest love, the first history mix. Never what's playing or queued. Tapping a tile opens it; its own Play button plays it.
 4. **Made from your listening**: Recent Loves first, then the services' play-history mixes (the plugin method `getHistoryMixes`), up to six, with source chips.
-5. **Your playlists, freshest first**: six cards ordered by when their tracks last changed (`tracksChangedAt`), a "Δ N" badge for the tracks the latest change added (within 7 days), subtitle "Refreshed 2h ago" / "Since 2023"; See all → Playlists.
+5. **Your playlists, freshest first**: six cards ordered by when their tracks last changed (`tracksChangedAt`), a "Δ N" badge for the tracks the latest change added (within 7 days), subtitle "Refreshed 2h ago" (mobile shows no "Since 2023" line); See all → Playlists.
 6. **Albums you might love**: six albums from the plugins' recommendations and Shuffleupagus, with source chips; See all → Recommendations.
 7. **Fresh Drops** and **Critical Darlings**, three cards each, each opening with a slim band in its page's gradient.
 8. **Concerts near you**: four cards (the artist's photo with the date, artist, venue, city); the card opens the artist's On Tour tab, Tickets opens the seller.

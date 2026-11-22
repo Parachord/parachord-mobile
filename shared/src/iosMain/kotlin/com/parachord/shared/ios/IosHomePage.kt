@@ -204,13 +204,12 @@ data class IosHomeMixCard(
 /** A source chip; [colorRgb] is `0xRRGGBB` (the "All" chip: Home's page fill). */
 data class IosHomeChip(val id: String, val label: String, val colorRgb: Int)
 
-/** A playlist card: the "Δ N" [badge], "Refreshed 2h ago" and "Since 2023". */
+/** A playlist card: the "Δ N" [badge] and "Refreshed 2h ago". */
 data class IosHomePlaylistCard(
     val id: String,
     val name: String,
     val badge: String?,
     val line1: String,
-    val line2: String?,
     val imageUrl: String?,
 )
 
@@ -359,7 +358,6 @@ fun iosHomePage(
                 name = c.playlist.name,
                 badge = c.badge,
                 line1 = c.subtitle.refreshed,
-                line2 = c.subtitle.since,
                 imageUrl = c.playlist.artworkUrl?.trim()?.takeIf { it.isNotEmpty() }?.let(playlistArt),
             )
         },
