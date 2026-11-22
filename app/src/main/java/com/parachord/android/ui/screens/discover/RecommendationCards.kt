@@ -26,6 +26,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
@@ -42,7 +43,6 @@ import com.parachord.android.ui.components.ParachordAlbumCard
 import com.parachord.android.ui.components.ParachordPlaylistCard
 import com.parachord.shared.ui.CardPill
 import com.parachord.android.ui.components.ArtPlayButton
-import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.hapticCombinedClickable
 import com.parachord.android.ui.components.shimmerBrush
@@ -234,7 +234,7 @@ internal fun Cover(url: String, modifier: Modifier) {
     )
 }
 
-/** A listener with a similar taste: hexagon avatar, play disc, similarity pill, name, service, top artists. */
+/** A listener with a similar taste: the shared listener card, the similarity pill over its foot, where they were found and their top artists. */
 @Composable
 fun ListenerCard(
     item: ListenerItem,
@@ -243,45 +243,23 @@ fun ListenerCard(
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    /** The card's width. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
 ) {
-    val avatar = listenerAvatar(width)
     val badge = RecommendationCopy.similarityBadge(item.similarity)
     val color = serviceColor(item.service)
-    Column(
-        modifier = modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-        horizontalAlignment = Alignment.CenterHorizontally,
-    ) {
-        Box(modifier = Modifier.size(avatar), contentAlignment = Alignment.Center) {
-            Box(
-                modifier = Modifier
-                    .size(avatar)
-                    .clip(HexagonShape)
-                    .background(color),
-                contentAlignment = Alignment.Center,
-            ) {
-                if (!item.avatarUrl.isNullOrBlank()) {
-                    AsyncImage(
-                        model = item.avatarUrl,
-                        contentDescription = item.name,
-                        contentScale = ContentScale.Crop,
-                        modifier = Modifier.fillMaxSize(),
-                    )
-                } else {
-                    Text(
-                        text = item.name.take(1).uppercase(),
-                        fontSize = 48.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = OnFill,
-                    )
-                }
-            }
-            if (badge != null) {
+    com.parachord.android.ui.components.ListenerCard(
+        name = item.name,
+        avatarUrl = item.avatarUrl,
+        onOpen = onOpen,
+        modifier = modifier,
+        width = width,
+        onPlay = onPlay,
+        onLongPress = onLongPress,
+        badge = badge?.let { text ->
+            {
                 Text(
-                    text = badge,
+                    text = text,
                     fontSize = 11.sp,
                     fontWeight = FontWeight.SemiBold,
                     color = OnFill,
@@ -290,17 +268,15 @@ fun ListenerCard(
                         .align(Alignment.BottomCenter)
                         .clip(RoundedCornerShape(percent = 50))
                         .background(color)
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                        .padding(horizontal = 7.dp, vertical = 1.dp),
                 )
             }
-            // Desktop's friend card plays the person's top tracks.
-            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.TopEnd).offset(x = 8.dp, y = (-8).dp))
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(item.name, primary = true, center = true, modifier = Modifier.fillMaxWidth())
-        CardText(serviceName, center = true, modifier = Modifier.fillMaxWidth())
-        // Fixed two-line height so every card in the row lines up.
-        Box(Modifier.fillMaxWidth().height(32.dp)) {
+        },
+    ) {
+        Spacer(Modifier.height(2.dp))
+        CardText(serviceName.ifBlank { " " }, center = true, modifier = Modifier.fillMaxWidth())
+        // Two lines always, so every card in the row is the same height.
+        Box(Modifier.fillMaxWidth().padding(top = 2.dp).height(32.dp)) {
             CardText(
                 item.topArtists.joinToString(", "),
                 tertiary = true, maxLines = 2, center = true,
@@ -332,18 +308,27 @@ fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier, width: Dp = RecCa
 /** Placeholder for a listener while the Listeners row loads. */
 @Composable
 fun ListenerCardSkeleton(modifier: Modifier = Modifier, width: Dp = RecCardWidth) {
-    val avatar = listenerAvatar(width)
-    Column(modifier = modifier.width(width), horizontalAlignment = Alignment.CenterHorizontally) {
+    val shape = RoundedCornerShape(com.parachord.shared.ui.CardSpec.RADIUS.dp)
+    Column(
+        modifier = modifier
+            .width(width)
+            .shadow(2.dp, shape)
+            .clip(shape)
+            .background(ParachordTheme.colors.cardBackground)
+            .padding(horizontal = 12.dp, vertical = 14.dp),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
         Box(
             Modifier
-                .size(avatar)
-                .clip(HexagonShape)
+                .size(com.parachord.shared.ui.FriendAvatarSpec.LISTENER_AVATAR.dp)
+                .clip(com.parachord.android.ui.components.ListenerHexagonShape)
                 .background(shimmerBrush()),
         )
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+        Spacer(Modifier.height(10.dp))
+        Column(verticalArrangement = Arrangement.spacedBy(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             SkeletonBar(0.6f, 12.dp)
             SkeletonBar(0.4f, 10.dp)
+            SkeletonBar(0.7f, 10.dp)
         }
     }
 }

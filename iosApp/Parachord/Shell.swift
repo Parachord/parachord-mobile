@@ -146,16 +146,19 @@ struct PCTabBar: View {
 /// Hexagonal clip for FRIEND / user avatars — the cross-platform shape
 /// convention (users = hexagons, album art = square, artists = circles).
 /// Mirrors Android's HomeHexagonShape (pointy-top vertical hexagon).
+/// A friend's hexagon (the shared `FriendAvatarSpec.HEXAGON`, desktop's `FRIEND_HEXAGON`), or with
+/// `listener` the listener card's regular one (`LISTENER_HEXAGON`).
 struct PCHexagon: Shape {
+    var listener = false
+
     func path(in rect: CGRect) -> Path {
-        let w = rect.width, h = rect.height
+        let spec = FriendAvatarSpec.shared
+        let points = listener ? spec.LISTENER_HEXAGON : spec.HEXAGON
         var p = Path()
-        p.move(to: CGPoint(x: w * 0.5, y: 0))
-        p.addLine(to: CGPoint(x: w, y: h * 0.25))
-        p.addLine(to: CGPoint(x: w, y: h * 0.75))
-        p.addLine(to: CGPoint(x: w * 0.5, y: h))
-        p.addLine(to: CGPoint(x: 0, y: h * 0.75))
-        p.addLine(to: CGPoint(x: 0, y: h * 0.25))
+        for (i, pt) in points.enumerated() {
+            let c = CGPoint(x: rect.minX + CGFloat(pt.x) * rect.width, y: rect.minY + CGFloat(pt.y) * rect.height)
+            if i == 0 { p.move(to: c) } else { p.addLine(to: c) }
+        }
         p.closeSubpath()
         return p
     }
@@ -446,14 +449,7 @@ struct PCSidebar: View {
     }
 
     @ViewBuilder private func friendAvatar(_ f: Friend, size: CGFloat) -> some View {
-        PCHexagon().fill(PC.bgInset)
-            .frame(width: size, height: size)
-            .overlay {
-                PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) {
-                    PCArtwork(name: f.displayName, size: nil, radius: 0)
-                }
-            }
-            .clipShape(PCHexagon())   // friends = hexagons (cross-platform convention)
+        PCFriendAvatar(name: f.displayName, avatarUrl: f.avatarUrl, side: size, fontSize: size * 12 / 32)
     }
 
     @ViewBuilder private func group(_ header: String, _ rows: [Row]) -> some View {

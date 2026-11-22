@@ -238,11 +238,9 @@ private fun FriendRow(
         ) {
             // Avatar with on-air indicator
             Box {
-                AlbumArtCard(
-                    artworkUrl = friend.avatarUrl,
-                    size = 48.dp,
-                    cornerRadius = 24.dp,
-                    placeholderName = friend.displayName,
+                com.parachord.android.ui.components.FriendAvatar(
+                    friend.displayName, friend.avatarUrl,
+                    size = com.parachord.shared.ui.FriendAvatarSpec.Size.MEDIUM,
                 )
                 if (friend.isOnAir) {
                     Box(

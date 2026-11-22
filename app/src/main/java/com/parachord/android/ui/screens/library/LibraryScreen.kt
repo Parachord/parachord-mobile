@@ -3,7 +3,6 @@ package com.parachord.android.ui.screens.library
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
-import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.shared.format.RelativeTime
@@ -553,25 +552,10 @@ private fun FriendsTab(
                         ) {
                             // Hexagonal avatar with on-air indicator
                             Box(modifier = Modifier.padding(top = 2.dp)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(48.dp)
-                                        .clip(HexagonShape),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    if (!friend.avatarUrl.isNullOrBlank()) {
-                                        SubcomposeAsyncImage(
-                                            model = friend.avatarUrl,
-                                            contentDescription = friend.displayName,
-                                            contentScale = ContentScale.Crop,
-                                            modifier = Modifier.size(48.dp),
-                                            loading = { FriendHexFallback(friend.displayName) },
-                                            error = { FriendHexFallback(friend.displayName) },
-                                        )
-                                    } else {
-                                        FriendHexFallback(friend.displayName)
-                                    }
-                                }
+                                com.parachord.android.ui.components.FriendAvatar(
+                                    friend.displayName, friend.avatarUrl,
+                                    size = com.parachord.shared.ui.FriendAvatarSpec.Size.MEDIUM,
+                                )
                                 if (friend.isOnAir) {
                                     Box(
                                         modifier = Modifier

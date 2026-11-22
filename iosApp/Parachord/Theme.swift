@@ -104,6 +104,9 @@ enum PC {
     static let borderLight = dyn(tokens.borderLight)
     static let cardBg      = dyn(tokens.cardBg)
     static let cardBorder  = dyn(tokens.cardBorder)
+    /// The listener card's ring while they're not on air (desktop's hover backgrounds).
+    static let hoverSubtle  = dyn(FriendAvatarSpec.shared.RING_FROM)
+    static let hoverDefault = dyn(FriendAvatarSpec.shared.RING_TO)
 
     // Status: dots, icons and indicators (lighter in dark mode)
     static let success = dyn(tokens.success)

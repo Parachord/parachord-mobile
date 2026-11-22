@@ -95,6 +95,8 @@ fun CardLines(title: String, lines: List<String>, tertiaryFrom: Int = 1, lineMax
             lineHeight = 16.sp,
             color = if (i >= tertiaryFrom) DesignTokens.textTertiary.current() else DesignTokens.textSecondary.current(),
             maxLines = if (i == 0) lineMaxLines else 1,
+            // A wrapping first line keeps its full height, so a row of cards lines up.
+            minLines = if (i == 0) lineMaxLines else 1,
             overflow = TextOverflow.Ellipsis,
         )
     }
