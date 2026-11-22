@@ -87,6 +87,8 @@ import com.parachord.shared.ai.ChatContent
 import com.parachord.shared.ai.ChatInline
 import com.parachord.shared.format.countOf
 import com.parachord.android.ui.components.AlbumArtCard
+import androidx.compose.ui.draw.alpha
+import com.parachord.android.ui.components.ResolverIconSquare
 import com.parachord.android.ui.icons.ParachordIcons
 
 // ── Message layout ──────────────────────────────────────────────────
@@ -286,6 +288,10 @@ private fun ChatTopBar(
             if (availableProviders.isNotEmpty()) {
                 Box {
                     TextButton(onClick = { providerMenuExpanded = true }) {
+                        selectedProvider?.let {
+                            ResolverIconSquare(resolver = it.id, size = 18.dp)
+                            Spacer(modifier = Modifier.width(6.dp))
+                        }
                         Text(
                             text = selectedProvider?.name ?: "Select",
                             style = MaterialTheme.typography.bodyMedium,
@@ -320,6 +326,14 @@ private fun ChatTopBar(
                                         } else {
                                             MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f)
                                         },
+                                    )
+                                },
+                                // The plug-in's logo beside its name (shared ServiceLogos).
+                                leadingIcon = {
+                                    ResolverIconSquare(
+                                        resolver = provider.id,
+                                        size = 20.dp,
+                                        modifier = Modifier.alpha(if (provider.isConfigured) 1f else 0.38f),
                                     )
                                 },
                                 onClick = {

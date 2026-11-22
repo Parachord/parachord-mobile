@@ -189,14 +189,27 @@ struct ChatScreen: View {
                 Text("Shuffleupagus").font(.system(size: 16, weight: .bold)).foregroundStyle(.white)
                 if !model.providers.isEmpty {
                     Menu {
-                        ForEach(model.providers) { p in
-                            Button { Task { await model.select(p.id) } } label: {
-                                if p.id == model.selectedProviderId { Label(p.name, systemImage: "checkmark") }
-                                else { Text(p.configured ? p.name : "\(p.name) (not configured)") }
-                            }.disabled(!p.configured)
+                        // Each plug-in's logo beside its name; the picked one is checked.
+                        Picker("AI", selection: Binding(
+                            get: { model.selectedProviderId ?? "" },
+                            set: { id in Task { await model.select(id) } }
+                        )) {
+                            ForEach(model.providers) { p in
+                                Label {
+                                    Text(p.configured ? p.name : "\(p.name) (not configured)")
+                                } icon: {
+                                    providerIcon(p.id)
+                                }
+                                .tag(p.id)
+                                .disabled(!p.configured)
+                            }
                         }
+                        .pickerStyle(.inline)
                     } label: {
-                        HStack(spacing: 3) {
+                        HStack(spacing: 4) {
+                            if let selected = model.selectedProvider {
+                                ResolverIconSquare(resolver: selected.id, size: 14)
+                            }
                             Text(model.selectedProvider?.name ?? "Select AI").font(.system(size: 12))
                             Image(systemName: "chevron.down").font(.system(size: 9, weight: .semibold))
                         }.foregroundStyle(PC.accentSoft)
@@ -211,6 +224,14 @@ struct ChatScreen: View {
             }
         }
         .padding(.horizontal, 16).padding(.vertical, 10)
+    }
+
+    /// The plug-in's logo square as an image: a menu draws only an `Image`, not a view.
+    private func providerIcon(_ id: String) -> Image {
+        let renderer = ImageRenderer(content: ResolverIconSquare(resolver: id, size: 20))
+        renderer.scale = UIScreen.main.scale
+        if let ui = renderer.uiImage { return Image(uiImage: ui.withRenderingMode(.alwaysOriginal)) }
+        return Image(systemName: "sparkles")
     }
 
     private var messageList: some View {
