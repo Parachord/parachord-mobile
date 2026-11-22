@@ -67,6 +67,7 @@ import com.parachord.shared.model.ChartAlbum
 import com.parachord.shared.model.ChartSong
 import com.parachord.shared.model.CHARTS_COUNTRIES
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ParachordAlbumCard
 import com.parachord.android.ui.components.SwipeableTabLayout
 import com.parachord.android.ui.components.TrackRow
 
@@ -484,57 +485,16 @@ private fun AlbumsTab(
 }
 
 @Composable
-private fun AlbumGridItem(album: ChartAlbum, onClick: () -> Unit, onLongClick: () -> Unit = {}) {
-    Column(
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .hapticCombinedClickable(onClick = onClick, onLongClick = onLongClick),
-    ) {
-        Box {
-            AlbumArtCard(
-                artworkUrl = album.artworkUrl,
-                artist = album.artist,
-                album = album.title,
-                size = 180.dp,
-                cornerRadius = 8.dp,
-                placeholderName = album.title,
-            )
-            // Rank badge
-            Box(
-                modifier = Modifier
-                    .padding(6.dp)
-                    .background(
-                        color = Color.Black.copy(alpha = 0.65f),
-                        shape = RoundedCornerShape(4.dp),
-                    )
-                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                    .align(Alignment.TopStart),
-            ) {
-                Text(
-                    text = "#${album.rank}",
-                    style = MaterialTheme.typography.labelSmall,
-                    fontWeight = FontWeight.Bold,
-                    color = Color.White,
-                )
-            }
-        }
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = album.title,
-            style = MaterialTheme.typography.bodySmall.copy(fontWeight = FontWeight.Medium),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-        Text(
-            text = album.artist,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.padding(horizontal = 2.dp),
-        )
-    }
+private fun AlbumGridItem(album: ChartAlbum, onClick: () -> Unit = {}, onLongClick: () -> Unit = {}) {
+    ParachordAlbumCard(
+        title = album.title,
+        artist = album.artist,
+        artworkUrl = album.artworkUrl,
+        width = null,
+        onOpen = onClick,
+        onLongPress = onLongClick,
+        rank = album.rank,
+    )
 }
 
 // ── Songs Tab ────────────────────────────────────────────────────────

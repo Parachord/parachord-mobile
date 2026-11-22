@@ -30,6 +30,10 @@ For every UI/UX or behavior task, in this order:
    the duration last, the rules in the shared `TrackRowRules`); the row takes its
    own tap (`onTap`) rather than sitting in a `Button`, so each source icon's
    button gets its tap. Never build a track row in a screen.
+   Every album or playlist card draws `PCAlbumCard` / `PCPlaylistCard` (the shared
+   `CardSpec`: the card box, art at radius 8, the pill, rank and badges), and a
+   loading card `PCCardSkeleton`; in a grid pass `width: nil`, and leave `onOpen`
+   nil when a `NavigationLink` or `Button` takes the tap. Never build a card in a screen.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

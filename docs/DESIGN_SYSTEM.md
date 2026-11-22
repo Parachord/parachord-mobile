@@ -115,7 +115,7 @@ One map for every screen (Fresh Drops, an artist's discography, an album page, H
   - Line height: 1.5 for text that can wrap (desktop's, from Tailwind's preflight; `DesignTokens.LINE_HEIGHT`). On Android set it on secondary text such as a section subtitle or a caption: a bare `Text` takes the theme's body style, 24 sp, twice a 12 sp line.
   - iOS: text should scale with Dynamic Type: prefer `.font(.system(size:…, relativeTo:))` or `@ScaledMetric` over a fixed size.
 - **Spacing:** 4-point steps: 2 4 6 8 12 16 20 24 32 40 48. The screen gutter is **16** on phones (desktop's 24 is for its wide content area). 16 between a section header and its content, 24 between cards in a row, 32–40 between sections.
-- **Radius:** 4 badge · 6 art inside a card, inputs · 8 buttons, rows, menus · 10 cards · 12 panels · 16 sheets and dialogs · full (pills, circles).
+- **Radius:** 4 badge · 6 inputs · 8 art inside a card · 8 buttons, rows, menus · 10 cards · 12 panels · 16 sheets and dialogs · full (pills, circles).
 - **Motion:** 100–400 ms, on opacity and transform only.
 - **Touch targets:** at least 48dp (Android) / 44pt (iOS), even when the icon is smaller.
 - **Tablets and landscape (shared `LayoutRules`, `shared/.../ui/LayoutRules.kt`).** A phone in portrait keeps the sizes above; a wider window fills its width instead of stretching a phone layout:
@@ -209,8 +209,10 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 - **The queue** keeps its own dark row, as on desktop, with the same icon column and the duration last (Android `TrackRowSources` / `TrackRowDuration`, iOS `PCTrackRowSources` / `PCTrackRowDuration`).
 
 ### Cards
-- Album and playlist cards are one card per platform: art radius 6 inside a 10-radius card, title 13 / 500 text-primary (one line), subtitle 12 text-secondary.
-- Cards in a horizontal row are a fixed width; grids use the 16 gutter.
+- Album and playlist cards are one card per platform, drawn from the shared `CardSpec` (desktop `album-card.js` / `playlist-card.js` on `HOME_CARD_BOX`): Android `ParachordAlbumCard` / `ParachordPlaylistCard` / `CardSkeleton`, iOS `PCAlbumCard` / `PCPlaylistCard` / `PCCardSkeleton`. Every row and grid of albums or playlists uses them (Home, Recommendations, Collection, History, a friend's page, Pop of the Tops, an artist's discography); never build a card in a screen.
+- The card: card-bg with a small shadow, radius 10, 10 inside; the art fills the rest of the width at radius 8; 10 below it the title (13 / 500 text-primary, one line), then 4 apart the artist (12 text-secondary) and a subtitle (12 text-tertiary: a year, a play count). A playlist card's first line may wrap to two.
+- On the art: a pill top right (`CardPill`: the release type in its colour at 90%, or "Coming …" in the fill accent, white 11 text, radius 4), a rank top left (`CardSpec.rankLabel`, white on black 60%), the "Δ N" badge top left on a playlist (bg-primary pill, 11 / 700), a reason badge bottom left, the play disc bottom right.
+- Cards in a horizontal row are a fixed width: the width given is the cover's (140 on a phone), and the card adds its padding around it (`CardSpec.cardWidth`, 160). In a grid a card fills its cell. Grids use the 16 gutter.
 - Long-press opens the item's context menu (`AlbumContextMenu`, `ArtistContextMenu`, `TrackContextMenu`), and the menu is the same on every screen.
 - A playlist card: 2×2 mosaic; subtitle per the Home rules below.
 

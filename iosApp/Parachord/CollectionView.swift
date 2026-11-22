@@ -312,12 +312,7 @@ struct CollectionView: View {
         return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(items, id: \.id) { a in
                 Button { path.append(.album(title: a.title, artist: a.artist)) } label: {
-                    VStack(alignment: .leading, spacing: 4) {
-                        pcCover(a.artworkUrl, seed: a.title + a.artist, size: nil, radius: 10, artist: a.artist, album: a.title)
-                            .aspectRatio(1, contentMode: .fit).shadow(color: .black.opacity(0.12), radius: 6, y: 3)
-                        Text(a.title).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).padding(.horizontal, 2)
-                        Text(albumSubtitle(a)).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(1).padding(.horizontal, 2)
-                    }
+                    PCAlbumCard(title: a.title, artist: albumSubtitle(a), artworkUrl: a.artworkUrl, width: nil)
                 }
                 .buttonStyle(.plain)
                 .pcAlbumContextMenu(title: a.title, artist: a.artist, artworkUrl: a.artworkUrl,

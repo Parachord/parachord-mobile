@@ -43,6 +43,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.ParachordPlaylistCard
 import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.FilterChipItem
 import com.parachord.android.ui.components.FilterChips
@@ -143,17 +144,17 @@ fun HomeMixesRow(
                     is HomeMixCard.Loves -> HomeCopy.RECENT_LOVES
                     is HomeMixCard.Mix -> card.mix.title
                 }
-                HomeCard(
+                ParachordPlaylistCard(
                     title = title,
                     // A description clamps to two lines (desktop `CLAMP2`).
-                    lines = listOf(CardLine(mixCardSubtitle(card), maxLines = 2)),
+                    lines = listOf(mixCardSubtitle(card)),
+                    width = cardWidth,
                     onOpen = { if (card is HomeMixCard.Mix) onOpenMix(card) else onOpenLoves() },
                     onPlay = { if (card is HomeMixCard.Mix) onPlayMix(card) else onPlayLoves() },
-                    width = cardWidth,
                 ) { size ->
                     CoverMosaic(
                         covers = art.imageUrl?.let { listOf(it) } ?: art.mosaic,
-                        modifier = Modifier.size(size).clip(ArtShape).background(MaterialTheme.colorScheme.surfaceVariant),
+                        modifier = Modifier.size(size).background(MaterialTheme.colorScheme.surfaceVariant),
                     )
                 }
             }
@@ -203,19 +204,20 @@ private fun PlaylistCard(
     width: Dp,
 ) {
     val playlist = card.playlist
-    HomeCard(
+    ParachordPlaylistCard(
         title = playlist.name,
-        lines = listOf(CardLine(card.subtitle.refreshed, maxLines = 2)),
+        lines = listOf(card.subtitle.refreshed),
+        width = width,
         onOpen = { onOpen(playlist) },
         onPlay = { onPlay(playlist) },
         onLongPress = { onLongPress(playlist) },
-        badge = card.badge?.let { text -> { ChangeBadge(text, Modifier.align(Alignment.TopStart)) } },
-        width = width,
+        badge = card.badge,
     ) { size ->
         AlbumArtCard(
             artworkUrl = playlist.artworkUrl,
             size = size,
-            cornerRadius = DesignTokens.RADIUS_ART.dp,
+            cornerRadius = 0.dp,
+            elevation = 0.dp,
             placeholderName = playlist.name,
             contentDescription = null,
         )
@@ -275,62 +277,6 @@ fun HomeAlbumsRow(
             }
         }
     }
-}
-
-/** A line under a card's title, clamped to [maxLines]. */
-private data class CardLine(val text: String, val maxLines: Int = 1)
-
-/**
- * A Home card in a row: the art (drawn by [art] at the card's width), an
- * optional [badge] over it, the play disc at its bottom-right, then the title
- * and [lines] (blank lines keep their height so the row lines up).
- */
-@Composable
-private fun HomeCard(
-    title: String,
-    lines: List<CardLine>,
-    onOpen: () -> Unit,
-    onPlay: () -> Unit,
-    onLongPress: (() -> Unit)? = null,
-    badge: (@Composable BoxScope.() -> Unit)? = null,
-    width: Dp = RecCardWidth,
-    art: @Composable (Dp) -> Unit,
-) {
-    Column(
-        modifier = Modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-    ) {
-        Box {
-            art(width)
-            badge?.invoke(this)
-            ArtPlayButton(title, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(title, primary = true)
-        lines.forEach { CardText(it.text.ifBlank { " " }, maxLines = it.maxLines) }
-    }
-}
-
-/**
- * The "Δ N" badge: the tracks a playlist's latest change added. Desktop
- * `playlist-card.js`: a pill in bg-primary with text-primary, 11 / 700, 8 in
- * from the corner (its 3×8 padding is 4×8 here, on the 4-point scale).
- */
-@Composable
-private fun ChangeBadge(text: String, modifier: Modifier) {
-    Text(
-        text = text,
-        fontSize = 11.sp,
-        fontWeight = FontWeight.Bold,
-        color = DesignTokens.textPrimary.current(),
-        maxLines = 1,
-        modifier = modifier
-            .padding(8.dp)
-            .clip(CircleShape)
-            .background(DesignTokens.bgPrimary.current())
-            .padding(horizontal = 8.dp, vertical = 4.dp),
-    )
 }
 
 /**

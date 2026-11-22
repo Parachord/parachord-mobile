@@ -37,6 +37,10 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.AsyncImage
 import com.parachord.android.ui.components.AlbumArtCard
+import com.parachord.android.ui.components.CardSkeleton
+import com.parachord.android.ui.components.ParachordAlbumCard
+import com.parachord.android.ui.components.ParachordPlaylistCard
+import com.parachord.shared.ui.CardPill
 import com.parachord.android.ui.components.ArtPlayButton
 import com.parachord.android.ui.components.HexagonShape
 import com.parachord.android.ui.components.ParachordIcon
@@ -100,49 +104,24 @@ fun RecAlbumCard(
     onPlay: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    /** The card's width; the cover scales with it. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
     /** Drawn over the cover, after the pill and the play disc (Home's reason badge). */
     coverBadge: (@Composable BoxScope.() -> Unit)? = null,
 ) {
-    Column(
-        modifier = modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-    ) {
-        Box {
-            AlbumArtCard(
-                artworkUrl = item.imageUrl,
-                size = width,
-                cornerRadius = 6.dp,
-                placeholderName = item.name,
-                contentDescription = item.name,
-                artist = item.artist,
-                album = item.name,
-            )
-            if (comingLabel != null) {
-                Text(
-                    text = comingLabel,
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = OnFill,
-                    maxLines = 1,
-                    modifier = Modifier
-                        .align(Alignment.TopEnd)
-                        .padding(8.dp)
-                        .clip(RoundedCornerShape(percent = 50))
-                        .background(FillAccent)
-                        .padding(horizontal = 8.dp, vertical = 4.dp),
-                )
-            }
-            ArtPlayButton(item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
-            coverBadge?.invoke(this)
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(item.name, primary = true)
-        CardText(item.artist.orEmpty().ifBlank { " " })
-        CardText(year.ifBlank { " " }, tertiary = true)
-    }
+    ParachordAlbumCard(
+        title = item.name,
+        artist = item.artist,
+        artworkUrl = item.imageUrl,
+        width = width,
+        onOpen = onOpen,
+        modifier = modifier,
+        onLongPress = onLongPress,
+        onPlay = onPlay,
+        subtitle = year,
+        pill = CardPill.coming(comingLabel),
+        artBadge = coverBadge,
+    )
 }
 
 /** A recommended artist: a round-cornered photo and the name. */
@@ -195,24 +174,21 @@ fun RecPlaylistCard(
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    /** The card's width; the cover scales with it. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
 ) {
-    Column(
-        modifier = modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-    ) {
+    ParachordPlaylistCard(
+        title = item.name,
+        lines = listOf(sourceName),
+        width = width,
+        onOpen = onOpen,
+        modifier = modifier,
+        onLongPress = onLongPress,
+    ) { side ->
         AlbumArtCard(
-            artworkUrl = item.imageUrl,
-            size = width,
-            cornerRadius = 6.dp,
-            placeholderName = item.name,
-            contentDescription = item.name,
+            artworkUrl = item.imageUrl, size = side, cornerRadius = 0.dp, elevation = 0.dp,
+            placeholderName = item.name, contentDescription = item.name,
         )
-        Spacer(Modifier.height(8.dp))
-        CardText(item.name, primary = true)
-        CardText(sourceName.ifBlank { " " })
     }
 }
 
@@ -224,27 +200,20 @@ fun RecWeeklyCard(
     onOpen: () -> Unit,
     onPlay: () -> Unit,
     modifier: Modifier = Modifier,
-    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    /** The card's width; the cover scales with it. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
 ) {
     val weekly = item.weekly
-    Column(
-        modifier = modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-        ) {
-            CoverMosaic(covers, Modifier.fillMaxSize())
-            ArtPlayButton(weekly?.label ?: item.name, onPlay, Modifier.align(Alignment.BottomEnd).padding(ArtPlayInset))
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(weekly?.label ?: item.name, primary = true)
-        CardText(weekly?.weekLabel.orEmpty().ifBlank { " " })
+    val title = weekly?.label ?: item.name
+    ParachordPlaylistCard(
+        title = title,
+        lines = listOf(weekly?.weekLabel.orEmpty()),
+        width = width,
+        onOpen = onOpen,
+        modifier = modifier,
+        onPlay = onPlay,
+    ) { side ->
+        CoverMosaic(covers, Modifier.size(side).background(MaterialTheme.colorScheme.surfaceVariant))
     }
 }
 
@@ -376,20 +345,7 @@ private fun SkeletonBar(widthFraction: Float, height: androidx.compose.ui.unit.D
 /** Placeholder while a row loads: [lines] text lines under the cover (album 3, playlist 2, artist 1). */
 @Composable
 fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier, width: Dp = RecCardWidth) {
-    Column(modifier = modifier.width(width)) {
-        Box(
-            Modifier
-                .size(width)
-                .clip(RoundedCornerShape(6.dp))
-                .background(shimmerBrush()),
-        )
-        Spacer(Modifier.height(8.dp))
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            repeat(lines.coerceAtLeast(1)) { i ->
-                SkeletonBar(if (i == 0) 0.8f else 0.5f, if (i == 0) 12.dp else 10.dp)
-            }
-        }
-    }
+    CardSkeleton(width, modifier, lines = (lines - 1).coerceAtLeast(0))
 }
 
 /** Placeholder for a listener while the Listeners row loads. */

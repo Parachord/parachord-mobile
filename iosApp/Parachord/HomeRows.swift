@@ -71,39 +71,14 @@ private struct HomeRowCard<Art: View>: View {
     let onOpen: () -> Void
     let onPlay: () -> Void
     var width: CGFloat = pcRecCardWidth
-    @ViewBuilder let art: () -> Art
+    @ViewBuilder let art: (CGFloat) -> Art
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ZStack {
-                art()
-                if let badge {
-                    Text(badge)
-                        .font(.system(size: 11, weight: .bold)).foregroundStyle(PC.fg1)
-                        .lineLimit(1)
-                        .padding(.horizontal, 8).padding(.vertical, 4)
-                        .background(Capsule().fill(PC.bgPrimary))
-                        .padding(8)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                }
-                PCArtPlayButton(title: title, onPlay: onPlay)
-                    .padding(4)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
-            }
-            .frame(width: width, height: width)
-            Spacer().frame(height: 8)
-            RecCardText(text: title, primary: true)
-            ForEach(Array(lines.enumerated()), id: \.offset) { _, line in
-                RecCardText(text: line.text.isEmpty ? "\u{00A0}" : line.text, lines: line.maxLines)
-            }
-        }
-        .frame(width: width)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-        .accessibilityElement(children: .contain)
-        .accessibilityLabel(HomeCopy.shared.openLabel(title: title))
-        .accessibilityAction(.default, onOpen)
-        .accessibilityAction(named: HomeCopy.shared.playLabel(title: title), onPlay)
+        PCPlaylistCard(title: title, lines: lines.map(\.text), width: width, badge: badge,
+                       onOpen: onOpen, onPlay: onPlay, art: art)
+            .accessibilityLabel(HomeCopy.shared.openLabel(title: title))
+            .accessibilityAction(.default, onOpen)
+            .accessibilityAction(named: HomeCopy.shared.playLabel(title: title), onPlay)
     }
 }
 
@@ -132,8 +107,8 @@ struct HomeMixesRow: View {
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) },
                             width: cardWidth
-                        ) {
-                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, size: cardWidth)
+                        ) { side in
+                            HomeCoverArt(imageUrl: card.imageUrl, mosaic: card.mosaic, size: side)
                         }
                     }
                 }
@@ -176,8 +151,8 @@ struct HomePlaylistsRow: View {
                             onOpen: { onOpen(card) },
                             onPlay: { onPlay(card) },
                             width: cardWidth
-                        ) {
-                            pcCover(card.imageUrl, seed: card.name, size: cardWidth, radius: CGFloat(DesignTokens.shared.RADIUS_ART))
+                        ) { side in
+                            pcCover(card.imageUrl, seed: card.name, size: side, radius: 0)
                         }
                         .contextMenu { menu(card) }
                     }

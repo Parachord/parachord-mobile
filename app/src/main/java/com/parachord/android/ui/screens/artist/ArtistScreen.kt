@@ -503,61 +503,16 @@ private fun DiscographyTab(
                             rowAlbums.forEach { album ->
                                 Box(modifier = Modifier.weight(1f)) {
                                     var showAlbumMenu by remember { mutableStateOf(false) }
-                                    Column(
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .clip(RoundedCornerShape(10.dp))
-                                            .background(cardBg)
-                                            .hapticCombinedClickable(
-                                                onClick = { onNavigateToAlbum(album.title, album.artist) },
-                                                onLongClick = { showAlbumMenu = true },
-                                            )
-                                            .padding(10.dp),
-                                    ) {
-                                        AlbumArtCardFill(
-                                            artworkUrl = album.artworkUrl,
-                                            artist = album.artist,
-                                            album = album.title,
-                                            modifier = Modifier.fillMaxWidth(),
-                                            cornerRadius = 6.dp,
-                                            elevation = 1.dp,
-                                        )
-                                        Spacer(modifier = Modifier.height(10.dp))
-                                        Text(
-                                            text = album.title,
-                                            fontSize = 13.sp,
-                                            fontWeight = FontWeight.Medium,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                        )
-                                        Spacer(modifier = Modifier.height(4.dp))
-                                        Row(
-                                            verticalAlignment = Alignment.CenterVertically,
-                                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                        ) {
-                                            album.releaseType?.let { type ->
-                                                val badgeColor = releaseTypeBadgeColor(type)
-                                                Text(
-                                                    text = type.uppercase(),
-                                                    fontSize = 10.sp,
-                                                    fontWeight = FontWeight.SemiBold,
-                                                    letterSpacing = 0.5.sp,
-                                                    color = badgeColor,
-                                                    modifier = Modifier
-                                                        .clip(RoundedCornerShape(4.dp))
-                                                        .background(badgeColor.copy(alpha = 0.18f))
-                                                        .padding(horizontal = 8.dp, vertical = 3.dp),
-                                                )
-                                            }
-                                            album.year?.let { year ->
-                                                Text(
-                                                    text = "$year",
-                                                    fontSize = 11.sp,
-                                                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                                )
-                                            }
-                                        }
-                                    }
+                                    com.parachord.android.ui.components.ParachordAlbumCard(
+                                        title = album.title,
+                                        artist = null,
+                                        artworkUrl = album.artworkUrl,
+                                        width = null,
+                                        onOpen = { onNavigateToAlbum(album.title, album.artist) },
+                                        onLongPress = { showAlbumMenu = true },
+                                        subtitle = album.year?.toString().orEmpty(),
+                                        pill = com.parachord.shared.ui.CardPill.releaseType(album.releaseType),
+                                    )
                                     if (showAlbumMenu) {
                                         AlbumContextMenu(
                                             albumTitle = album.title,
