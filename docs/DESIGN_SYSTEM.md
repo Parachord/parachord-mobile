@@ -223,6 +223,10 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 - Long-press opens the item's context menu (`AlbumContextMenu`, `ArtistContextMenu`, `TrackContextMenu`), and the menu is the same on every screen.
 - A playlist card: 2×2 mosaic; subtitle per the Home rules below.
 
+### Menus
+
+- A track's long-press menu is one list for both apps, the shared `TrackMenu` (Android `TrackContextMenu`, iOS `pcTrackContextMenu`), in desktop's group order: Play Next, Add to Queue, Add to Playlist… / Remove from Queue, Remove from Playlist / Edit Metadata (local files) / Add or Remove from Collection / Go to Artist, Go to Album / Share, a divider between groups, removals in the danger colour. A screen says which rows it can offer; it never orders or words them. Android draws desktop's icons; iOS's system menu takes images only, so it keeps SF Symbols there.
+
 ### Buttons
 - Primary: fill-accent, white text, radius 8 (or full for a pill).
 - Secondary: outline border-default, text-primary.
