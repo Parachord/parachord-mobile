@@ -176,8 +176,15 @@ class SyncViewModel constructor(
     private fun formatAxesSummary(axes: Set<String>): String =
         com.parachord.shared.sync.SyncStatusText.axesSummary(axes)
 
-    val syncEnabled = settingsStore.syncEnabledFlow
-        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
+    /** Whether Spotify syncs: the Spotify card's switch. The shared
+     *  [com.parachord.shared.sync.syncingProviders] rule, the one the engine
+     *  uses, so the card can't read "disabled" while the engine syncs Spotify. */
+    val syncEnabled = combine(
+        settingsStore.syncEnabledFlow,
+        settingsStore.getEnabledSyncProvidersFlow(),
+    ) { legacy, enabled ->
+        SpotifySyncProvider.PROVIDER_ID in com.parachord.shared.sync.syncingProviders(legacy, enabled)
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), false)
 
     val lastSyncAt = settingsStore.lastSyncAtFlow
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0L)
@@ -465,11 +472,26 @@ class SyncViewModel constructor(
         }
     }
 
-    fun stopSyncing(removeItems: Boolean) {
+    /**
+     * Stop syncing one provider (its Settings switch, after the keep-or-remove
+     * prompt). Spotify's own switch is the legacy `SyncSettings.enabled` flag on
+     * Android, so stopping Spotify turns that off too. The background schedule
+     * and the settings go only when no provider syncs any more; the others keep
+     * syncing.
+     */
+    fun stopSyncing(providerId: String, removeItems: Boolean) {
         viewModelScope.launch {
-            syncEngine.stopSyncing(removeItems)
-            syncScheduler.stopInAppTimer()
-            syncScheduler.disableWorkManagerSync()
+            val remaining = syncEngine.disableProvider(providerId, removeItems)
+            var legacy = settingsStore.getSyncSettings()
+            if (providerId == SpotifySyncProvider.PROVIDER_ID && legacy.enabled) {
+                legacy = legacy.copy(enabled = false)
+                settingsStore.saveSyncSettings(legacy)
+            }
+            if (!com.parachord.shared.sync.isAnySyncProviderEnabled(legacy.enabled, remaining)) {
+                settingsStore.clearSyncSettings()
+                syncScheduler.stopInAppTimer()
+                syncScheduler.disableWorkManagerSync()
+            }
         }
     }
 
