@@ -1199,7 +1199,7 @@ struct ArtistScreen: View {
         VStack(alignment: .leading, spacing: 0) {
             if model.albums.isEmpty && (model.albumsLoading || !model.loaded) {
                 discoFilterSkeleton
-                PCSkeletonGrid(count: 6, columns: 2)
+                PCSkeletonGrid(count: 6)
             } else if model.albumsError && model.albums.isEmpty {
                 discographyError
             } else {

@@ -231,11 +231,7 @@ struct HomeSkeleton: View {
             PCSkeletonBox(width: 180, height: 20, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
             HStack(spacing: 16) {
                 ForEach(0..<3, id: \.self) { _ in
-                    VStack(alignment: .leading, spacing: 8) {
-                        PCSkeletonBox(width: 140, height: 140, radius: CGFloat(DesignTokens.shared.RADIUS_CARD))
-                        PCSkeletonBox(width: 110, height: 12, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
-                        PCSkeletonBox(width: 80, height: 10, radius: CGFloat(DesignTokens.shared.RADIUS_BADGE))
-                    }
+                    PCCardSkeleton(width: homeRowCardWidth(layoutWidth), lines: 1)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)

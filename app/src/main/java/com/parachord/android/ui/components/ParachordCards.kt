@@ -231,7 +231,12 @@ fun ParachordPlaylistCard(
 
 /** A card's shimmer stand-in (desktop `home-skeletons.js`): the same box, art and [lines] text bars. */
 @Composable
-fun CardSkeleton(width: Dp, modifier: Modifier = Modifier, lines: Int = 2) {
+fun CardSkeleton(width: Dp?, modifier: Modifier = Modifier, lines: Int = 2) {
+    if (width == null) {
+        // A grid cell: the same card as one that fills it (ParachordAlbumCard's width null).
+        BoxWithConstraints(modifier.fillMaxWidth()) { CardSkeleton(maxWidth - (CardSpec.PADDING * 2).dp, Modifier, lines) }
+        return
+    }
     val brush = shimmerBrush()
     ParachordCardBox(width, modifier) {
         Box(Modifier.size(cardArtSize(width)).clip(RoundedCornerShape(CardSpec.ART_RADIUS.dp)).background(brush))
