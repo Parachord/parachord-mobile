@@ -33,6 +33,15 @@ object CardSpec {
     const val ARTIST_TEXT_PADDING = 12
     /** The artist card's name (desktop's `text-sm`, 500). */
     const val ARTIST_NAME_SIZE = 14
+    /**
+     * The reason badge (desktop `reason-badge.js`): a [REASON_DISC] disc with
+     * Shuffleupagus's logo at [REASON_LOGO] (desktop's 26 / 18, on the 4-point
+     * and icon scales), in a [REASON_TOUCH] tap target, at the cover's lower
+     * left (the play disc holds the lower right on a phone).
+     */
+    const val REASON_DISC = 28
+    const val REASON_LOGO = 20
+    const val REASON_TOUCH = 48
     /** A pill's text (the release type, "Coming", "Δ 12"). */
     const val PILL_SIZE = 11
 

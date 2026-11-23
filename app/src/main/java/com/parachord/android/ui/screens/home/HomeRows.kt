@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.components.ReasonBadge
+import com.parachord.android.ui.components.ReasonMark
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -91,11 +93,6 @@ private val Gutter = DesignTokens.SCREEN_GUTTER.dp
 @Composable
 private fun homeRowCardWidth(): Dp = rowCardWidth(cards = HOME_ROW_CARDS, gutter = Gutter, gap = CardGap)
 private val ArtShape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp)
-/** The reason badge: desktop's 26 px disc and 18 px logo, on the 4-point and icon scales. */
-private val BadgeDisc = 28.dp
-private val BadgeLogo = 20.dp
-private val BadgeChip = tokenColor(DesignTokens.ON_COLOR_CHIP, DesignTokens.ON_COLOR_CHIP_ALPHA)
-private val BadgeInk = tokenColor(DesignTokens.ON_ART_INK)
 
 // The three card rows of desktop's Home (`home-sections.js`): Made from your
 // listening, Your playlists freshest first, Albums you might love. What each
@@ -279,66 +276,3 @@ fun HomeAlbumsRow(
     }
 }
 
-/**
- * The reason badge (desktop `reason-badge.js`) on a Shuffleupagus pick, or
- * on a Critical Darlings pick with the review as [text] and "What the critics
- * said" as [label] (desktop gives both Shuffleupagus's mark): a white
- * chip disc over the art with Shuffleupagus's logo in dark ink, the same in
- * both themes; a tap shows why in a tooltip, and TalkBack reads the reason as
- * the badge's state. Bottom-left, since the play disc has the cover's
- * bottom-right on a phone (desktop puts the badge bottom-right and shows Play on hover).
- */
-@OptIn(ExperimentalMaterial3Api::class)
-@Composable
-internal fun ReasonBadge(text: String, modifier: Modifier, label: String = HomeCopy.WHY_SHUFFLEUPAGUS) {
-    val tooltip = rememberTooltipState(isPersistent = true)
-    val scope = rememberCoroutineScope()
-    TooltipBox(
-        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
-        tooltip = { PlainTooltip { Text(text) } },
-        state = tooltip,
-        modifier = modifier,
-    ) {
-        Box(
-            contentAlignment = Alignment.Center,
-            modifier = Modifier
-                .size(48.dp)
-                .clip(CircleShape)
-                .semantics {
-                    role = Role.Button
-                    contentDescription = label
-                    stateDescription = text
-                }
-                .hapticClickable { scope.launch { tooltip.show() } },
-        ) {
-            ReasonMark()
-        }
-    }
-}
-
-/**
- * Shuffleupagus's disc on its own (desktop `ReasonMark`): the white chip with
- * its logo in dark ink. The badges draw it, and the Ask box's heading, so the
- * box and the badges read as one thing. [outlined] adds a border so the white
- * disc shows on a light surface (desktop's mark, off the art).
- */
-@Composable
-internal fun ReasonMark(outlined: Boolean = false) {
-    Box(
-        contentAlignment = Alignment.Center,
-        modifier = Modifier
-            .size(BadgeDisc)
-            .clip(CircleShape)
-            .background(BadgeChip)
-            .then(
-                if (outlined) Modifier.border(1.dp, DesignTokens.borderDefault.current(), CircleShape) else Modifier,
-            ),
-    ) {
-        val logo = remember { serviceLogoVector(SHUFFLEUPAGUS_ID, BadgeInk) }
-        if (logo != null) {
-            Icon(logo, contentDescription = null, tint = Color.Unspecified, modifier = Modifier.size(BadgeLogo))
-        } else {
-            ParachordIcon(AppIcon.Sparkles, contentDescription = null, size = BadgeLogo, tint = BadgeInk)
-        }
-    }
-}

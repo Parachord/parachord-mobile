@@ -295,6 +295,8 @@ fun ParachordArtistCard(
     onLongPress: (() -> Unit)? = null,
     subtitle: String? = null,
     rank: Int? = null,
+    /** Drawn over the photo (the reason badge on a Shuffleupagus pick). */
+    artBadge: (@Composable BoxScope.() -> Unit)? = null,
 ) {
     val shape = RoundedCornerShape(CardSpec.ARTIST_RADIUS.dp)
     Column(
@@ -319,6 +321,7 @@ fun ParachordArtistCard(
                 )
             }
             rank?.let { CardRankBadge(it, Modifier.align(Alignment.TopStart)) }
+            artBadge?.invoke(this)
         }
         Column(Modifier.padding(CardSpec.ARTIST_TEXT_PADDING.dp)) {
             Text(

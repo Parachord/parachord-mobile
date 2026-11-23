@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.home.albumReasonBadge
 import com.parachord.android.ui.components.hapticClickable
 import androidx.compose.foundation.layout.offset
 import androidx.compose.ui.semantics.semantics
@@ -120,7 +121,9 @@ fun RecAlbumCard(
         onPlay = onPlay,
         subtitle = year,
         pill = CardPill.coming(comingLabel),
-        artBadge = coverBadge,
+        artBadge = coverBadge ?: albumReasonBadge(item)?.let { text ->
+            { com.parachord.android.ui.components.ReasonBadge(text, Modifier.align(androidx.compose.ui.Alignment.BottomStart)) }
+        },
     )
 }
 
@@ -142,6 +145,9 @@ fun RecArtistCard(
         onOpen = onOpen,
         modifier = modifier,
         onLongPress = onLongPress,
+        artBadge = albumReasonBadge(item)?.let { text ->
+            { com.parachord.android.ui.components.ReasonBadge(text, Modifier.align(androidx.compose.ui.Alignment.BottomStart)) }
+        },
     )
 }
 

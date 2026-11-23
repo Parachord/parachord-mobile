@@ -119,6 +119,8 @@ data class IosRecItem(
     val opensView: Boolean,
     /** A song's track id as it plays (for the now-playing highlight); null for other types. */
     val trackId: String?,
+    /** Why Shuffleupagus picked it (the shared `albumReasonBadge`), for the reason badge; null otherwise. */
+    val reasonBadge: String? = null,
 )
 
 /** One card of the Listeners row. */
@@ -239,6 +241,7 @@ internal fun iosRecItem(item: RecommendationItem, row: RecommendationRow?, today
     weeklyWeekLabel = item.weekly?.weekLabel,
     opensView = playlistTapOpensView(item),
     trackId = recommendedSongTrack(item)?.id,
+    reasonBadge = com.parachord.shared.home.albumReasonBadge(item),
 )
 
 private fun iosRecListener(item: ListenerItem): IosRecListener {

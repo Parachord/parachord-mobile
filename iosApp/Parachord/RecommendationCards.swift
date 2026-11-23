@@ -64,7 +64,8 @@ struct RecAlbumCard: View {
         PCAlbumCard(
             title: item.name, artist: item.artist ?? "", artworkUrl: item.imageUrl, width: width,
             subtitle: item.year, pill: CardPill.companion.coming(label: item.comingLabel),
-            artBadge: coverBadge, onOpen: onOpen, onPlay: onPlay)
+            artBadge: coverBadge ?? item.reasonBadge.map { AnyView(HomeReasonBadge(text: $0)) },
+            onOpen: onOpen, onPlay: onPlay)
     }
 }
 
@@ -75,7 +76,8 @@ struct RecArtistCard: View {
     let onOpen: () -> Void
 
     var body: some View {
-        PCArtistCard(name: item.name, imageUrl: item.imageUrl, width: width, onOpen: onOpen)
+        PCArtistCard(name: item.name, imageUrl: item.imageUrl, width: width,
+                     artBadge: item.reasonBadge.map { AnyView(HomeReasonBadge(text: $0)) }, onOpen: onOpen)
     }
 }
 
@@ -223,7 +225,7 @@ private func sampleItem(_ type: String, name: String, coming: String? = nil) -> 
     IosRecItem(id: name, type: type, name: name, artist: "Some Artist", imageUrl: nil, url: nil,
                year: "2026", comingLabel: coming, sourceName: "Spotify",
                weeklyId: "w1", weeklyContextType: "weekly-jams", weeklyLabel: "Weekly Jams",
-               weeklyWeekLabel: "Week of Nov 16", opensView: true, trackId: nil)
+               weeklyWeekLabel: "Week of Nov 16", opensView: true, trackId: nil, reasonBadge: nil)
 }
 
 private let sampleListener = IosRecListener(
@@ -496,6 +498,8 @@ struct PCArtistCard: View {
     var width: CGFloat? = pcRecCardWidth
     var subtitle: String? = nil
     var rank: Int? = nil
+    /// Drawn over the photo (the reason badge on a Shuffleupagus pick).
+    var artBadge: AnyView? = nil
     var onOpen: (() -> Void)? = nil
 
     var body: some View {
@@ -513,6 +517,7 @@ struct PCArtistCard: View {
                 .overlay(alignment: .topLeading) {
                     if let rank { PCCardRankBadge(rank: rank) }
                 }
+                .overlay(alignment: .bottomLeading) { if let artBadge { artBadge } }
             VStack(alignment: .leading, spacing: CGFloat(cardSpec.LINE_GAP)) {
                 Text(name)
                     .font(.system(size: CGFloat(cardSpec.ARTIST_NAME_SIZE), weight: .medium))
