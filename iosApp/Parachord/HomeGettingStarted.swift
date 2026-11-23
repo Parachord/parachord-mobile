@@ -214,7 +214,7 @@ struct HomeGettingStartedView: View {
                 mark
                 VStack(alignment: .leading, spacing: 2) {
                     Text(title).font(.system(size: 14, weight: .semibold)).foregroundStyle(PC.fg1).lineLimit(1)
-                    if badge { connectedBadge(text) }
+                    if badge { PCBadge(text: text, tone: .accent, icon: .check) }
                     else { Text(text).font(.system(size: 12)).foregroundStyle(PC.fg2).lineLimit(2) }
                 }
                 Spacer(minLength: 0)
@@ -228,15 +228,6 @@ struct HomeGettingStartedView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(label ?? "\(title), \(text)")
         .accessibilityAddTraits(.isButton)
-    }
-
-    private func connectedBadge(_ text: String) -> some View {
-        HStack(spacing: 4) {
-            PCIcon(icon: .check, size: 12, tint: PC.accent)
-            Text(text).font(.system(size: 12, weight: .semibold)).foregroundStyle(PC.accent)
-        }
-        .padding(.horizontal, 8).padding(.vertical, 2)
-        .background(PC.accentSurface, in: Capsule())
     }
 
     /// A service's logo on its own colour (desktop `ServiceMark`); a wide one (Libre.fm's wordmark) at 30.

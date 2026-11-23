@@ -42,7 +42,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.em
 import androidx.compose.ui.unit.sp
+import com.parachord.android.ui.components.ParachordBadge
 import com.parachord.android.ui.components.ParachordIcon
+import com.parachord.shared.ui.BadgeTone
 import com.parachord.android.ui.components.ResolverIconSquare
 import com.parachord.android.ui.components.serviceLogoVector
 import com.parachord.android.ui.theme.serviceColorOrNull
@@ -452,25 +454,9 @@ private fun Tile(
         mark()
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
             Text(text = title, fontSize = 14.sp, fontWeight = FontWeight.SemiBold, color = DesignTokens.textPrimary.current())
-            if (badge) ConnectedBadge(description)
+            if (badge) ParachordBadge(description, tone = BadgeTone.ACCENT, icon = AppIcon.Check)
             else Text(text = description, fontSize = 12.sp, color = DesignTokens.textSecondary.current())
         }
-    }
-}
-
-/** Desktop's accent `Badge` with a check. */
-@Composable
-private fun ConnectedBadge(text: String) {
-    val accent = DesignTokens.accent.current()
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
-        modifier = Modifier
-            .background(DesignTokens.accentSurface.current(), RoundedCornerShape(DesignTokens.RADIUS_PILL.dp))
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    ) {
-        ParachordIcon(AppIcon.Check, contentDescription = null, size = 12.dp, tint = accent)
-        Text(text = text, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = accent)
     }
 }
 

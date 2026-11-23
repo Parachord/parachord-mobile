@@ -72,10 +72,8 @@ import com.parachord.android.ui.components.ModalTextPrimary
 import com.parachord.android.ui.components.ModalTextSecondary
 
 private val OnAirGreen = Color(0xFF22C55E)
-private val LastFmRed = Color(0xFFD51007)
 private val MiniPlaybarBgLight = Color(0xF21F2937)
 private val MiniPlaybarBgDark = Color(0xF2262626)
-private val ListenBrainzOrange = Color(0xFFE8702A)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -266,7 +264,7 @@ private fun FriendRow(
                         modifier = Modifier.weight(1f, fill = false),
                     )
                     Spacer(modifier = Modifier.width(6.dp))
-                    ServiceBadge(service = friend.service)
+                    com.parachord.android.ui.components.ParachordBadge(com.parachord.shared.ui.FriendCard.serviceLabel(friend.service))
                 }
                 if (friend.isOnAir && friend.cachedTrackName != null) {
                     Spacer(modifier = Modifier.height(4.dp))
@@ -411,26 +409,6 @@ private fun FriendsMiniArtFallback() {
             modifier = Modifier.size(12.dp),
         )
     }
-}
-
-@Composable
-private fun ServiceBadge(service: String) {
-    val (text, color) = when (service) {
-        "lastfm" -> "Last.fm" to LastFmRed
-        "listenbrainz" -> "LB" to ListenBrainzOrange
-        else -> service to MaterialTheme.colorScheme.outline
-    }
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        modifier = Modifier
-            .background(
-                color = color.copy(alpha = 0.12f),
-                shape = RoundedCornerShape(4.dp),
-            )
-            .padding(horizontal = 6.dp, vertical = 2.dp),
-    )
 }
 
 @Composable
