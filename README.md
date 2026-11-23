@@ -11,6 +11,8 @@ Both apps are public betas that anyone can join. The same links are on [parachor
 ### Android (Android 8.0+)
 - **Google Play**: join the [Parachord-Testers group](https://groups.google.com/g/parachord-testers) and opt in to testing, then install from the [Play listing](https://play.google.com/store/apps/details?id=com.parachord.android). Updates arrive through the Play Store.
 - **Sideload**: get the signed APK from the [latest release](https://github.com/Parachord/parachord-mobile/releases/latest) and install it directly. You need to give your browser or Files app the "Install unknown apps" permission. Every build is on the [releases page](https://github.com/Parachord/parachord-mobile/releases).
+  - **Android Auto doesn't list a sideloaded app** until you allow it: in Android Auto's settings, tap **Version** about ten times to unlock developer mode, then open **⋮ › Developer settings** and turn on **Unknown sources**. The Play install needs no setting.
+- **Cars that run Android themselves** (Android Automotive, such as Volvo, Polestar and some Google built-in cars) aren't supported yet; Parachord shows up only in Android Auto, projected from the phone.
 
 ### iOS (iOS 17+)
 - **TestFlight**: join the [public beta](https://testflight.apple.com/join/zXvg5zxK).
