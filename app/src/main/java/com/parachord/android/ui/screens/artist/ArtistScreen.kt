@@ -630,7 +630,12 @@ private fun TopTracksTab(
                 ResolveWhileVisible(trackKey(track.title, track.artist)) { onTrackVisible(track) }
                 TrackRow(
                     title = track.title,
-                    artist = track.album ?: "",
+                    // The artist keys the row's resolved length and dimming; the
+                    // album is the line under the title (desktop's Top Tracks).
+                    artist = track.artist,
+                    subtitle = track.album.orEmpty(),
+                    album = track.album,
+                    duration = track.duration,
                     // Prefer resolved album art (#188) — Top Tracks arrive art-less
                     // from Last.fm; the resolver supplies real Apple Music / Spotify art.
                     artworkUrl = trackArtwork[trackKey(track.title, track.artist)] ?: track.artworkUrl,
