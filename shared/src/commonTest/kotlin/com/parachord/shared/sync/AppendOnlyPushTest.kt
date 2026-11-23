@@ -11,7 +11,7 @@ class AppendOnlyPushTest {
     }
 
     @Test
-    fun `only the tracks it lacks are appended, in order`() {
+    fun `only the tracks it lacks are appended — in order`() {
         assertEquals(listOf("b", "d"), AppendOnlyPush.missingIds(listOf("a", "c"), listOf("a", "b", "c", "d")))
     }
 
