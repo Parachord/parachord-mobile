@@ -10,17 +10,6 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.PlaylistAdd
-import androidx.compose.material.icons.automirrored.filled.QueueMusic
-import androidx.compose.material.icons.filled.Album
-import androidx.compose.material.icons.filled.Edit
-import androidx.compose.material.icons.filled.Favorite
-import androidx.compose.material.icons.filled.FavoriteBorder
-import androidx.compose.material.icons.filled.Person
-import androidx.compose.material.icons.filled.PlaylistRemove
-import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.SkipNext
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -28,6 +17,10 @@ import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
+import com.parachord.shared.ui.TrackMenu
+import com.parachord.shared.ui.TrackMenuAction
+import com.parachord.shared.ui.icons.AppIcon
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
@@ -161,80 +154,36 @@ fun TrackContextMenu(
 
             HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 8.dp))
 
-            // Favorite / heart toggle
-            if (track.isInCollection) {
-                ContextMenuItem(
-                    icon = Icons.Filled.Favorite,
-                    label = "Remove from Collection",
-                    onClick = { onToggleCollection(); onDismiss() },
-                )
-            } else {
-                ContextMenuItem(
-                    icon = Icons.Filled.FavoriteBorder,
-                    label = "Add to Collection",
-                    onClick = { onToggleCollection(); onDismiss() },
-                )
-            }
-
-            HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
-
-            // Menu items
-            ContextMenuItem(
-                icon = Icons.Filled.SkipNext,
-                label = "Play Next",
-                onClick = { onPlayNext(); onDismiss() },
+            // The rows and their order come from the shared TrackMenu
+            // (desktop's track menu groups); this only draws them.
+            val items = TrackMenu.items(
+                inCollection = track.isInCollection,
+                canRemoveFromPlaylist = onRemoveFromPlaylist != null,
+                canEditMetadata = onEditMetadata != null,
+                canGoToAlbum = onGoToAlbum != null,
+                canShare = onShare != null,
             )
-            ContextMenuItem(
-                icon = Icons.AutoMirrored.Filled.QueueMusic,
-                label = "Add to Queue",
-                onClick = { onAddToQueue(); onDismiss() },
-            )
-            ContextMenuItem(
-                icon = Icons.AutoMirrored.Filled.PlaylistAdd,
-                label = "Add to Playlist\u2026",
-                onClick = { onAddToPlaylist() },
-            )
-
-            HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
-
-            ContextMenuItem(
-                icon = Icons.Filled.Person,
-                label = "Go to Artist",
-                onClick = { onGoToArtist(); onDismiss() },
-            )
-            if (onGoToAlbum != null) {
+            items.forEach { item ->
+                if (item.startsGroup) {
+                    HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
+                }
+                val (icon, run, closes) = when (item.action) {
+                    TrackMenuAction.PLAY_NEXT -> Triple(AppIcon.SkipForward, onPlayNext, true)
+                    TrackMenuAction.ADD_TO_QUEUE -> Triple(AppIcon.QueueAdd, onAddToQueue, true)
+                    // Opens its own panel, which closes the menu.
+                    TrackMenuAction.ADD_TO_PLAYLIST -> Triple(AppIcon.ListPlus, onAddToPlaylist, false)
+                    TrackMenuAction.REMOVE_FROM_QUEUE -> Triple(AppIcon.Trash2, {}, true)
+                    TrackMenuAction.REMOVE_FROM_PLAYLIST -> Triple(AppIcon.Trash2, onRemoveFromPlaylist ?: {}, true)
+                    TrackMenuAction.EDIT_METADATA -> Triple(AppIcon.FileText, onEditMetadata ?: {}, false)
+                    TrackMenuAction.COLLECTION -> Triple(AppIcon.Heart, onToggleCollection, true)
+                    TrackMenuAction.GO_TO_ARTIST -> Triple(AppIcon.User, onGoToArtist, true)
+                    TrackMenuAction.GO_TO_ALBUM -> Triple(AppIcon.Music, onGoToAlbum ?: {}, true)
+                    TrackMenuAction.SHARE -> Triple(AppIcon.Share, onShare ?: {}, true)
+                }
                 ContextMenuItem(
-                    icon = Icons.Filled.Album,
-                    label = "Go to Album",
-                    onClick = { onGoToAlbum(); onDismiss() },
-                )
-            }
-
-            // Edit Metadata — local files only (gated by the host); editing a
-            // streaming track's title/artist would break resolution.
-            if (onEditMetadata != null) {
-                ContextMenuItem(
-                    icon = Icons.Filled.Edit,
-                    label = "Edit Metadata",
-                    onClick = { onEditMetadata() },
-                )
-            }
-
-            if (onShare != null) {
-                HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
-                ContextMenuItem(
-                    icon = Icons.Filled.Share,
-                    label = "Share",
-                    onClick = { onShare(); onDismiss() },
-                )
-            }
-
-            if (onRemoveFromPlaylist != null) {
-                HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
-                ContextMenuItem(
-                    icon = Icons.Filled.PlaylistRemove,
-                    label = "Remove from Playlist",
-                    onClick = { onRemoveFromPlaylist(); onDismiss() },
+                    icon = remember(icon) { icon.spec.toImageVector(icon.name, Color.White) },
+                    label = item.label,
+                    onClick = { run(); if (closes) onDismiss() },
                 )
             }
         }

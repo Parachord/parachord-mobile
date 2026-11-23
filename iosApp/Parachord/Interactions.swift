@@ -19,49 +19,53 @@ extension View {
         onRemoveFromPlaylist: (() -> Void)? = nil
     ) -> some View {
         contextMenu {
-            Button { coordinator.playNext(track) } label: {
-                Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward")
-            }
-            Button { coordinator.addToQueue(track) } label: {
-                Label("Add to Queue", systemImage: "text.append")
-            }
-            PCAddToPlaylistMenu(track: track)
-            // Edit Metadata (iOS local-files tag editor) — local files only.
-            // Streaming tracks resolve BY
-            // title/artist against Spotify/Apple Music, so editing those would
-            // break resolution; local files carry their own row metadata (often
-            // just a filename after import), so cleaning it up is safe + useful.
-            if track.resolver == "localfiles" {
-                Button { TrackMetadataEditor.shared.start(track) } label: {
-                    Label("Edit Metadata", systemImage: "pencil")
-                }
-            }
-            // Queue-context only (#220): remove this track from the up-next list.
-            if let onRemoveFromQueue {
-                Button(role: .destructive) { onRemoveFromQueue() } label: {
-                    Label("Remove from Queue", systemImage: "text.badge.minus")
-                }
-            }
-            if let onGoToArtist {
-                Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
-            }
-            if let onGoToAlbum {
-                Button { onGoToAlbum() } label: { Label("Go to Album", systemImage: "square.stack") }
-            }
-            Divider()
-            Button { ShareCoordinator.shared.shareTrack(track) } label: {
-                Label("Share", systemImage: "square.and.arrow.up")
-            }
-            // Always-on collection toggle (Android parity) — self-managed: observes
-            // the DB and adds/removes. On the Collection screen the row drops out
-            // reactively when removed (the collection flow re-emits). #204
-            PCCollectionToggleButton(target: .track(track))
-            // Playlist-detail only (Android `TrackContextMenu` onRemoveFromPlaylist):
-            // removes this row from the open playlist without entering Edit mode.
-            if let onRemoveFromPlaylist {
-                Divider()
-                Button(role: .destructive) { onRemoveFromPlaylist() } label: {
-                    Label("Remove from Playlist", systemImage: "minus.circle")
+            // The rows and their order come from the shared TrackMenu
+            // (desktop's track menu groups), as on Android; this only draws them.
+            let items = TrackMenu.shared.items(
+                inCollection: nil,
+                canAddToPlaylist: true,
+                canRemoveFromQueue: onRemoveFromQueue != nil,
+                canRemoveFromPlaylist: onRemoveFromPlaylist != nil,
+                // Local files only: streaming tracks resolve by title and artist,
+                // so editing those would break resolution.
+                canEditMetadata: track.resolver == "localfiles",
+                canGoToArtist: onGoToArtist != nil,
+                canGoToAlbum: onGoToAlbum != nil,
+                canShare: true)
+            ForEach(Array(items.enumerated()), id: \.offset) { _, item in
+                if item.startsGroup { Divider() }
+                switch item.action {
+                case .playNext:
+                    Button { coordinator.playNext(track) } label: {
+                        Label(item.label, systemImage: "text.line.first.and.arrowtriangle.forward")
+                    }
+                case .addToQueue:
+                    Button { coordinator.addToQueue(track) } label: { Label(item.label, systemImage: "text.append") }
+                case .addToPlaylist:
+                    PCAddToPlaylistMenu(track: track)
+                case .removeFromQueue:
+                    Button(role: .destructive) { onRemoveFromQueue?() } label: {
+                        Label(item.label, systemImage: "text.badge.minus")
+                    }
+                case .removeFromPlaylist:
+                    Button(role: .destructive) { onRemoveFromPlaylist?() } label: {
+                        Label(item.label, systemImage: "minus.circle")
+                    }
+                case .editMetadata:
+                    Button { TrackMetadataEditor.shared.start(track) } label: { Label(item.label, systemImage: "pencil") }
+                case .collection:
+                    // Self-managed: observes the database for its label and adds or removes.
+                    PCCollectionToggleButton(target: .track(track))
+                case .goToArtist:
+                    Button { onGoToArtist?() } label: { Label(item.label, systemImage: "music.mic") }
+                case .goToAlbum:
+                    Button { onGoToAlbum?() } label: { Label(item.label, systemImage: "square.stack") }
+                case .share:
+                    Button { ShareCoordinator.shared.shareTrack(track) } label: {
+                        Label(item.label, systemImage: "square.and.arrow.up")
+                    }
+                default:
+                    EmptyView()
                 }
             }
         } preview: {

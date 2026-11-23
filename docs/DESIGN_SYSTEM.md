@@ -230,6 +230,10 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 - A service's badge takes its colour instead (`serviceColor` / `ResolverColor.solid`): the pill tinted with it at 16%, an 8 dot of it before the label, primary text. Never a hex in a screen.
 - A playlist's page: "Source: X" under the title for where it came from (shared `PlaylistOrigin`: the service it's pulled or imported from, "A playlist link" for hosted, "An imported file"; none for one made in Parachord), then one badge per service it pushes to, never its source (`PlaylistSyncBadges`: Spotify, Apple Music, ListenBrainz, then others; each opens the playlist there), uncoloured while it's kept local only. Desktop shows no badges on a pulled playlist; mobile shows its push mirrors. The Playlists list shows no service badges, as desktop's. The sync picker's rows badge where a playlist came from (a service in its colour, Hosted in info, Local neutral).
 
+### Menus
+
+- A track's long-press menu is one list for both apps, the shared `TrackMenu` (Android `TrackContextMenu`, iOS `pcTrackContextMenu`), in desktop's group order: Play Next, Add to Queue, Add to Playlist… / Remove from Queue, Remove from Playlist / Edit Metadata (local files) / Add or Remove from Collection / Go to Artist, Go to Album / Share, a divider between groups, removals in the danger colour. A screen says which rows it can offer; it never orders or words them. Android draws desktop's icons; iOS's system menu takes images only, so it keeps SF Symbols there.
+
 ### Buttons
 - Primary: fill-accent, white text, radius 8 (or full for a pill).
 - Secondary: outline border-default, text-primary.
