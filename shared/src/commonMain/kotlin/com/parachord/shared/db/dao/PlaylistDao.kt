@@ -242,7 +242,18 @@ class PlaylistDao(private val db: ParachordDb) {
         queries.clearLocallyModified(id)
     }
 
+    /**
+     * Delete a playlist and its tracks, together. The schema's `ON DELETE
+     * CASCADE` never fires: neither app turns SQLite's foreign keys on, and
+     * they can't be, since a playlist save is an `INSERT OR REPLACE` that
+     * would then delete the playlist's tracks. Deleting only the row left its
+     * tracks behind under an id nothing owns: a Pixel held 3,863 such rows for
+     * 89 removed playlists, and they blocked a later playlist taking that id.
+     */
     suspend fun delete(playlist: Playlist): Unit = withContext(Dispatchers.Default) {
-        queries.deleteById(playlist.id)
+        db.transaction {
+            db.playlistTrackQueries.deleteByPlaylistId(playlist.id)
+            queries.deleteById(playlist.id)
+        }
     }
 }

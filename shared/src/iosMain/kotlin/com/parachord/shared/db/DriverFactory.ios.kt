@@ -53,6 +53,8 @@ actual class DriverFactory {
         if (addColumnIfMissing(driver, table = "tracks", column = "inCollection", type = "INTEGER NOT NULL DEFAULT 1")) {
             driver.execute(null, com.parachord.shared.db.LocalLibraryMigration.MARK_SCANNED_LOCAL_FILES_LIBRARY_ONLY, 0)
         }
+        // Track rows a removed playlist left behind (OrphanPlaylistTracks).
+        driver.execute(null, com.parachord.shared.db.OrphanPlaylistTracks.DELETE_ORPHANS, 0)
         return driver
     }
 
