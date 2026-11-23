@@ -40,6 +40,8 @@ For every UI/UX or behavior task, in this order:
    Every artist card draws `PCArtistCard` (a photo, else the shared `ArtistPattern`
    through `PCArtistPatternArt`) and its skeleton `PCArtistCardSkeleton`. A friend's
    avatar is `PCFriendAvatar` and a listener `PCListenerCard` (the shared `FriendAvatarSpec`).
+   A status pill (a playlist's services, Hosted, Local) is `PCBadge` (the shared `BadgeSpec`,
+   a service's colour from `ResolverColor.solid`); never a coloured `Text` on a rounded rectangle.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).
 1. **Read the design files.** The Claude Design handoff lives at

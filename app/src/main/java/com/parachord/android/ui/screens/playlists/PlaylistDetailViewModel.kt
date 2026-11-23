@@ -66,6 +66,11 @@ class PlaylistDetailViewModel constructor(
         .map { runCatching { libraryRepository.getPlaylistMirrors(playlistId) }.getOrDefault(emptyMap()) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyMap())
 
+    /** The provider this playlist is pulled from, for its source line; null when it isn't. */
+    val pullProvider: StateFlow<String?> = playlist
+        .map { runCatching { libraryRepository.getPlaylistPullProvider(playlistId) }.getOrNull() }
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
     /** Title of the currently playing track (for highlight). */
     val nowPlayingTitle: StateFlow<String?> = playbackStateHolder.state
         .map { it.currentTrack?.title }

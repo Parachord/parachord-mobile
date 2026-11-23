@@ -61,6 +61,8 @@ data class ProviderChannelPlaylist(
      *  null for a provider-native row. */
     val originLabel: String?,
     val enabled: Boolean,
+    /** The provider [originLabel] names, for its colour; null for Local, Hosted or none. */
+    val originProviderId: String? = null,
     /** True for a live-fetched provider playlist that has no local row yet —
      *  checking it imports it on the next sync. */
     val notImported: Boolean = false,
@@ -152,6 +154,7 @@ class PlaylistSyncChannelManager(
                     isMirror = !isNative,
                     originLabel = if (isNative) null else originLabelFor(p.id),
                     enabled = providerId in effective,
+                    originProviderId = if (isNative) null else impliedPlaylistProvider(p.id),
                     tracksChangedAt = p.tracksChangedAt,
                 )
             }
