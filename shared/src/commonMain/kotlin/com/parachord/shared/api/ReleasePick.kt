@@ -12,7 +12,9 @@ package com.parachord.shared.api
  * The rule:
  *   1. Prefer releases that are digital only (every medium "Digital Media"):
  *      they are what streaming services carry, and the tracks have to resolve
- *      on those services.
+ *      on those services. Only while one of them lists its tracks (rule 3,
+ *      desktop parachord#1654): days after release a group can hold digital
+ *      placeholders with no track list while a CD or vinyl release has it.
  *   2. Among those, take the most common track count, which is the standard
  *      edition. "Most tracks" would pick a 40-track super deluxe Abbey Road
  *      over the 17-track album.
@@ -43,7 +45,7 @@ fun pickRelease(releases: List<MbReleaseDetail>): MbReleaseDetail? {
     if (releases.size == 1) return releases[0]
 
     val digital = releases.filter(::isDigitalOnly)
-    val pool = digital.ifEmpty { releases }
+    val pool = if (digital.any { releaseTrackCount(it) > 0 }) digital else releases
 
     // Group by track count (0 means MusicBrainz didn't say), keeping MusicBrainz order.
     val groups = LinkedHashMap<Int, MutableList<MbReleaseDetail>>()
@@ -66,4 +68,27 @@ fun pickRelease(releases: List<MbReleaseDetail>): MbReleaseDetail? {
         }
     }
     return bestFirst
+}
+
+/**
+ * A release search's hits with the top hit's album opened as [pickRelease]
+ * would open it (desktop's `orderReleaseSearchHits`, parachord#1654). A search
+ * scores every edition of an album alike, so its top hit can be an empty
+ * placeholder ("Grand Theft Auto VI: The Album", days after release: 10 of
+ * its 19 releases had no tracks). The pick among the hits from the top hit's
+ * release group comes first; the other hits follow in their order, so another
+ * album never takes the top hit's place. Hits with no release group, or fewer
+ * than two, come back unchanged. Search hits carry each medium's format and
+ * track count, which is all [pickRelease] reads, so no request is added.
+ */
+fun orderReleaseSearchHits(releases: List<MbRelease>): List<MbRelease> {
+    if (releases.size < 2) return releases
+    val group = releases[0].releaseGroup?.id ?: return releases
+    val sameAlbum = releases.filter { it.releaseGroup?.id == group }
+    val picked = pickRelease(
+        sameAlbum.map { MbReleaseDetail(id = it.id, title = it.title, date = it.date, media = it.media) },
+    ) ?: return releases
+    val pick = sameAlbum.first { it.id == picked.id }
+    if (pick === releases[0]) return releases
+    return listOf(pick) + releases.filter { it !== pick }
 }
