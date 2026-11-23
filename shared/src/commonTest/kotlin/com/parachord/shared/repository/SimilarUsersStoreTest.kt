@@ -41,11 +41,13 @@ class SimilarUsersStoreTest {
         scope: CoroutineScope,
         exclude: FriendExclusions = FriendExclusions(),
         config: String? = """{"username":"me"}""",
+        off: () -> Set<String> = { emptySet() },
     ) = SimilarUsersStore(
         source = source,
         friends = { exclude },
         configFor = { config },
         providerIsOn = { true },
+        recommendationsOff = { off() },
         load = { disk },
         save = { disk = it; saves++ },
         nowMs = { now },
@@ -159,5 +161,26 @@ class SimilarUsersStoreTest {
         assertEquals("true", pending["credentialsPending"]?.jsonPrimitive?.content)
         val ready = Json.parseToJsonElement(similarUsersConfig("lastfm", mapOf("lastfm" to """{"username":"me","apiKey":"k"}"""))!!).jsonObject
         assertNull(ready["credentialsPending"])
+    }
+
+    @Test
+    fun `a provider switched off for recommendations isn't asked and leaves the Listeners services`() = runTest {
+        disk = diskWith("""[{"username":"ann"}]""", fetchedAt = now)
+        val source = FakeSource { _, _ -> """[{"username":"bob"}]""" }
+        var off = setOf("listenbrainz")
+        val s = store(source, backgroundScope, off = { off })
+
+        assertEquals(emptySet(), s.friendServices())
+        assertEquals(emptySet(), s.exclusions().friendServices)
+        assertFalse(s.canAsk())
+        assertEquals(emptyMap(), s.cached())
+        assertEquals(emptyMap(), s.usersFor(true))
+        assertTrue(source.calls.isEmpty())
+
+        // Switched back on: its people come back from the cache, with no request.
+        off = emptySet()
+        assertEquals(setOf("listenbrainz"), s.friendServices())
+        assertEquals(mapOf("listenbrainz" to listOf("ann")), s.usersFor(false).mapValues { e -> e.value.map { it.username } })
+        assertTrue(source.calls.isEmpty())
     }
 }

@@ -4,7 +4,10 @@ import com.parachord.shared.ai.AiAlbumSuggestion
 import com.parachord.shared.ai.AiArtistSuggestion
 import com.parachord.shared.ai.AiRecommendations
 import com.parachord.shared.plugin.PluginNotReadyException
+import com.parachord.shared.recommendations.FriendExclusions
+import com.parachord.shared.recommendations.LISTENERS_ROW_KEY
 import com.parachord.shared.recommendations.RecommendationPageSection
+import com.parachord.shared.recommendations.pageSources
 import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.ReleaseDates
 import com.parachord.shared.recommendations.SimilarUser
@@ -106,6 +109,7 @@ class RecommendationsRepositoryTest {
         clock: Clock = Clock(),
         similarUsers: suspend (Boolean) -> Map<String, List<SimilarUser>> = { emptyMap() },
         canAskSimilarUsers: Boolean = true,
+        friendExclusions: suspend () -> FriendExclusions = { FriendExclusions() },
     ): Rig {
         val prefs = listOfNotNull(
             lastFm?.let { SettingsStore.LASTFM_USERNAME to it },
@@ -122,6 +126,7 @@ class RecommendationsRepositoryTest {
             cacheWrite = { disk.saved = it; disk.writes += it },
             similarUsers = similarUsers,
             canAskSimilarUsers = { canAskSimilarUsers },
+            friendExclusions = friendExclusions,
             nowMs = { clock.now },
             scope = backgroundScope,
         )
@@ -822,5 +827,55 @@ class RecommendationsRepositoryTest {
         const val DAY = 24 * HOUR
         val LASTFM = RecommendationProvider("lastfm", "Last.fm", isMetaService = true, needsAccount = false, canExpand = true)
         val LISTENBRAINZ = RecommendationProvider("listenbrainz", "ListenBrainz", isMetaService = true, needsAccount = false, canExpand = true)
+    }
+
+    @Test
+    fun `a provider switched off for recommendations takes its Listeners people and its chip with it`() = runTest {
+        // Desktop parachord#1650: ListenBrainz's only contribution was its similar listeners.
+        val cache = """{"providers":{""" +
+            """"lastfm":{"users":[{"username":"lfm-ann"}],"fetchedAt":1000000000,"account":"me","shape":${SimilarUsersStore.SHAPE}},""" +
+            """"listenbrainz":{"users":[{"username":"lb-bob"}],"fetchedAt":1000000000,"account":"me","shape":${SimilarUsersStore.SHAPE}}}}"""
+        var fetches = 0
+        lateinit var settings: SettingsStore
+        val people = SimilarUsersStore(
+            source = object : SimilarUsersSource {
+                override suspend fun providers() = listOf(
+                    SimilarUsersProvider("lastfm", "Last.fm", isMetaService = true),
+                    SimilarUsersProvider("listenbrainz", "ListenBrainz", isMetaService = true),
+                )
+                override suspend fun fetch(providerId: String, configJson: String): String { fetches++; return "[]" }
+            },
+            friends = { FriendExclusions() },
+            configFor = { """{"username":"me"}""" },
+            providerIsOn = { true },
+            recommendationsOff = { settings.getRecommendationsOffResolvers() },
+            load = { cache },
+            save = {},
+            nowMs = { 1_000_000_000L },
+            scope = backgroundScope,
+        )
+        val r = rig(
+            similarUsers = { force -> people.usersFor(force) },
+            friendExclusions = { people.exclusions() },
+        )
+        settings = r.settings
+        fun listeners() = r.repo.page.value.sections.row(LISTENERS_ROW_KEY)?.listeners.orEmpty().map { it.name }
+        fun chips() = pageSources(r.repo.page.value.sections).map { it.id }.toSet()
+
+        r.repo.load()
+        runCurrent()
+        assertEquals(setOf("lfm-ann", "lb-bob"), listeners().toSet())
+        assertTrue("listenbrainz" in chips())
+
+        r.settings.setRecommendationsOffResolvers(setOf("listenbrainz"))
+        runCurrent()
+        assertEquals(listOf("lfm-ann"), listeners())
+        assertFalse("listenbrainz" in chips())
+
+        r.settings.setRecommendationsOffResolvers(emptySet())
+        runCurrent()
+        assertEquals(setOf("lfm-ann", "lb-bob"), listeners().toSet())
+        assertTrue("listenbrainz" in chips())
+        assertEquals(0, fetches)
     }
 }

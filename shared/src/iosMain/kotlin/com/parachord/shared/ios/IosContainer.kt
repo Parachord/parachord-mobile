@@ -2250,6 +2250,7 @@ class IosContainer private constructor() {
                 com.parachord.shared.repository.similarUsersConfig(id, pluginManager.resolverConfigProvider?.invoke())
             },
             providerIsOn = { p -> iosPluginIsOn(p.id, p.isMetaService, p.needsAccount) },
+            recommendationsOff = { settingsStore.getRecommendationsOffResolvers() },
             load = { IosFileCache.read("similar_users_cache.json") },
             save = { IosFileCache.write("similar_users_cache.json", it) },
         )
