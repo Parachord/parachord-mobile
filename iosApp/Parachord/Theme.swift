@@ -605,53 +605,102 @@ extension View {
     }
 }
 
-// MARK: - Error and empty states (Android's ErrorState / EmptyState)
+// MARK: - Error and empty states (desktop `states.js`, shared `StateSpec`)
 
-/// A load that failed with nothing to show: the message in the error color and
-/// an outlined retry button, as Android's `ErrorState` (Recommendations,
-/// Fresh Drops, Critical Darlings, History, a friend's profile). The message
-/// is the repository's own, so both apps say the same thing.
-struct PCErrorState: View {
-    let message: String
-    var retryLabel: String = UiMessages.shared.TRY_AGAIN
-    var onRetry: (() -> Void)? = nil
+/// An action under a state: the first is filled, the rest outlined.
+struct PCStateAction {
+    let label: String
+    let action: () -> Void
+}
+
+/// The block both states draw: an icon in a soft circle, the title, the body
+/// and the actions (Android's `StateBlock`).
+private struct PCStateBlock: View {
+    let icon: AppIcon?
+    let iconTint: Color
+    let title: String
+    let detail: String?
+    let actions: [PCStateAction]
+    let compact: Bool
+
+    private var spec: StateSpec { StateSpec.shared }
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text(message)
-                .font(.system(size: 14)).foregroundStyle(PC.error)
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
-            if let onRetry {
-                Button(action: onRetry) {
-                    Text(retryLabel).font(.system(size: 14, weight: .medium)).foregroundStyle(PC.accent)
-                        .padding(.horizontal, 20).frame(height: 38)
-                        .overlay(Capsule().strokeBorder(PC.border))
+        VStack(spacing: CGFloat(spec.GAP)) {
+            if let icon {
+                let side = CGFloat(compact ? spec.CIRCLE_COMPACT : spec.CIRCLE)
+                PCIcon(icon: icon, size: CGFloat(compact ? spec.ICON_COMPACT : spec.ICON), tint: iconTint)
+                    .frame(width: side, height: side)
+                    .background(Circle().fill(PC.bgInset))
+                    .accessibilityHidden(true)
+            }
+            Text(title)
+                .font(.system(size: CGFloat(compact ? spec.TITLE_SIZE_COMPACT : spec.TITLE_SIZE), weight: .semibold))
+                .foregroundStyle(PC.fg1)
+                .multilineTextAlignment(.center)
+            if let detail {
+                Text(detail)
+                    .font(.system(size: CGFloat(spec.BODY_SIZE)))
+                    .lineSpacing(CGFloat(spec.BODY_SIZE) * CGFloat(spec.BODY_LINE_HEIGHT - 1))
+                    .foregroundStyle(PC.fg2)
+                    .multilineTextAlignment(.center)
+                    .frame(maxWidth: CGFloat(spec.BODY_MAX_WIDTH))
+            }
+            if !actions.isEmpty {
+                HStack(spacing: CGFloat(spec.ACTIONS_GAP)) {
+                    ForEach(actions.indices, id: \.self) { i in
+                        let a = actions[i]
+                        Button(action: a.action) {
+                            Text(a.label).font(.system(size: 14, weight: .semibold))
+                                .foregroundStyle(i == 0 ? PC.onAccent : PC.fg1)
+                                .padding(.horizontal, 16).frame(height: 36)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(i == 0 ? PC.fillAccent : Color.clear))
+                                .overlay(RoundedRectangle(cornerRadius: 8).strokeBorder(i == 0 ? Color.clear : PC.border))
+                        }
+                        .buttonStyle(.plain)
+                    }
                 }
-                .buttonStyle(.plain)
+                .padding(.top, CGFloat(spec.ACTIONS_TOP))
             }
         }
-        .frame(maxWidth: .infinity).padding(.vertical, 60)
+        .padding(.vertical, CGFloat(compact ? spec.COMPACT_PADDING_V : spec.PAGE_PADDING_V))
+        .padding(.horizontal, CGFloat(compact ? spec.COMPACT_PADDING_H : spec.PAGE_PADDING_H))
+        .frame(maxWidth: .infinity)
     }
 }
 
-/// Android's `EmptyState`: a list that loaded with nothing in it.
+/// A load that failed (desktop's `ErrorState`): the warning icon, `message`
+/// as the title (the repository's own words, so both apps say the same
+/// thing; "Something went wrong" when there are none), an optional `hint`,
+/// and "Try again" filled unless other actions come first.
+struct PCErrorState: View {
+    var message: String = StateSpec.shared.ERROR_TITLE
+    var hint: String? = nil
+    var retryLabel: String = UiMessages.shared.TRY_AGAIN
+    var compact: Bool = false
+    var actions: [PCStateAction] = []
+    var onRetry: (() -> Void)? = nil
+
+    var body: some View {
+        PCStateBlock(icon: .alerttriangle, iconTint: PC.textDanger, title: message, detail: hint,
+                     actions: actions + (onRetry.map { [PCStateAction(label: retryLabel, action: $0)] } ?? []),
+                     compact: compact)
+            .accessibilityElement(children: .contain)
+    }
+}
+
+/// Nothing to show yet (desktop's `EmptyState`): an icon (Music unless the
+/// page names one; nil hides it), `message` as the title, an optional `hint`
+/// saying why or what to do, and optional actions.
 struct PCEmptyState: View {
     let message: String
     var hint: String? = nil
-    var icon: String? = nil
+    var icon: AppIcon? = .music
+    var compact: Bool = false
+    var actions: [PCStateAction] = []
 
     var body: some View {
-        VStack(spacing: 8) {
-            if let icon { Image(systemName: icon).font(.system(size: 38)).foregroundStyle(PC.fg3) }
-            Text(message)
-                .font(.system(size: 14)).foregroundStyle(PC.fg2)
-                .multilineTextAlignment(.center).padding(.horizontal, 32)
-            if let hint {
-                Text(hint).font(.system(size: 13)).foregroundStyle(PC.fg3)
-                    .multilineTextAlignment(.center).padding(.horizontal, 32)
-            }
-        }
-        .frame(maxWidth: .infinity).padding(.vertical, 60)
+        PCStateBlock(icon: icon, iconTint: PC.fg3, title: message, detail: hint, actions: actions, compact: compact)
     }
 }
 

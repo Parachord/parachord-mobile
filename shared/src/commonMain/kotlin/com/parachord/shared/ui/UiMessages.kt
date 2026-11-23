@@ -10,7 +10,7 @@ import com.parachord.shared.playback.resolverDisplayName
  */
 object UiMessages {
     /** The error state's button on most screens. */
-    const val TRY_AGAIN = "Try Again"
+    const val TRY_AGAIN = "Try again"
 
     /** The accessibility label of a screen's back button. */
     const val BACK = "Back"

@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.ErrorState
+import com.parachord.shared.ui.icons.AppIcon
 import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
 import com.parachord.android.ui.screens.artist.releaseTypeBadgeColor
@@ -168,47 +171,22 @@ fun FreshDropsScreen(
             }
 
             is Resource.Error -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = resource.message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 32.dp),
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedButton(onClick = viewModel::refresh) {
-                            Text(UiMessages.TRY_AGAIN)
-                        }
-                    }
-                }
+                ErrorState(title = resource.message, onRetry = viewModel::refresh)
             }
 
             is Resource.Success -> {
                 val displayReleases = viewModel.filterReleases(resource.data)
                 if (displayReleases.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (searchQuery.isNotBlank()) {
+                    EmptyState(
+                        title = if (searchQuery.isNotBlank()) {
                                 UiMessages.noResultsFor(searchQuery)
                             } else if (filterType != "all") {
                                 UiMessages.freshDropsFilterEmpty(filterType)
                             } else {
                                 UiMessages.FRESH_DROPS_EMPTY
                             },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 32.dp),
-                        )
-                    }
+                        icon = if (searchQuery.isNotBlank()) AppIcon.Search else AppIcon.Music,
+                    )
                 } else {
                     ReleaseList(
                         releases = displayReleases,

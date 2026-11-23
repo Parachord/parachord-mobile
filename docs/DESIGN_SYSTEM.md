@@ -240,8 +240,9 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 
 ### States
 - **Loading:** a skeleton with the same box as the content (grid, card size, row count), so nothing moves when it lands. A layout change updates its skeleton in the same change.
-- **Empty:** icon (optional), message, hint, and an action when there is one to take.
-- **Error:** "Couldn't X. Why. What to do." in text-primary, with a fill-accent "Try again" button. One shared component per platform (Android `ErrorState`, iOS `PCErrorState`).
+- **Empty and error** (desktop `states.js`, shared `StateSpec`; one of each per platform: Android `EmptyState` / `ErrorState` in `ui/components/States.kt`, iOS `PCEmptyState` / `PCErrorState`): an icon in a 56 soft circle (bg-inset; 44 when compact), a title (16 / 600, text-primary), a body line (14, text-secondary, line 1.5, at most 512 wide) and actions, the first filled with the fill accent and the rest outlined. Padding 48 / 24 on a page, 24 / 16 compact (a section).
+- **Empty:** the Music icon in text-tertiary unless the page names one (Search for a search with no matches, Ticket for concerts, User / Users for people), the title saying what's missing, the body what to do, an action when there is one ("Sync now").
+- **Error:** AlertTriangle in the danger colour, the title saying what failed (the repository's own words, else "Something went wrong"), the body the reason, and "Try again" (`UiMessages.TRY_AGAIN`). It's announced as it appears.
 
 ### Banners
 Announcement severities: error red, warn amber, success green, info purple; success and warn are dark enough for white text at 4.5:1. Announcements show on Home only, one at a time.

@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.ErrorState
+import com.parachord.shared.ui.icons.AppIcon
 import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
 import android.Manifest
@@ -265,52 +268,15 @@ fun ConcertsScreen(
                         }
                     }
                     is Resource.Error -> {
-                        Box(
-                            modifier = Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(
-                                    Icons.Filled.ConfirmationNumber,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(48.dp),
-                                    tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                )
-                                Spacer(modifier = Modifier.height(12.dp))
-                                Text(
-                                    text = state.message,
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                        }
+                        ErrorState(title = state.message, onRetry = viewModel::refresh)
                     }
                     is Resource.Success -> {
                         if (state.data.isEmpty()) {
-                            Box(
-                                modifier = Modifier.fillMaxSize(),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                                    Icon(
-                                        Icons.Filled.ConfirmationNumber,
-                                        contentDescription = null,
-                                        modifier = Modifier.size(48.dp),
-                                        tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-                                    )
-                                    Spacer(modifier = Modifier.height(12.dp))
-                                    Text(
-                                        text = UiMessages.CONCERTS_EMPTY,
-                                        style = MaterialTheme.typography.bodyMedium,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    )
-                                    Text(
-                                        text = UiMessages.CONCERTS_EMPTY_HINT,
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
-                                    )
-                                }
-                            }
+                            EmptyState(
+                                title = UiMessages.CONCERTS_EMPTY,
+                                body = UiMessages.CONCERTS_EMPTY_HINT,
+                                icon = AppIcon.Ticket,
+                            )
                         } else {
                             ConcertEventList(
                                 events = state.data,

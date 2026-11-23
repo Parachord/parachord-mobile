@@ -704,6 +704,12 @@ final class ConcertsModel {
         }
     }
 
+    /// Try again after a failed load: a fresh fetch, past the revalidation interval.
+    func retry() {
+        error = nil
+        subscribe(locationChanged: true)
+    }
+
     /// Re-arm the concerts flow for a freshly-committed location/radius.
     private func reloadEvents() {
         loaded = false
@@ -842,16 +848,16 @@ struct ConcertsScreen: View {
                 if model.isLoading && !model.loaded {
                     PCSkeletonList(count: 6, art: 56)
                 } else if model.events.isEmpty, let error = model.error {
-                    // Android's Concerts error state: the ticket and the
-                    // repository's message (no retry there either).
-                    PCEmptyState(message: error, icon: "ticket")
+                    // A failed load: the repository's message and Try again
+                    // (desktop's "Couldn't load concerts" ErrorState).
+                    PCErrorState(message: error) { model.retry() }
                 } else if model.events.isEmpty {
                     // iOS ships no Ticketmaster / SeatGeek keys (Android's
                     // build has them), so the hint names the keys instead of
                     // Android's "Add artists to your collection…".
                     PCEmptyState(message: UiMessages.shared.CONCERTS_EMPTY,
                                  hint: "Add Ticketmaster / SeatGeek keys in Settings to see shows.",
-                                 icon: "ticket")
+                                 icon: .ticket)
                 } else {
                         LazyVStack(alignment: .leading, spacing: 0) {
                             ForEach(grouped, id: \.month) { group in

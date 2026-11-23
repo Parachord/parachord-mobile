@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.ErrorState
+import com.parachord.shared.ui.icons.AppIcon
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.PageHero
 import com.parachord.shared.ui.UiMessages
@@ -172,44 +175,20 @@ fun CriticalDarlingsScreen(
             }
 
             is Resource.Error -> {
-                Box(
-                    modifier = Modifier.fillMaxSize(),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(
-                            text = resource.message,
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.error,
-                            textAlign = TextAlign.Center,
-                            modifier = Modifier.padding(horizontal = 32.dp),
-                        )
-                        Spacer(modifier = Modifier.height(12.dp))
-                        OutlinedButton(onClick = viewModel::refresh) {
-                            Text(UiMessages.TRY_AGAIN)
-                        }
-                    }
-                }
+                ErrorState(title = resource.message, onRetry = viewModel::refresh)
             }
 
             is Resource.Success -> {
                 val displayAlbums = viewModel.filterAndSort(resource.data)
                 if (displayAlbums.isEmpty()) {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            text = if (searchQuery.isNotBlank()) {
+                    EmptyState(
+                        title = if (searchQuery.isNotBlank()) {
                                 UiMessages.noResultsFor(searchQuery)
                             } else {
                                 UiMessages.CRITICS_PICKS_EMPTY
                             },
-                            style = MaterialTheme.typography.bodyMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            textAlign = TextAlign.Center,
-                        )
-                    }
+                        icon = if (searchQuery.isNotBlank()) AppIcon.Search else AppIcon.Music,
+                    )
                 } else {
                     AlbumList(
                         albums = displayAlbums,

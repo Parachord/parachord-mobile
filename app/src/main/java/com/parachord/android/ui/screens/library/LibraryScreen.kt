@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.library
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.StateAction
+import com.parachord.shared.ui.icons.AppIcon
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
@@ -243,7 +246,7 @@ fun CollectionScreen(
                             onClearSearch = { viewModel.setSearchQuery("") },
                         )
                         if (sortedArtists.isEmpty()) {
-                            EmptyState("No artists yet", Icons.Default.Person, onSyncClick = { showSyncProviderPicker = true })
+                            EmptyState("No artists yet", icon = AppIcon.User, actions = listOf(StateAction("Sync now") { showSyncProviderPicker = true }))
                         } else {
                             LazyVerticalGrid(
                                 state = artistGridState,
@@ -320,7 +323,7 @@ fun CollectionScreen(
                             onClearSearch = { viewModel.setSearchQuery("") },
                         )
                         if (sortedAlbums.isEmpty()) {
-                            EmptyState("No albums yet", Icons.Default.MusicNote, onSyncClick = { showSyncProviderPicker = true })
+                            EmptyState("No albums yet", icon = AppIcon.Music, actions = listOf(StateAction("Sync now") { showSyncProviderPicker = true }))
                         } else {
                             LazyVerticalGrid(
                                 state = albumGridState,
@@ -407,7 +410,7 @@ fun CollectionScreen(
                             onClearSearch = { viewModel.setSearchQuery("") },
                         )
                         if (sortedTracks.isEmpty()) {
-                            EmptyState("No songs yet", Icons.Default.MusicNote, onSyncClick = { showSyncProviderPicker = true })
+                            EmptyState("No songs yet", icon = AppIcon.Music, actions = listOf(StateAction("Sync now") { showSyncProviderPicker = true }))
                         } else {
                             LazyColumn(state = trackListState, modifier = Modifier.fillMaxSize()) {
                                 items(sortedTracks, key = { it.id }) { track ->
@@ -539,7 +542,7 @@ private fun FriendsTab(
         }
 
         if (sortedFriends.isEmpty()) {
-            EmptyState("No friends yet", Icons.Default.People)
+            EmptyState("No friends yet", icon = AppIcon.Users)
         } else {
             // Desktop's Friends tab: a grid of listener cards (`collection-page.js`).
             LazyVerticalGrid(
@@ -781,46 +784,6 @@ private fun FriendHexFallback(name: String) {
     }
 }
 
-@Composable
-private fun EmptyState(
-    message: String,
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    onSyncClick: (() -> Unit)? = null,
-) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(32.dp),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Icon(
-                imageVector = icon,
-                contentDescription = null,
-                modifier = Modifier.size(48.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f),
-            )
-            Spacer(modifier = Modifier.size(12.dp))
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (onSyncClick != null) {
-                Spacer(modifier = Modifier.height(16.dp))
-                TextButton(onClick = onSyncClick) {
-                    Icon(
-                        imageVector = Icons.Default.Sync,
-                        contentDescription = null,
-                        modifier = Modifier.size(18.dp),
-                    )
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text("Sync now")
-                }
-            }
-        }
-    }
-}
 
 /**
  * Small bottom sheet asking which provider's sync wizard to open.
