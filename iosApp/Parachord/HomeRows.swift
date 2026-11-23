@@ -10,8 +10,8 @@ import Shared
 // 140 on a phone (the row scrolls), wider on an iPad so six cards fill the row.
 
 private let rowGap: CGFloat = 16
-private let badgeDisc: CGFloat = 28
-private let badgeLogo: CGFloat = 20
+private let badgeDisc = CGFloat(CardSpec.shared.REASON_DISC)
+private let badgeLogo = CGFloat(CardSpec.shared.REASON_LOGO)
 
 /// A Home row card's width at `layoutWidth`: `HOME_ROW_CARDS` across the row (shared `LayoutRules`).
 func homeRowCardWidth(_ layoutWidth: CGFloat) -> CGFloat {
@@ -281,7 +281,7 @@ struct HomeReasonBadge: View {
     var body: some View {
         Button { shown = true } label: {
             HomeReasonMark()
-                .frame(width: 48, height: 48)
+                .frame(width: CGFloat(CardSpec.shared.REASON_TOUCH), height: CGFloat(CardSpec.shared.REASON_TOUCH))
             .contentShape(Circle())
         }
         .buttonStyle(.plain)

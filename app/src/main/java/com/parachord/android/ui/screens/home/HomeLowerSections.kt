@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.components.ReasonBadge
+import com.parachord.android.ui.components.ReasonMark
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
