@@ -4502,14 +4502,6 @@ class IosContainer private constructor() {
         playlistDao.update(p.copy(name = name, lastModified = com.parachord.shared.platform.currentTimeMillis(), locallyModified = true))
     }
 
-    /** localPlaylistId -> the providers each playlist EFFECTIVELY syncs with
-     *  (override-aware), for the playlists-list source chips. */
-    @Throws(Throwable::class)
-    suspend fun getAllPlaylistMirrors(): List<IosPlaylistMirrors> =
-        libraryRepository.getAllEffectivePlaylistChannels().map { (id, providers) ->
-            IosPlaylistMirrors(localPlaylistId = id, providerIds = providers)
-        }
-
     /** The providers a playlist mirrors to (source + push links), for the
      *  per-mirror delete dialog. */
     @Throws(Throwable::class)
@@ -4586,13 +4578,17 @@ class IosContainer private constructor() {
     private fun com.parachord.shared.share.ShareLinkResolver.ShareResult.toIos(): IosShareResult =
         IosShareResult(url = url, subject = subject, isSmartLink = isSmartLink)
 
-    /** A playlist's mirrors as (providerId, externalId) pairs, for the detail
-     *  page's "open on <service>" chips. */
+    /** A playlist page's source line and the services it pushes to (shared `PlaylistOrigin`). */
     @Throws(Throwable::class)
-    suspend fun getPlaylistMirrorLinks(id: String): List<IosPlaylistMirrorLink> =
-        libraryRepository.getPlaylistMirrors(id).map { (provider, externalId) ->
-            IosPlaylistMirrorLink(providerId = provider, externalId = externalId)
-        }
+    suspend fun getPlaylistOrigin(id: String): IosPlaylistOrigin {
+        val pull = libraryRepository.getPlaylistPullProvider(id)
+        val label = com.parachord.shared.playlist.PlaylistOrigin.label(id, playlistDao.getById(id)?.sourceUrl, pull)
+        val push = com.parachord.shared.playlist.PlaylistOrigin.pushMirrors(libraryRepository.getPlaylistMirrors(id), pull)
+        return IosPlaylistOrigin(
+            sourceLine = label?.let { com.parachord.shared.playlist.PlaylistOrigin.sourceLine(it) },
+            pushMirrors = push.map { (provider, externalId) -> IosPlaylistMirrorLink(provider, externalId) },
+        )
+    }
 
     // ── Per-playlist Sync menu ────────────────────────────────────────────────
     //
@@ -5119,17 +5115,17 @@ data class IosSyncPlaylist(
     val trackCount: Int,
 )
 
-/** A playlist's push-mirror providers, for the playlists-list source chips. */
-data class IosPlaylistMirrors(
-    val localPlaylistId: String,
-    val providerIds: List<String>,
-)
-
 /** A single remote a playlist mirrors to: provider + its external id (used to
  *  build the "open on <service>" link on the detail page). */
 data class IosPlaylistMirrorLink(
     val providerId: String,
     val externalId: String,
+)
+
+/** A playlist page's "Source: X" line (null when it was made in Parachord) and the services it pushes to. */
+data class IosPlaylistOrigin(
+    val sourceLine: String?,
+    val pushMirrors: List<IosPlaylistMirrorLink>,
 )
 
 /** A sync channel row in a playlist's Sync menu. [connected] = the provider is

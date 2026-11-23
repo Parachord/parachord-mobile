@@ -457,7 +457,6 @@ final class PlaylistsListModel {
     private let container = IosContainer.companion.shared
     private var raw: [Playlist] = []
     var sort: PlaylistSort = PlaylistSort.companion.DEFAULT
-    var mirrors: [String: [String]] = [:]   // localPlaylistId -> push-mirror provider ids
     var playlists: [Playlist] { sorted(raw) }
     private var sub: Cancellable?
 
@@ -465,21 +464,12 @@ final class PlaylistsListModel {
         guard sub == nil else { return }
         sub = container.watchSavedPlaylists { [weak self] list in
             self?.raw = list
-            Task { await self?.loadMirrors() }   // refresh chips when the list changes (post-sync)
         }
         Task {
             if let s = try? await container.getPlaylistsSort() {
                 sort = PlaylistSort.companion.fromName(name: s)
             }
-            await loadMirrors()
         }
-    }
-
-    func loadMirrors() async {
-        let list = (try? await container.getAllPlaylistMirrors()) as? [IosPlaylistMirrors] ?? []
-        var dict: [String: [String]] = [:]
-        for m in list { dict[m.localPlaylistId] = m.providerIds }
-        mirrors = dict
     }
 
     func setSort(_ s: PlaylistSort) {
@@ -600,7 +590,6 @@ struct PlaylistsScreen: View {
                 if let p = syncTarget {
                     PlaylistSyncChannelsSheet(playlist: p) {
                         syncTarget = nil
-                        Task { await model.loadMirrors() }   // refresh chips after channel edits
                     }
                     .presentationDetents([.medium])
                 }
@@ -624,7 +613,7 @@ struct PlaylistsScreen: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(subtitle(p)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
-                if hasChips(p) { chips(p) }
+                if p.sourceUrl != nil { hostedChip }
             }
             Spacer(minLength: 8)
             Image(systemName: "chevron.right").font(.system(size: 12)).foregroundStyle(PC.fg3)
@@ -632,41 +621,14 @@ struct PlaylistsScreen: View {
         .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
     }
 
-    // Source chips — help spot cross-provider duplicates (a playlist that exists
-    // as both a `spotify-` and an `applemusic-` row). Mirrors Android's
-    // PlaylistsScreen chips + the hosted-XSPF badge.
-    // The providers a playlist EFFECTIVELY syncs with (override-aware, from the
-    // shared effective-channels map) — reflects the live Sync-menu state, NOT the
-    // row's id-prefix, so a fully-deselected playlist shows no provider chips.
-    private func mergedProviders(_ p: Playlist) -> Set<String> {
-        Set(model.mirrors[p.id] ?? [])
-    }
-    private func hasChips(_ p: Playlist) -> Bool { true }
-
-    @ViewBuilder private func chips(_ p: Playlist) -> some View {
-        let providers = mergedProviders(p)
-        HStack(spacing: 5) {
-            if p.sourceUrl != nil {
-                Text("🌐 Hosted").font(.system(size: 10, weight: .medium))
-                    .foregroundStyle(Color(uiColor: UIColor(hex: 0x3B82F6)))
-                    .padding(.horizontal, 6).padding(.vertical, 1)
-                    .background(RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: UIColor(hex: 0xEFF6FF))))
-            }
-            if providers.contains("spotify") { sourceChip("Spotify", 0x1DB954) }
-            if providers.contains("applemusic") { sourceChip("Apple Music", 0xFA243C) }
-            if providers.contains("listenbrainz") { sourceChip("ListenBrainz", 0xEB743B) }
-            // Fallback: a user-created playlist with no source and no mirrors.
-            if providers.isEmpty && p.sourceUrl == nil { sourceChip("Local", 0x9CA3AF) }
-        }
-        .padding(.top, 1)
-    }
-
-    private func sourceChip(_ text: String, _ hex: UInt32) -> some View {
-        let c = Color(uiColor: UIColor(hex: hex))
-        return Text(text).font(.system(size: 10, weight: .medium))
-            .foregroundStyle(c)
+    // The hosted-XSPF chip. Desktop's Playlists page shows no service badges;
+    // where a playlist syncs is on its own page.
+    private var hostedChip: some View {
+        Text("🌐 Hosted").font(.system(size: 10, weight: .medium))
+            .foregroundStyle(Color(uiColor: UIColor(hex: 0x3B82F6)))
             .padding(.horizontal, 6).padding(.vertical, 1)
-            .background(RoundedRectangle(cornerRadius: 4).fill(c.opacity(0.12)))
+            .background(RoundedRectangle(cornerRadius: 4).fill(Color(uiColor: UIColor(hex: 0xEFF6FF))))
+            .padding(.top, 1)
     }
 
     private func subtitle(_ p: Playlist) -> String {
@@ -929,7 +891,9 @@ final class SavedPlaylistModel {
     private var pSub: Cancellable?
     private var tSub: Cancellable?
 
+    /// The services it pushes to (not the one it's pulled from), and its "Source: X" line.
     var mirrors: [IosPlaylistMirrorLink] = []
+    var sourceLine: String?
     /// Later copies of a song the playlist holds, when the duplicates banner
     /// shows (shared `PlaylistDuplicates`); 0 hides it.
     var duplicateCount = 0
@@ -959,7 +923,11 @@ final class SavedPlaylistModel {
     /// Refresh the source/mirror chips — called on start and after the Sync
     /// channels sheet edits which providers this playlist mirrors to.
     func loadMirrors() {
-        Task { mirrors = (try? await container.getPlaylistMirrorLinks(id: playlistId)) as? [IosPlaylistMirrorLink] ?? [] }
+        Task {
+            let origin = try? await container.getPlaylistOrigin(id: playlistId)
+            mirrors = origin?.pushMirrors ?? []
+            sourceLine = origin?.sourceLine
+        }
     }
 
     func rename(_ newName: String) {
@@ -1093,14 +1061,23 @@ struct SavedPlaylistDetailView: View {
                 .multilineTextAlignment(.center)
             Text("\(model.tracks.count) \(model.tracks.count == 1 ? "track" : "tracks")")
                 .font(.system(size: 13)).foregroundStyle(PC.fg2)
-            // Source/mirror chips — each opens the playlist on that service.
+            if let line = model.sourceLine {
+                Text(line).font(.system(size: 13)).foregroundStyle(PC.fg2)
+            }
+            // A badge per service it pushes to; each opens the playlist there.
             if !model.mirrors.isEmpty {
+                let urls = Dictionary(model.mirrors.map { ($0.providerId, $0.externalId) }, uniquingKeysWith: { a, _ in a })
                 HStack(spacing: 6) {
-                    ForEach(model.mirrors, id: \.providerId) { link in
-                        if let url = mirrorURL(link) {
-                            Link(destination: url) { mirrorChip(link.providerId) }
+                    ForEach(PlaylistSyncBadges.shared.of(providerIds: Array(urls.keys), localOnly: model.playlist?.localOnly ?? false), id: \.providerId) { badge in
+                        let pcBadge = PCBadge(text: badge.label,
+                                              color: badge.colored ? ResolverColor.solid(badge.providerId) : nil,
+                                              description: badge.note)
+                        if let id = urls[badge.providerId],
+                           let page = PlaylistSyncBadges.shared.pageUrl(providerId: badge.providerId, externalId: id),
+                           let url = URL(string: page) {
+                            Link(destination: url) { pcBadge }
                         } else {
-                            mirrorChip(link.providerId)
+                            pcBadge
                         }
                     }
                 }
@@ -1127,34 +1104,6 @@ struct SavedPlaylistDetailView: View {
         .frame(maxWidth: .infinity).padding(.horizontal, 20).padding(.top, 12).padding(.bottom, 16)
     }
 
-    /// Web URL for a playlist on a given service, or nil if not linkable.
-    private func mirrorURL(_ link: IosPlaylistMirrorLink) -> URL? {
-        switch link.providerId {
-        case "spotify": return URL(string: "https://open.spotify.com/playlist/\(link.externalId)")
-        case "listenbrainz": return URL(string: "https://listenbrainz.org/playlist/\(link.externalId)/")
-        case "applemusic": return URL(string: "https://music.apple.com/library/playlist/\(link.externalId)")
-        default: return nil
-        }
-    }
-
-    @ViewBuilder private func mirrorChip(_ providerId: String) -> some View {
-        let (label, hex): (String, UInt32) = {
-            switch providerId {
-            case "spotify": return ("Spotify", 0x1DB954)
-            case "applemusic": return ("Apple Music", 0xFA243C)
-            case "listenbrainz": return ("ListenBrainz", 0xEB743B)
-            default: return (providerId.capitalized, 0x9CA3AF)
-            }
-        }()
-        let c = Color(uiColor: UIColor(hex: hex))
-        HStack(spacing: 3) {
-            Text(label).font(.system(size: 11, weight: .semibold))
-            Image(systemName: "arrow.up.right").font(.system(size: 8, weight: .bold))
-        }
-        .foregroundStyle(c)
-        .padding(.horizontal, 8).padding(.vertical, 3)
-        .background(Capsule().fill(c.opacity(0.12)))
-    }
 
     // View mode: tap-to-play rows with badges + context menus (app-wide style).
     private var viewList: some View {

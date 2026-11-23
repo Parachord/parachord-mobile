@@ -223,6 +223,13 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 - Long-press opens the item's context menu (`AlbumContextMenu`, `ArtistContextMenu`, `TrackContextMenu`), and the menu is the same on every screen.
 - A playlist card: 2×2 mosaic; subtitle per the Home rules below.
 
+### Badge (desktop `badge.js`; shared `BadgeSpec`)
+
+- One status pill per platform: Android `ParachordBadge`, iOS `PCBadge`. 12 / 600, line 16, padding 2 / 8, full radius, never wraps, an optional 12 icon.
+- Tones (`BadgeTone`): neutral (bg-secondary, text-secondary), info (text-info on itself at 12%), accent (accent-surface, the accent), surface (the card's colour and shadow, primary text: over a cover).
+- A service's badge takes its colour instead (`serviceColor` / `ResolverColor.solid`): the pill tinted with it at 16%, an 8 dot of it before the label, primary text. Never a hex in a screen.
+- A playlist's page: "Source: X" under the title for where it came from (shared `PlaylistOrigin`: the service it's pulled or imported from, "A playlist link" for hosted, "An imported file"; none for one made in Parachord), then one badge per service it pushes to, never its source (`PlaylistSyncBadges`: Spotify, Apple Music, ListenBrainz, then others; each opens the playlist there), uncoloured while it's kept local only. Desktop shows no badges on a pulled playlist; mobile shows its push mirrors. The Playlists list shows no service badges, as desktop's. The sync picker's rows badge where a playlist came from (a service in its colour, Hosted in info, Local neutral).
+
 ### Buttons
 - Primary: fill-accent, white text, radius 8 (or full for a pill).
 - Secondary: outline border-default, text-primary.

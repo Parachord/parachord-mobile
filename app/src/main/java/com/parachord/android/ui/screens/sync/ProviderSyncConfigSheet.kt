@@ -1,5 +1,8 @@
 package com.parachord.android.ui.screens.sync
 
+import com.parachord.android.ui.components.ParachordBadge
+import com.parachord.android.ui.theme.serviceColor
+import com.parachord.shared.ui.BadgeTone
 import com.parachord.android.ui.theme.FillAccent
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.background
@@ -368,6 +371,7 @@ private fun UnifiedChannelPicker(
                 trackCount = pl.trackCount,
                 checked = pl.enabled,
                 originLabel = pl.originLabel,
+                originProviderId = pl.originProviderId,
                 notImported = pl.notImported,
                 accent = accent,
                 onToggle = { viewModel.toggleConfigChannel(pl.localId) },
@@ -412,6 +416,7 @@ private fun RemotePlaylistCheckRow(
     trackCount: Int,
     checked: Boolean,
     originLabel: String?,
+    originProviderId: String? = null,
     notImported: Boolean,
     accent: Color,
     onToggle: () -> Unit,
@@ -442,16 +447,10 @@ private fun RemotePlaylistCheckRow(
                 )
                 if (originLabel != null) {
                     Spacer(Modifier.width(6.dp))
-                    // Match the Playlists-tab source chips (PlaylistSourceChip):
-                    // per-provider brand color at 12% alpha.
-                    val chipColor = originChipColor(originLabel)
-                    Text(
-                        originLabel,
-                        style = MaterialTheme.typography.labelSmall,
-                        color = chipColor,
-                        modifier = Modifier
-                            .background(chipColor.copy(alpha = 0.12f), RoundedCornerShape(4.dp))
-                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                    ParachordBadge(
+                        text = originLabel,
+                        tone = if (originLabel == "Hosted") BadgeTone.INFO else BadgeTone.NEUTRAL,
+                        color = originProviderId?.let { serviceColor(it) },
                     )
                 }
             }
@@ -471,15 +470,6 @@ private fun RemotePlaylistCheckRow(
     }
 }
 
-/** Origin-chip brand colors — kept in lockstep with the Playlists tab's
- *  PlaylistSourceChip (SpotifyGreen / AppleMusicRed / LB orange). */
-private fun originChipColor(label: String): Color = when (label) {
-    "Spotify" -> Color(0xFF1DB954)
-    "Apple Music" -> Color(0xFFFA243C)
-    "ListenBrainz" -> Color(0xFFEB743B)
-    "Hosted" -> Color(0xFF3B82F6)
-    else -> Color(0xFF6B7280) // Local / unknown
-}
 
 @Composable
 private fun AxisToggleRow(

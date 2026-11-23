@@ -2,7 +2,6 @@ package com.parachord.android.ui.screens.playlists
 
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.PageHero
-import com.parachord.shared.sync.impliedPlaylistProvider
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticCombinedClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -85,7 +84,6 @@ fun PlaylistsScreen(
     val sortedPlaylists by viewModel.sortedPlaylists.collectAsStateWithLifecycle()
     val currentSort by viewModel.sort.collectAsStateWithLifecycle()
     val searchQuery by viewModel.searchQuery.collectAsStateWithLifecycle()
-    val mirrors by viewModel.mirrors.collectAsStateWithLifecycle()
 
     val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
@@ -289,21 +287,6 @@ fun PlaylistsScreen(
                                         if (playlist.sourceUrl != null) {
                                             HostedBadge()
                                         }
-                                        // Source/mirror chips: own source
-                                        // (id-prefix / spotifyId scalar) UNION
-                                        // the push mirrors from
-                                        // sync_playlist_link. So a local
-                                        // playlist mirrored to Spotify + Apple
-                                        // Music shows both, and a cross-provider
-                                        // duplicate shows two service chips.
-                                        val providerSet = buildSet {
-                                            if (playlist.spotifyId != null) add("spotify")
-                                            impliedPlaylistProvider(playlist.id)?.let { add(it) }
-                                            addAll(mirrors[playlist.id].orEmpty())
-                                        }
-                                        if ("spotify" in providerSet) PlaylistSourceChip("Spotify", SpotifyGreen)
-                                        if ("applemusic" in providerSet) PlaylistSourceChip("Apple Music", AppleMusicRed)
-                                        if ("listenbrainz" in providerSet) PlaylistSourceChip("ListenBrainz", Color(0xFFEB743B))
                                     }
                                 }
                             }
@@ -337,18 +320,4 @@ fun PlaylistsScreen(
     }
 }
 
-private val SpotifyGreen = Color(0xFF1DB954)
-private val AppleMusicRed = Color(0xFFFA243C)
-
-@Composable
-private fun PlaylistSourceChip(text: String, color: Color) {
-    Text(
-        text = text,
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        modifier = Modifier
-            .background(color = color.copy(alpha = 0.12f), shape = RoundedCornerShape(4.dp))
-            .padding(horizontal = 6.dp, vertical = 1.dp),
-    )
-}
 

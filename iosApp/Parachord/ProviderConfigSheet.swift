@@ -113,11 +113,9 @@ struct ProviderSyncConfigSheet: View {
                     HStack(spacing: 6) {
                         Text(row.name).font(.system(size: 14)).foregroundStyle(PC.fg1).lineLimit(1)
                         if let origin = row.originLabel {
-                            Text(origin)
-                                .font(.system(size: 10, weight: .medium))
-                                .foregroundStyle(originChipColor(origin))
-                                .padding(.horizontal, 6).padding(.vertical, 1)
-                                .background(RoundedRectangle(cornerRadius: 4).fill(originChipColor(origin).opacity(0.12)))
+                            PCBadge(text: origin,
+                                    tone: origin == "Hosted" ? .info : .neutral,
+                                    color: row.originProviderId.map { ResolverColor.solid($0) })
                         }
                     }
                     Text(rowSubtitle(row))
@@ -172,17 +170,6 @@ struct ProviderSyncConfigSheet: View {
     }
 }
 
-/// Origin-chip brand colors — in lockstep with Android's `originChipColor`
-/// (Spotify green / Apple Music red / ListenBrainz orange / Hosted blue / gray).
-private func originChipColor(_ label: String) -> Color {
-    switch label {
-    case "Spotify": return Color(uiColor: UIColor(hex: 0x1DB954))
-    case "Apple Music": return Color(uiColor: UIColor(hex: 0xFA243C))
-    case "ListenBrainz": return Color(uiColor: UIColor(hex: 0xEB743B))
-    case "Hosted": return Color(uiColor: UIColor(hex: 0x3B82F6))
-    default: return Color(uiColor: UIColor(hex: 0x6B7280))
-    }
-}
 
 @MainActor @Observable
 private final class ProviderConfigModel {
