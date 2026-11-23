@@ -1,6 +1,6 @@
 # Sign in on the car with a QR code
 
-Status: design, not yet planned. Issue: #457 (Android Automotive). Date: 2026-11-07.
+Status: design, planned in [the implementation plan](../plans/2026-11-07-qr-sign-in.md). Issue: #457 (Android Automotive). Date: 2026-11-07.
 
 ## Why
 
