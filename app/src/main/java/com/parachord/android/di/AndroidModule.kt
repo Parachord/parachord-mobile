@@ -1072,6 +1072,7 @@ val androidModule = module {
                 com.parachord.shared.repository.similarUsersConfig(id, pluginManager.resolverConfigProvider?.invoke())
             },
             providerIsOn = { p -> androidPluginIsOn(settings, p.id, p.isMetaService, p.needsAccount) },
+            recommendationsOff = { settings.getRecommendationsOffResolvers() },
             load = { com.parachord.android.data.cache.CacheFiles.read(cacheFile) },
             save = { com.parachord.android.data.cache.CacheFiles.write(cacheFile, it) },
         )

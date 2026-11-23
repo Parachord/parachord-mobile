@@ -71,7 +71,12 @@ class PluginSimilarUsersSource(private val pluginManager: PluginManager) : Simil
  * Listeners' people, per similar-users service: a port of desktop's
  * `fetchSimilarUsers` (`app.js` ~L27963) and its cache.
  *
- * - **Providers:** [SimilarUsersSource.providers] that [providerIsOn].
+ * - **Providers:** [SimilarUsersSource.providers] that [providerIsOn] and
+ *   that aren't in [recommendationsOff] ("Use recommendations from X" off,
+ *   desktop parachord#1650). An off provider isn't asked, and it leaves
+ *   [friendServices], so the Listeners row drops its people (and the page its
+ *   chip) at the rebuild the switch already triggers; switched back on, its
+ *   people return from the cache.
  * - **Not ready:** a config with no `username`, or with `credentialsPending`
  *   (Last.fm before its key is known), isn't asked: its keyless `[]` must not
  *   replace a good answer. The cached answer for that account still shows.
@@ -93,6 +98,11 @@ class SimilarUsersStore(
     /** A provider's stored plugin config JSON; null when it has none. */
     private val configFor: suspend (String) -> String?,
     private val providerIsOn: suspend (SimilarUsersProvider) -> Boolean,
+    /**
+     * The ids in `recommendations_off_resolvers`. Kept apart from
+     * [providerIsOn], the generic plug-in gate other repositories share.
+     */
+    private val recommendationsOff: suspend () -> Set<String> = { emptySet() },
     private val load: suspend () -> String?,
     private val save: suspend (String) -> Unit,
     private val nowMs: () -> Long = { currentTimeMillis() },
@@ -217,7 +227,8 @@ class SimilarUsersStore(
     }
 
     private suspend fun onProviders(): List<SimilarUsersProvider> = try {
-        source.providers().filter { providerIsOn(it) }
+        val off = recommendationsOff()
+        source.providers().filter { it.id !in off && providerIsOn(it) }
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
