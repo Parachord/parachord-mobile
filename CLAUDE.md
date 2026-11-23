@@ -620,7 +620,7 @@ data class ProviderFeatures(
 
 **Apple Music endpoint degradation (Phase 4).** Apple's public API rejects PATCH/PUT/DELETE on `/me/library/playlists/{id}` with 401. `AppleMusicSyncProvider` carries two independent session kill-switches: `amPutUnsupportedForSession` (track replace) and `amPatchUnsupportedForSession` (rename). On first 401:
 
-- **PUT** flips its kill-switch and degrades to POST-append; subsequent calls go straight to POST without re-probing PUT. Removals stay on the remote — accept this, document it.
+- **PUT** flips its kill-switch and degrades to POST-append; subsequent calls go straight to POST without re-probing PUT. Removals stay on the remote — accept this, document it. **The append adds only what the playlist lacks**, as desktop's degraded path does (`toAdd`): it reads the playlist first and appends the shared `AppendOnlyPush.missingIds` (repeats counted, order kept); a playlist it can't read gets no append and the push fails, so it's retried. Appending the whole list again duplicated every track on every push (#802: 1,182 entries of 341 songs).
 - **PATCH** flips its kill-switch and silently no-ops; future calls short-circuit. **Load-bearing** — runs before the track push in the create-or-link path; a throw here would abort tracks too. Even network errors from PATCH are swallowed (try/catch, log only).
 - **DELETE** returns `DeleteResult.Unsupported(401)`; `LibraryRepository.deletePlaylistWithSync` surfaces a toast (Phase 6.5).
 

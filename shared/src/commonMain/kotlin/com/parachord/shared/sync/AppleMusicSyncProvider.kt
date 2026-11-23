@@ -394,8 +394,29 @@ class AppleMusicSyncProvider(
         }
 
         // POST-append fallback. Removals stay on the remote — accept this.
+        // Append only what the playlist doesn't hold yet (shared
+        // [AppendOnlyPush]): appending the whole list again duplicated every
+        // track on every push (#802). If the playlist can't be read, append
+        // nothing and fail the push, so it's retried rather than guessed.
+        val present = try {
+            fetchPlaylistTracks(externalPlaylistId).mapNotNull { it.trackAppleMusicId }
+        } catch (e: AppleMusicReauthRequiredException) {
+            throw e
+        } catch (e: Exception) {
+            throw IllegalStateException(
+                "Couldn't read Apple Music playlist $externalPlaylistId before appending; not appending",
+                e,
+            )
+        }
+        val missing = AppendOnlyPush.missingIds(present, externalTrackIds)
+        if (missing.isEmpty()) {
+            Log.d(TAG, "Apple Music playlist $externalPlaylistId already holds all ${externalTrackIds.size} track(s); nothing to append")
+            return getPlaylistSnapshotId(externalPlaylistId)
+        }
+        Log.d(TAG, "Appending ${missing.size} of ${externalTrackIds.size} track(s) to Apple Music playlist $externalPlaylistId (${present.size} already there)")
+        val appendBody = AmTracksRequest(missing.map { AmTrackReference(it, "songs") })
         delay(INTER_REQUEST_DELAY_MS)
-        val resp = api.appendPlaylistTracks(externalPlaylistId, body)
+        val resp = api.appendPlaylistTracks(externalPlaylistId, appendBody)
         if (!resp.status.isSuccess()) {
             val errBody = try { resp.bodyAsText().take(500) } catch (e: Exception) { "<body read failed>" }
             Log.w(TAG, "replacePlaylistTracks POST-append($externalPlaylistId) HTTP ${resp.status.value}: $errBody " +
