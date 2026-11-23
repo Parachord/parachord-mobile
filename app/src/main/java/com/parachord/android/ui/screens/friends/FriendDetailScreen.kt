@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.friends
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.ErrorState
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.rememberPlayFromSource
@@ -287,7 +289,7 @@ private fun FriendRecentTab(
                 items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
             }
         }
-        is Resource.Error -> ErrorState(service, onRetry)
+        is Resource.Error -> ErrorState(title = com.parachord.shared.ui.UiMessages.couldntReach(service), onRetry = onRetry)
         is Resource.Success -> {
             if (recentTracks.data.isEmpty()) {
                 EmptyState(hiddenMessage ?: UiMessages.FRIEND_RECENT_EMPTY)
@@ -359,7 +361,7 @@ private fun FriendTopSongsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(service, onRetry)
+            is Resource.Error -> ErrorState(title = com.parachord.shared.ui.UiMessages.couldntReach(service), onRetry = onRetry)
             is Resource.Success -> {
                 if (tracks.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_TRACKS_EMPTY)
@@ -411,7 +413,7 @@ private fun FriendTopAlbumsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(service, onRetry)
+            is Resource.Error -> ErrorState(title = com.parachord.shared.ui.UiMessages.couldntReach(service), onRetry = onRetry)
             is Resource.Success -> {
                 if (albums.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_ALBUMS_EMPTY)
@@ -501,7 +503,7 @@ private fun FriendTopArtistsTab(
                     )
                 }
             }
-            is Resource.Error -> ErrorState(service, onRetry)
+            is Resource.Error -> ErrorState(title = com.parachord.shared.ui.UiMessages.couldntReach(service), onRetry = onRetry)
             is Resource.Success -> {
                 if (artists.data.isEmpty()) {
                     EmptyState(UiMessages.FRIEND_ARTISTS_EMPTY)
@@ -568,44 +570,5 @@ private fun ArtistGridItem(
 
 // ---------- Shared ----------
 
-@Composable
-private fun ErrorState(service: String?, onRetry: (() -> Unit)? = null) {
-    val message = com.parachord.shared.ui.UiMessages.couldntReach(service)
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 32.dp),
-            )
-            if (onRetry != null) {
-                Spacer(modifier = Modifier.height(12.dp))
-                OutlinedButton(onClick = onRetry) {
-                    Text(RecommendationCopy.TRY_AGAIN)
-                }
-            }
-        }
-    }
-}
 
-@Composable
-private fun EmptyState(message: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            textAlign = TextAlign.Center,
-            modifier = Modifier.padding(horizontal = 32.dp),
-        )
-    }
-}
 

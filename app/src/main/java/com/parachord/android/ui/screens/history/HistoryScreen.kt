@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.history
 
+import com.parachord.android.ui.components.EmptyState
+import com.parachord.android.ui.components.ErrorState
 import com.parachord.android.ui.components.PageHero
 import com.parachord.android.ui.components.adaptiveGridCells
 import com.parachord.android.ui.components.ResolveWhileVisible
@@ -218,7 +220,7 @@ private fun TopSongsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(message = tracks.message, onRetry = { onPeriodChanged(selectedPeriod) })
+            is Resource.Error -> ErrorState(title = tracks.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (tracks.data.isEmpty()) {
                     EmptyState(UiMessages.HISTORY_TRACKS_EMPTY)
@@ -269,7 +271,7 @@ private fun TopAlbumsTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(message = albums.message, onRetry = { onPeriodChanged(selectedPeriod) })
+            is Resource.Error -> ErrorState(title = albums.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (albums.data.isEmpty()) {
                     EmptyState(UiMessages.HISTORY_ALBUMS_EMPTY)
@@ -368,7 +370,7 @@ private fun TopArtistsTab(
                     )
                 }
             }
-            is Resource.Error -> ErrorState(message = artists.message, onRetry = { onPeriodChanged(selectedPeriod) })
+            is Resource.Error -> ErrorState(title = artists.message, onRetry = { onPeriodChanged(selectedPeriod) })
             is Resource.Success -> {
                 if (artists.data.isEmpty()) {
                     EmptyState(UiMessages.HISTORY_ARTISTS_EMPTY)
@@ -456,7 +458,7 @@ private fun RecentlyPlayedTab(
                     items(10) { ShimmerTrackRow(modifier = Modifier.padding(horizontal = 16.dp)) }
                 }
             }
-            is Resource.Error -> ErrorState(message = recentTracks.message, onRetry = onRetry)
+            is Resource.Error -> ErrorState(title = recentTracks.message, onRetry = onRetry)
             is Resource.Success -> {
                 if (recentTracks.data.isEmpty() && search.isBlank()) {
                     EmptyState(UiMessages.HISTORY_RECENT_EMPTY)
@@ -524,41 +526,7 @@ private fun RecentTrackRow(
 
 // ---------- Shared States ----------
 
-@Composable
-private fun ErrorState(message: String, onRetry: () -> Unit) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-            Text(
-                text = message,
-                style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.error,
-                textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 32.dp),
-            )
-            Spacer(modifier = Modifier.height(12.dp))
-            OutlinedButton(onClick = onRetry) {
-                Text(UiMessages.TRY_AGAIN)
-            }
-        }
-    }
-}
 
-@Composable
-private fun EmptyState(message: String) {
-    Box(
-        modifier = Modifier.fillMaxSize(),
-        contentAlignment = Alignment.Center,
-    ) {
-        Text(
-            text = message,
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
 
 // ---------- Helpers ----------
 

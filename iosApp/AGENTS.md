@@ -296,18 +296,22 @@ username" for every History failure).
   Android's view models use it too): a failed refresh never replaces a list
   that's on screen; the error shows only when there's nothing to show.
 - **Words come from the shared `UiMessages`** (`shared/.../ui/UiMessages.kt`):
-  empty states, "Try Again" / "Retry", "Album not found", the MusicBrainz
+  empty states, "Try again" / "Retry", "Album not found", the MusicBrainz
   throttle line, the playlist-delete warning, the ListenBrainz invalid-token
   message. Android reads the same constants, so change a message there, once.
   A playback message lives beside its rule (`APPLE_MUSIC_SIGN_IN_MESSAGE`,
   `PLAY_START_FAILED_MESSAGE` in `PlayFailure.kt`).
-- **Views:** `PCErrorState` (the message in the error color + an outlined
-  retry, Android's `ErrorState`) and `PCEmptyState` (Android's `EmptyState`), in
-  `Theme.swift`. Try Again on a curated screen calls `load(force: true)`, which
-  starts over even inside `RevalidatingWatch`'s interval.
+- **Views:** `PCErrorState` and `PCEmptyState` in `Theme.swift`, desktop's
+  `states.js` drawn from the shared `StateSpec` (Android's `ErrorState` /
+  `EmptyState`): an icon in a soft circle, the message as the title, an
+  optional hint as the body, and actions (`PCStateAction`, the first filled).
+  An empty state's icon is an `AppIcon` (Music by default); an error's is the
+  warning in the danger colour, with "Try again". Try again on a curated screen
+  calls `load(force: true)` (Concerts: `retry()`), which starts over even inside
+  `RevalidatingWatch`'s interval.
 
 Where iOS shows these: Fresh Drops, Critical
-Darlings, Concerts (the repository's message, no retry, as Android), History
+Darlings, Concerts (the repository's message with Try again, as Android), History
 and a friend's profile (per tab: `couldntReach(service)` with Try again on every tab, as Android),
 an artist's On Tour tab, Album ("Album not found"), Search (the MusicBrainz
 throttle line instead of "No results"), Home's Pop of the Tops half
