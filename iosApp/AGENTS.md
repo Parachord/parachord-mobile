@@ -40,7 +40,9 @@ For every UI/UX or behavior task, in this order:
    Every artist card draws `PCArtistCard` (a photo, else the shared `ArtistPattern`
    through `PCArtistPatternArt`) and its skeleton `PCArtistCardSkeleton`. A friend's
    avatar is `PCFriendAvatar` and a listener `PCListenerCard` (the shared `FriendAvatarSpec`).
-   A status pill (a playlist's services, Hosted, Local) is `PCBadge` (the shared `BadgeSpec`,
+   **One component per job (#761):** each of these exists once, and the table of
+   names for both apps is `docs/DESIGN_SYSTEM.md` → Components; never build one in a screen.
+   A status pill (a playlist's services, Hosted, Local, Connected with its check) is `PCBadge` (the shared `BadgeSpec`,
    a service's colour from `ResolverColor.solid`); never a coloured `Text` on a rounded rectangle.
    Where it and the handoff below disagree, the design system wins: desktop
    changed after the handoff was drawn (November 2026).

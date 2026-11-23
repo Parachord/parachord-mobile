@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.shared.ui.icons.AppIcon
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -31,7 +32,8 @@ import com.parachord.shared.ui.DesignTokens
  * The status pill (desktop `badge.js`, shared [BadgeSpec]): a [tone]'s
  * colours, or, with [color], the service's colour as a tint and a dot with
  * primary text. [description] is read out in place of the label (desktop's
- * tooltip); [onClick] makes it a link.
+ * tooltip); [icon] goes before the label (not with a service colour,
+ * which has its dot); [onClick] makes it a link.
  */
 @Composable
 fun ParachordBadge(
@@ -40,6 +42,7 @@ fun ParachordBadge(
     tone: BadgeTone = BadgeTone.NEUTRAL,
     color: Color? = null,
     description: String? = null,
+    icon: AppIcon? = null,
     onClick: (() -> Unit)? = null,
 ) {
     val textPrimary = DesignTokens.textPrimary.current()
@@ -62,6 +65,8 @@ fun ParachordBadge(
     ) {
         if (color != null) {
             Box(Modifier.size(BadgeSpec.DOT_SIZE.dp).clip(CircleShape).background(color))
+        } else if (icon != null) {
+            ParachordIcon(icon, contentDescription = null, size = BadgeSpec.ICON_SIZE.dp, tint = ink)
         }
         Text(
             text = text,

@@ -104,10 +104,6 @@ import com.parachord.shared.ui.DesignTokens
 /** Concert accent color — teal, matching the desktop's concert feature. */
 private val ConcertTeal = Color(0xFF10C9B4)
 
-/** Source-specific badge colors matching desktop */
-private val TicketmasterColor = Color(0xFF026CDF)
-private val SeatGeekColor = Color(0xFFFC4C02)
-
 private val RADIUS_OPTIONS = listOf(10, 25, 50, 100, 200)
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -674,7 +670,7 @@ private fun ConcertEventCard(
                     listOf(TicketSource(event.source, event.ticketUrl ?: "", sourceLabel(event.source)))
                 }
                 sources.forEach { src ->
-                    SourceBadge(source = src.source)
+                    SourceBadge(src.source)
                 }
             }
 
@@ -733,25 +729,18 @@ private fun ConcertEventCard(
     }
 }
 
-/**
- * Source badge (TM, SG) with provider-specific colors matching desktop.
- */
+/** A ticket seller's badge (TM, SG): the shared badge in the seller's plug-in colour. */
 @Composable
 private fun SourceBadge(source: String) {
-    val (color, label) = when (source) {
-        "ticketmaster" -> TicketmasterColor to "TM"
-        "seatgeek" -> SeatGeekColor to "SG"
-        else -> MaterialTheme.colorScheme.onSurfaceVariant to source.take(2).uppercase()
+    val label = when (source) {
+        "ticketmaster" -> "TM"
+        "seatgeek" -> "SG"
+        else -> source.take(2).uppercase()
     }
-    Text(
+    com.parachord.android.ui.components.ParachordBadge(
         text = label,
-        fontSize = 9.sp,
-        fontWeight = FontWeight.Bold,
-        color = color,
-        modifier = Modifier
-            .clip(RoundedCornerShape(3.dp))
-            .background(color.copy(alpha = 0.12f))
-            .padding(horizontal = 4.dp, vertical = 1.dp),
+        color = com.parachord.android.ui.theme.serviceColorOrNull(source),
+        description = sourceLabel(source),
     )
 }
 
@@ -801,11 +790,8 @@ private fun TicketButton(
                 onDismissRequest = { expanded = false },
             ) {
                 sources.forEach { src ->
-                    val color = when (src.source) {
-                        "ticketmaster" -> TicketmasterColor
-                        "seatgeek" -> SeatGeekColor
-                        else -> MaterialTheme.colorScheme.onSurface
-                    }
+                    val color = com.parachord.android.ui.theme.serviceColorOrNull(src.source)
+                        ?: MaterialTheme.colorScheme.onSurface
                     DropdownMenuItem(
                         text = {
                             Text(src.label, color = color, fontWeight = FontWeight.Medium)

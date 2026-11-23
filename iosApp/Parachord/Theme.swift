@@ -795,6 +795,8 @@ struct PCBadge: View {
     var tone: BadgeTone = .neutral
     var color: Color? = nil
     var description: String? = nil
+    /// Before the label; not with a service colour, which has its dot.
+    var icon: AppIcon? = nil
 
     private var spec: BadgeSpec { BadgeSpec.shared }
 
@@ -812,6 +814,8 @@ struct PCBadge: View {
         HStack(spacing: CGFloat(spec.GAP)) {
             if let color {
                 Circle().fill(color).frame(width: CGFloat(spec.DOT_SIZE), height: CGFloat(spec.DOT_SIZE))
+            } else if let icon {
+                PCIcon(icon: icon, size: CGFloat(spec.ICON_SIZE), tint: look.ink)
             }
             Text(text)
                 .font(.system(size: CGFloat(spec.TEXT_SIZE), weight: .semibold))
