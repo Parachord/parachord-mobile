@@ -92,7 +92,6 @@ import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.FaceAwareImage
 import com.parachord.android.ui.components.hapticCombinedClickable
 import com.parachord.android.ui.components.SectionHeader
-import com.parachord.android.ui.components.ShimmerDiscographyCard
 import com.parachord.android.ui.components.ShimmerTrackRow
 import com.parachord.android.ui.components.shimmerBrush
 import com.parachord.android.ui.components.SwipeableTabLayout
@@ -480,7 +479,7 @@ private fun DiscographyTab(
                         ) {
                             repeat(2) {
                                 Box(modifier = Modifier.weight(1f)) {
-                                    ShimmerDiscographyCard()
+                                    com.parachord.android.ui.components.CardSkeleton(width = null, lines = 1)
                                 }
                             }
                         }

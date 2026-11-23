@@ -106,25 +106,20 @@ struct PCSkeletonList: View {
     }
 }
 
-/// A grid of square-card skeletons (artwork + a title line) for album/artist grids.
+/// A grid of card skeletons in the real grid's columns: album cards (`PCCardSkeleton`), or with
+/// `artists` artist cards (`PCArtistCardSkeleton`).
 struct PCSkeletonGrid: View {
     var count = 6
-    /// The phone's columns; 3 means artist circles. Wider screens get more, as the real grid does.
-    var columns = 2
+    var artists = false
     @Environment(\.pcLayoutWidth) private var layoutWidth
     var body: some View {
-        let grid = PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 14,
-                                    minCard: columns >= 3 ? LayoutRules.shared.GRID_CIRCLE_MIN : LayoutRules.shared.GRID_CARD_MIN,
-                                    minColumns: columns)
-        LazyVGrid(columns: grid, spacing: 18) {
+        let grid = PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12)
+        LazyVGrid(columns: grid, spacing: 16) {
             ForEach(0..<max(count, grid.count * 2), id: \.self) { _ in
-                VStack(alignment: .leading, spacing: 8) {
-                    PCSkeletonBox(radius: 10).aspectRatio(1, contentMode: .fit)
-                    PCSkeletonBox(width: 90, height: 12, radius: 4)
-                }
+                if artists { PCArtistCardSkeleton(width: nil) } else { PCCardSkeleton(width: nil, lines: 1) }
             }
         }
-        .padding(.horizontal, 20).padding(.vertical, 12)
+        .padding(.horizontal, 12).padding(.vertical, 8)
     }
 }
 

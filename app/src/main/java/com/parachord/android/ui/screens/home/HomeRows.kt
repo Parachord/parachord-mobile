@@ -89,7 +89,7 @@ private val Gutter = DesignTokens.SCREEN_GUTTER.dp
 
 /** A Home row card's width: 140 on a phone (the row scrolls), wider on a tablet so six fill the row. */
 @Composable
-private fun homeRowCardWidth(): Dp = rowCardWidth(cards = HOME_ROW_CARDS, gutter = Gutter, gap = CardGap)
+internal fun homeRowCardWidth(): Dp = rowCardWidth(cards = HOME_ROW_CARDS, gutter = Gutter, gap = CardGap)
 private val ArtShape = RoundedCornerShape(DesignTokens.RADIUS_ART.dp)
 /** The reason badge: desktop's 26 px disc and 18 px logo, on the 4-point and icon scales. */
 private val BadgeDisc = 28.dp
