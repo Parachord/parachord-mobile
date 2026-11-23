@@ -14,18 +14,29 @@ import com.parachord.shared.plugin.PluginManager
 enum class PlaybackPlatform { ANDROID, IOS }
 
 /**
- * What this device's decoders can play, recorded once (Android reads
- * `MediaCodecList` for `audio/eac3` and `audio/eac3-joc`). iOS has no
- * plugin DRM engine, so [NONE].
+ * What this device can play of a Dolby Atmos mix, by either of the two routes
+ * Android has (Dolby's guide for car and phone media apps):
+ * - a decoder in the device (Android reads `MediaCodecList` for `audio/eac3`
+ *   and `audio/eac3-joc`, once);
+ * - pass-through: the current output takes the undecoded stream and decodes it
+ *   itself (a car's amplifier, an HDMI soundbar). It depends on where audio is
+ *   going right now, so Android asks the platform each time
+ *   (`AudioTrack.isDirectPlaybackSupported`). ExoPlayer picks pass-through
+ *   when both exist.
+ * iOS has no plugin DRM engine, so [NONE].
  */
 data class DeviceAudioCapabilities(
     /** An E-AC-3 (Dolby Digital Plus) decoder: plays an Atmos mix's 5.1 core. */
     val eac3: Boolean = false,
     /** An E-AC-3 JOC decoder (full Dolby Atmos). */
     val eac3Joc: Boolean = false,
+    /** The current output takes E-AC-3 undecoded. */
+    val eac3Passthrough: Boolean = false,
+    /** The current output takes E-AC-3 JOC (Dolby Atmos) undecoded. */
+    val eac3JocPassthrough: Boolean = false,
 ) {
-    /** Desktop plays an Atmos mix's E-AC-3 core, so either decoder is enough. */
-    val canPlayAtmos: Boolean get() = eac3 || eac3Joc
+    /** Desktop plays an Atmos mix's E-AC-3 core, so any of the four is enough. */
+    val canPlayAtmos: Boolean get() = eac3 || eac3Joc || eac3Passthrough || eac3JocPassthrough
 
     companion object {
         val NONE = DeviceAudioCapabilities()
@@ -141,6 +152,8 @@ data class PlaybackQualityCopy(
             "This isn’t full Atmos: it’s mixed down on stereo output, and it plays instead of lossless FLAC when quality is Max."
         /** Shown in place of the Atmos switch on a phone with no E-AC-3 decoder. */
         const val NO_ATMOS_DECODER = "This phone can’t play Dolby Atmos"
+        const val NO_ATMOS_DETAIL =
+            "Dolby Atmos needs a Dolby decoder in the phone, or speakers or a car that take Dolby Atmos directly."
 
         /** [plugins] are the loaded plug-ins; the names come from the same rule as each sheet's line. */
         fun build(plugins: List<PluginManager.PluginInfo>, platform: PlaybackPlatform): PlaybackQualityCopy {
@@ -190,10 +203,21 @@ object MusicKitQuality {
  * DRM engine yet and can use it once it does.
  */
 fun qualityLabel(codecFamily: String?, isSpatial: Boolean): String? = when {
-    isSpatial || codecFamily in CodecFamilies.SPATIAL -> "Dolby Atmos"
+    isSpatial || codecFamily in CodecFamilies.SPATIAL -> DOLBY_ATMOS_LABEL
     codecFamily == CodecFamilies.FLAC -> "Lossless"
     else -> null
 }
+
+/** [qualityLabel]'s name for a Dolby Atmos mix. */
+const val DOLBY_ATMOS_LABEL = "Dolby Atmos"
+
+/**
+ * Whether the playing format, as [qualityLabel] named it, is immersive audio.
+ * A car reads this as the media session's immersive-audio extra and should then
+ * leave out sound effects that would interfere with it (Android for Cars,
+ * "Indicate audio format").
+ */
+fun isImmersiveQuality(label: String?): Boolean = label == DOLBY_ATMOS_LABEL
 
 /** A format's family from its codecs string, else its sample MIME type (`audio/flac`, `audio/eac3-joc`). */
 fun codecFamilyOf(codecs: String?, sampleMimeType: String?): String? {
