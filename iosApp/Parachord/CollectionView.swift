@@ -389,7 +389,7 @@ struct CollectionView: View {
     @ViewBuilder private func friendLines(_ f: Friend) -> some View {
         let card = FriendCard.shared
         VStack(spacing: 6) {
-            PCNeutralBadge(text: card.serviceLabel(service: f.service)).padding(.top, 4)
+            PCBadge(text: card.serviceLabel(service: f.service)).padding(.top, 4)
             // One line always, empty when there's nothing to say, so every card in a row is one height.
             Group {
                 if let track = card.nowPlaying(friend: f) {

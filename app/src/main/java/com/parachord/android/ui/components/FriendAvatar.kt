@@ -213,20 +213,3 @@ fun ListenerCard(
         details()
     }
 }
-
-/** Desktop's `Badge`, the neutral tone: a small pill, 12 / 600, bg-secondary with secondary text, never wrapping. */
-@Composable
-fun NeutralBadge(text: String, modifier: Modifier = Modifier) {
-    Text(
-        text = text,
-        fontSize = 12.sp,
-        lineHeight = 16.sp,
-        fontWeight = FontWeight.SemiBold,
-        color = DesignTokens.textSecondary.current(),
-        maxLines = 1,
-        modifier = modifier
-            .clip(CircleShape)
-            .background(DesignTokens.bgSecondary.current())
-            .padding(horizontal = 8.dp, vertical = 2.dp),
-    )
-}

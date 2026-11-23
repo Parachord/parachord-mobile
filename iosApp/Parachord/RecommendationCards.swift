@@ -681,18 +681,3 @@ struct PCListenerCard<Details: View>: View {
         .accessibilityLabel(spec.openLabel(name: name))
     }
 }
-
-/// Desktop's `Badge`, the neutral tone: a small pill, 12 / 600, bg-secondary with secondary text, never wrapping.
-struct PCNeutralBadge: View {
-    let text: String
-
-    var body: some View {
-        Text(text)
-            .font(.system(size: 12, weight: .semibold))
-            .foregroundStyle(PC.fg2)
-            .lineLimit(1)
-            .fixedSize()
-            .padding(.horizontal, 8).padding(.vertical, 2)
-            .background(Capsule().fill(PC.bgSecondary))
-    }
-}

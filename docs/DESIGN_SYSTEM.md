@@ -176,6 +176,24 @@ Rules for desktop's icons:
 
 Each of these is one shared component per platform. A screen uses it; it never rebuilds or restyles it. Before writing a UI element, look for the shared one; if you'd write a second copy of something, extract it first.
 
+| Job | Shared rules | Android (`ui/components/`) | iOS |
+|---|---|---|---|
+| Section title | `SectionHeaderSpec` | `SectionHeader` | `PCSectionHeader` |
+| Filter chips | `FilterChipSpec` | `FilterChips` | `PCFilterChips` |
+| Page hero | `PageHero` | `PageHero` | `PCPageHero` |
+| Source icons | `ResolverBadges` | `ResolverIconRow` | `ResolverBadgeRow` |
+| Track row | `TrackRowRules` | `TrackRow`, `TrackRowSources`, `TrackRowDuration`, `ShimmerTrackRow` | `PCTrackRow`, `PCTrackRowSources`, `PCTrackRowDuration`, `PCTrackRowSkeleton` |
+| Album / playlist card | `CardSpec` | `ParachordAlbumCard`, `ParachordPlaylistCard`, `CardSkeleton` | `PCAlbumCard`, `PCPlaylistCard`, `PCCardSkeleton` |
+| Artist card | `CardSpec`, `ArtistPattern` | `ParachordArtistCard`, `ArtistCardSkeleton` | `PCArtistCard`, `PCArtistCardSkeleton` |
+| Reason badge (on a card's art) | `CardSpec.REASON_*` | `ReasonBadge` | `HomeReasonBadge` |
+| Friend avatar / listener | `FriendAvatarSpec`, `FriendCard` | `FriendAvatar`, `ListenerCard` | `PCFriendAvatar`, `PCListenerCard` |
+| Status pill | `BadgeSpec`, `PlaylistSyncBadges` | `ParachordBadge` | `PCBadge` |
+| Play button over art | `ArtPlayButtonSpec` | `ArtPlayButton` | `PCArtPlayButton` |
+| Empty / error state | `StateSpec`, `UiMessages` | `EmptyState`, `ErrorState` | `PCEmptyState`, `PCErrorState` |
+| Track menu | `TrackMenu` | `TrackContextMenu` | `pcTrackContextMenu` |
+| Album / artist menu | — | `AlbumContextMenu`, `ArtistContextMenu` | `Interactions.swift` |
+| Icon / service logo | `AppIcon`, `ServiceColors` | `ParachordIcon`, `serviceLogoVector` | `PCIcon`, `PCServiceLogo` |
+
 ### SectionHeader (desktop `section-header.js`, #1370)
 Android `SectionHeader`, iOS `PCSectionHeader`; sizes in the shared `SectionHeaderSpec`.
 - Title: **20, 700, text-primary**, sentence case. Not uppercase, not accent.
@@ -218,7 +236,7 @@ Android `TrackRow`, iOS `PCTrackRow`; every track list draws it. The rules are t
 - Cards in a horizontal row are a fixed width: the width given is the cover's (140 on a phone), and the card adds its padding around it (`CardSpec.cardWidth`, 160). In a grid a card fills its cell. Grids use the 16 gutter.
 - The artist card is one per platform too (desktop `artist-card.js`): Android `ParachordArtistCard` / `ArtistCardSkeleton`, iOS `PCArtistCard` / `PCArtistCardSkeleton`, used by every artist grid and row (Collection, an artist's related artists, History, a friend's page, Recommendations). A rounded square card (radius 8, the card colour and shadow), the photo full-bleed, then the name (14 / 500) and a subtitle (12 text-tertiary), 12 inside. An artist with no photo, or one that won't load, shows the name's generated pattern and initials (the shared `ArtistPattern`, a port of desktop's `artist-pattern.js`: fifteen palettes, six gradient shapes, picked by a hash of the name). Artist grids use the album grid's columns; there are no round artist photos in grids any more.
 - A friend's avatar is one hexagon per platform (desktop `friend-avatar.js`): Android `FriendAvatar`, iOS `PCFriendAvatar`, from the shared `FriendAvatarSpec` (the hexagon's points, sizes 32 / 40 / 96 with the initial at 12 / 16 / 28, the initial in white on desktop's purple-pink avatar gradient). The drawer, the friends lists and a friend's page use it.
-- A listener is one card per platform (desktop `listener-card.js`): Android `ListenerCard`, iOS `PCListenerCard`. The card box (10 radius), a 100 regular hexagon in a 3 ring that's green while they're on air (with the on-air dot), the photo or initial inside, a badge over its foot (Recommendations' similarity), the name (13 / 500, with a pin mark when pinned) and the page's lines under it. Recommendations' Listeners and Collection's Friends tab (a grid, cells at least 150 wide) use it. On Friends the lines under the name are the service as a neutral badge (desktop's `Badge`: Android `NeutralBadge`, iOS `PCNeutralBadge`), then one line that's the track while they're on air, "Listening hidden", or blank, so every card in a row is one height (the shared `FriendCard`); the play button plays their recent top 10.
+- A listener is one card per platform (desktop `listener-card.js`): Android `ListenerCard`, iOS `PCListenerCard`. The card box (10 radius), a 100 regular hexagon in a 3 ring that's green while they're on air (with the on-air dot), the photo or initial inside, a badge over its foot (Recommendations' similarity), the name (13 / 500, with a pin mark when pinned) and the page's lines under it. Recommendations' Listeners and Collection's Friends tab (a grid, cells at least 150 wide) use it. On Friends the lines under the name are the service as a neutral badge (desktop's `Badge`: Android `ParachordBadge`, iOS `PCBadge`, the neutral tone), then one line that's the track while they're on air, "Listening hidden", or blank, so every card in a row is one height (the shared `FriendCard`); the play button plays their recent top 10.
 - A playlist card's subtitle keeps two lines' height even when it fits on one, so every card in a row is the same height.
 - Long-press opens the item's context menu (`AlbumContextMenu`, `ArtistContextMenu`, `TrackContextMenu`), and the menu is the same on every screen.
 - A playlist card: 2×2 mosaic; subtitle per the Home rules below.
