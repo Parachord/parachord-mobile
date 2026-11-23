@@ -136,4 +136,42 @@ class AlbumCatalogTest {
         assertEquals(61.0, looked?.tracks?.single()?.duration)
         assertNull(AlbumCatalog.parseLookup("null"))
     }
+
+    // ── a track's own artist (#834, desktop parachord#1652's album-track-artist.test.js) ──
+
+    @Test fun ownCatalogTrackArtist_keepsAcompilationTracksOwnCreditOnly() {
+        assertEquals("Iggy Pop", AlbumCatalog.ownCatalogTrackArtist("Iggy Pop", "Various Artists"))
+        assertEquals(
+            "Daft Punk, Pharrell Williams",
+            AlbumCatalog.ownCatalogTrackArtist("Daft Punk, Pharrell Williams", "Various Artists"),
+        )
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("Radiohead", "Radiohead"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("radiohead", "Radiohead"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("Radiohead, Guest", "Radiohead"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("A", "A & B"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("Someone feat. A", "A"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist(null, "Various Artists"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("  ", "Various Artists"))
+        assertNull(AlbumCatalog.ownCatalogTrackArtist("Iggy Pop", null))
+        assertEquals("Iggy Pop", AlbumCatalog.ownCatalogTrackArtist("  Iggy Pop ", "Various Artists"))
+    }
+
+    @Test fun aCompilationsTracksKeepTheirOwnArtists_anAlbumByOneArtistsDontRepeatIt() {
+        val trainspotting = AlbumCatalog.parseLookup(
+            """{"album":{"name":"Trainspotting","artist":"Various Artists","url":"u","tracks":[""" +
+                """{"title":"Lust for Life","artist":"Iggy Pop","trackNumber":1},""" +
+                """{"title":"Deep Blue Day","artist":"Brian Eno","trackNumber":2}]}}""",
+        )!!
+        val comp = AlbumCatalog.toAlbumDetail(trainspotting, "Spotify", "Trainspotting", "Various Artists")
+        assertEquals(listOf("Iggy Pop", "Brian Eno"), comp.tracks.map { it.artist })
+        assertEquals("Various Artists", comp.artist)
+
+        val wildPink = AlbumCatalog.parseLookup(
+            """{"album":{"name":"Dulling the Horns","artist":"Wild Pink","url":"u","tracks":[""" +
+                """{"title":"First","artist":"Wild Pink","trackNumber":1},""" +
+                """{"title":"Second","artist":"Wild Pink, Guest","trackNumber":2}]}}""",
+        )!!
+        val single = AlbumCatalog.toAlbumDetail(wildPink, "Spotify", "Dulling the Horns", "wild pink")
+        assertTrue(single.tracks.all { it.artist == "wild pink" })
+    }
 }

@@ -36,12 +36,13 @@ object AlbumCatalog {
         val tracks: List<Track> = emptyList(),
     )
 
-    /** A catalog track. [duration] is in SECONDS, as the plugins return it. */
+    /** A catalog track. [duration] is in SECONDS, as the plugins return it; [artist] is the track's own credit. */
     data class Track(
         val title: String?,
         val duration: Double?,
         val trackNumber: Int?,
         val discNumber: Int?,
+        val artist: String? = null,
     )
 
     // ── Matching ────────────────────────────────────────────────────────────
@@ -148,12 +149,41 @@ object AlbumCatalog {
         return resolverIds.sortedBy(::rank)
     }
 
+    // ── A track's own artist ────────────────────────────────────────────────
+
+    /** Desktop's `creditNames` split (`album-track-artist.js`); its own list, so a change there is copied here. */
+    private val CREDIT_SEPARATORS = Regex(
+        "\\s*(?:,|&|\\band\\b|\\bfeat\\.?|\\bft\\.?|\\bx\\b|\\bwith\\b)\\s*",
+        RegexOption.IGNORE_CASE,
+    )
+
+    private fun creditNames(name: String?): List<String> =
+        name.orEmpty().split(CREDIT_SEPARATORS).map { it.trim().lowercase() }.filter { it.isNotEmpty() }
+
+    /**
+     * The artist a catalog track keeps on the album page (desktop's
+     * `ownCatalogTrackArtist`, parachord#1652): its own credit only when none
+     * of its credited names is one of the album's, as on a compilation
+     * ("Iggy Pop" on Trainspotting's "Various Artists"); else null, and the
+     * track keeps the album's artist. So a single-artist album's tracks keep
+     * the keys they had (the resolver cache and visible rows key on
+     * title and artist), and a compilation's tracks resolve under their own
+     * artist instead of "Various Artists", which no service credits them to.
+     */
+    fun ownCatalogTrackArtist(trackArtist: String?, albumArtist: String?): String? {
+        val mine = creditNames(trackArtist)
+        val album = creditNames(albumArtist).toSet()
+        if (mine.isEmpty() || album.isEmpty()) return null
+        return if (mine.any { it in album }) null else trackArtist!!.trim()
+    }
+
     // ── Conversion ──────────────────────────────────────────────────────────
 
     /**
      * A catalog album as the album page's [AlbumDetail].
      *
-     * The REQUESTED title and artist win over the catalog's spelling: track
+     * The REQUESTED title and artist win over the catalog's spelling, except
+     * that a compilation's track keeps its own artist ([ownCatalogTrackArtist]): track
      * identity (the resolver cache key, playlist entries) is built from artist,
      * title and album, so the same album must produce the same tracks whichever
      * source answered. Service fields (ids, sources, stream urls) are dropped so
@@ -172,7 +202,7 @@ object AlbumCatalog {
         val tracks = sorted.filter { !it.title.isNullOrBlank() }.map { t ->
             TrackSearchResult(
                 title = t.title!!,
-                artist = requestedArtist,
+                artist = ownCatalogTrackArtist(t.artist, requestedArtist) ?: requestedArtist,
                 album = requestedTitle,
                 duration = t.duration?.takeIf { it > 0 }?.let { kotlin.math.round(it * 1000).toLong() },
                 artworkUrl = art,
@@ -220,6 +250,7 @@ object AlbumCatalog {
                 duration = t.num("duration"),
                 trackNumber = t.num("trackNumber")?.toInt(),
                 discNumber = t.num("discNumber")?.toInt(),
+                artist = t.str("artist"),
             )
         }
         return Album(
