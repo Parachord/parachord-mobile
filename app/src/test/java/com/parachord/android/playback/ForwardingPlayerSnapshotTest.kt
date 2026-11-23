@@ -232,6 +232,33 @@ class ForwardingPlayerSnapshotTest {
     }
 
     /**
+     * A Dolby Atmos mix carries the car's immersive-audio extra on the playing
+     * item only, and its arrival on the same track still tells the session:
+     * Media3's MediaMetadata.equals leaves extras out.
+     */
+    @Test fun `an Atmos mix labels the playing item immersive for the car`() {
+        val delegate = mockk<androidx.media3.exoplayer.ExoPlayer>(relaxed = true)
+        every { delegate.currentTimeline } returns Timeline.EMPTY
+        val controller = mockk<PlaybackController>(relaxed = true)
+        val wrapper = PlaybackService.ExternalPlaybackForwardingPlayer(delegate, controller, PlaybackStateHolder())
+        val listener = mockk<Player.Listener>(relaxed = true)
+        wrapper.addListener(listener)
+
+        wrapper.updateQueueSnapshot(track("c"), listOf(track("u1")))
+        assertEquals(0L, wrapper.mediaMetadata.extras?.getLong(KEY_IMMERSIVE_AUDIO) ?: 0L)
+
+        wrapper.updateQueueSnapshot(track("c"), listOf(track("u1")), currentImmersive = true)
+        assertEquals(1L, wrapper.mediaMetadata.extras?.getLong(KEY_IMMERSIVE_AUDIO))
+        assertNull("only the playing item is labelled", wrapper.getMediaItemAt(1).mediaMetadata.extras)
+        verify { listener.onMediaMetadataChanged(match { it.extras?.getLong(KEY_IMMERSIVE_AUDIO) == 1L }) }
+
+        wrapper.updateQueueSnapshot(track("c"), listOf(track("u1")), currentImmersive = false)
+        assertNull("the label goes when the mix does", wrapper.mediaMetadata.extras)
+        // The first track, the label arriving, the label going.
+        verify(exactly = 3) { listener.onMediaMetadataChanged(any()) }
+    }
+
+    /**
      * A track that couldn't start (#446: Spotify can't be opened from the
      * background) is reported as the player's error, so Android Auto shows the
      * message instead of spinning; clearing it restores the normal state.

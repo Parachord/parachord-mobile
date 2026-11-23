@@ -153,4 +153,21 @@ class PlaybackQualityLineTest {
         assertEquals(true, s.forDevice(atmos).spatial)
         assertEquals(true, s.forDevice(DeviceAudioCapabilities(eac3Joc = true)).spatial)
     }
+
+    @Test
+    fun `an output that takes Atmos undecoded counts as playing Atmos`() {
+        val s = PlaybackQualitySettings(spatial = true)
+        // A phone with no Dolby decoder, on a car or soundbar that decodes it itself.
+        assertEquals(true, DeviceAudioCapabilities(eac3JocPassthrough = true).canPlayAtmos)
+        assertEquals(true, DeviceAudioCapabilities(eac3Passthrough = true).canPlayAtmos)
+        assertEquals(true, s.forDevice(DeviceAudioCapabilities(eac3JocPassthrough = true)).spatial)
+        assertEquals(false, DeviceAudioCapabilities().canPlayAtmos)
+    }
+
+    @Test
+    fun `only a Dolby Atmos label is immersive`() {
+        assertTrue(isImmersiveQuality(qualityLabel(CodecFamilies.EC3, isSpatial = false)))
+        assertEquals(false, isImmersiveQuality(qualityLabel(CodecFamilies.FLAC, isSpatial = false)))
+        assertEquals(false, isImmersiveQuality(null))
+    }
 }

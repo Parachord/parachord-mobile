@@ -6,7 +6,22 @@ import androidx.media3.common.MediaMetadata
 import com.parachord.android.data.db.entity.TrackEntity
 
 /**
- * Build a `MediaItem` from a [TrackEntity].
+ * The Car App Library's immersive-audio extra (`androidx.car.app.mediaextensions.
+ * MetadataExtras.KEY_IMMERSIVE_AUDIO`, a long set to
+ * `METADATA_VALUE_ATTRIBUTE_PRESENT`, 1). We don't ship that library, so the
+ * key is spelled here. It tells the car this track is immersive audio, so it
+ * should leave out sound effects that would interfere ("Indicate audio format",
+ * Android for Cars).
+ */
+const val KEY_IMMERSIVE_AUDIO = "androidx.car.app.mediaextensions.KEY_IMMERSIVE_AUDIO"
+private const val METADATA_VALUE_ATTRIBUTE_PRESENT = 1L
+
+internal fun immersiveAudioExtras(): android.os.Bundle =
+    android.os.Bundle().apply { putLong(KEY_IMMERSIVE_AUDIO, METADATA_VALUE_ATTRIBUTE_PRESENT) }
+
+/**
+ * Build a `MediaItem` from a [TrackEntity]. [immersive] marks the playing
+ * track as immersive audio for the car (a Dolby Atmos mix, [KEY_IMMERSIVE_AUDIO]).
  *
  * Includes Android Auto browse-tree flags
  * (`MediaMetadata.MEDIA_TYPE_MUSIC` + `isPlayable=true` + `isBrowsable=false`)
@@ -20,7 +35,7 @@ import com.parachord.android.data.db.entity.TrackEntity
  *   Auto fetches over HTTPS for remote URIs and accepts `content://` for
  *   local files.
  */
-fun TrackEntity.toAutoMediaItem(): MediaItem {
+fun TrackEntity.toAutoMediaItem(immersive: Boolean = false): MediaItem {
     val builder = MediaMetadata.Builder()
         .setTitle(title)
         .setSubtitle(artist)
@@ -30,6 +45,7 @@ fun TrackEntity.toAutoMediaItem(): MediaItem {
         .setIsPlayable(true)
         .setIsBrowsable(false)
     artworkUrl?.let { builder.setArtworkUri(Uri.parse(it)) }
+    if (immersive) builder.setExtras(immersiveAudioExtras())
     return MediaItem.Builder()
         .setMediaId(id)
         .setUri(sourceUrl ?: "")

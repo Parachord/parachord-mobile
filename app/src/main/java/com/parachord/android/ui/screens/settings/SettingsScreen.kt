@@ -3553,10 +3553,11 @@ private fun GeneralTab(
                     trailingContent = { Switch(checked = playbackSpatial, onCheckedChange = onPlaybackSpatialChanged) },
                 )
             } else {
-                // No E-AC-3 decoder here: the preference would do nothing.
+                // No E-AC-3 decoder here and no output taking it undecoded:
+                // the preference would do nothing.
                 ListItem(
                     headlineContent = { Text(com.parachord.shared.playback.drm.PlaybackQualityCopy.NO_ATMOS_DECODER) },
-                    supportingContent = { Text("Dolby Atmos mixes need an E-AC-3 decoder, which this phone doesn’t have.") },
+                    supportingContent = { Text(com.parachord.shared.playback.drm.PlaybackQualityCopy.NO_ATMOS_DETAIL) },
                 )
             }
         }

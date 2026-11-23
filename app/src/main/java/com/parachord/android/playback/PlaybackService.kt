@@ -447,11 +447,16 @@ class PlaybackService : MediaLibraryService() {
                 // and cover over the queued track (#721), so the car never shows
                 // one song's names with another's cover.
                 val current = state.effectiveTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
-                current to qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) }
+                Triple(
+                    current,
+                    qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) },
+                    // A Dolby Atmos mix playing: the car leaves its own sound effects out.
+                    com.parachord.shared.playback.drm.isImmersiveQuality(state.playingQualityLabel),
+                )
             }
                 .distinctUntilChanged()
-                .collect { (current, upNext) ->
-                    wrapper.updateQueueSnapshot(currentTrack = current, upNext = upNext)
+                .collect { (current, upNext, immersive) ->
+                    wrapper.updateQueueSnapshot(currentTrack = current, upNext = upNext, currentImmersive = immersive)
                 }
         }
     }
@@ -1727,6 +1732,8 @@ class PlaybackService : MediaLibraryService() {
             val durationsUs: LongArray,
             val timeline: Timeline,
             val currentMediaId: String?,
+            /** The current item carries [KEY_IMMERSIVE_AUDIO]. */
+            val currentImmersive: Boolean = false,
         ) {
             companion object {
                 val EMPTY = QueueSnapshotState(
@@ -2154,7 +2161,7 @@ class PlaybackService : MediaLibraryService() {
          * warning log) to avoid clobbering the snapshot mid-dispatch. Auto's
          * typical usage doesn't trigger this; the guard is defensive.
          */
-        fun updateQueueSnapshot(currentTrack: TrackEntity?, upNext: List<TrackEntity>) {
+        fun updateQueueSnapshot(currentTrack: TrackEntity?, upNext: List<TrackEntity>, currentImmersive: Boolean = false) {
             if (dispatching) {
                 Log.w(TAG, "updateQueueSnapshot called re-entrantly from a listener callback; ignoring inner call to avoid clobbering snapshot state")
                 return
@@ -2194,7 +2201,8 @@ class PlaybackService : MediaLibraryService() {
                 } else {
                     emptyList()
                 }
-                val items = combined.map { it.toAutoMediaItem() }
+                val immersive = currentTrack != null && currentImmersive
+                val items = combined.mapIndexed { i, t -> t.toAutoMediaItem(immersive = i == 0 && immersive) }
                 val durationsUs = LongArray(combined.size) { i ->
                     val durMs = combined[i].duration ?: 0L
                     if (durMs > 0L) durMs * 1000L else C.TIME_UNSET
@@ -2202,12 +2210,14 @@ class PlaybackService : MediaLibraryService() {
                 val newTimeline = QueueTimeline(items, durationsUs)
                 val previousMediaId = queueSnapshot.currentMediaId
                 val previousMetadata = queueSnapshot.items.firstOrNull()?.mediaMetadata
+                val previousImmersive = queueSnapshot.currentImmersive
                 val newCurrentId = currentTrack?.id
                 queueSnapshot = QueueSnapshotState(
                     items = items,
                     durationsUs = durationsUs,
                     timeline = newTimeline,
                     currentMediaId = newCurrentId,
+                    currentImmersive = immersive,
                 )
 
                 // Re-emit timeline change to all external listeners.
@@ -2235,7 +2245,11 @@ class PlaybackService : MediaLibraryService() {
                         // (the cold-start placeholder) on the first track.
                         listener.onMediaMetadataChanged(newMetadata)
                     }
-                } else if (items.isNotEmpty() && items[0].mediaMetadata != previousMetadata) {
+                } else if (items.isNotEmpty() &&
+                    // Media3's MediaMetadata.equals leaves extras out, so the
+                    // immersive label's change is checked on its own.
+                    (items[0].mediaMetadata != previousMetadata || immersive != previousImmersive)
+                ) {
                     // Same track, new metadata: usually its artwork, which
                     // PlaybackController.enrichArtworkIfMissing fills in after
                     // the track starts. Auto's card only refreshes on this
