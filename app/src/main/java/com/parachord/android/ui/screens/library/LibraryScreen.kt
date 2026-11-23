@@ -567,7 +567,7 @@ private fun FriendsTab(
                             pinned = com.parachord.shared.ui.FriendCard.pinned(friend),
                         ) {
                             Spacer(Modifier.height(4.dp))
-                            com.parachord.android.ui.components.NeutralBadge(
+                            com.parachord.android.ui.components.ParachordBadge(
                                 com.parachord.shared.ui.FriendCard.serviceLabel(friend.service),
                             )
                             // One line always, empty when there's nothing to say, so every card in a row is one height.
