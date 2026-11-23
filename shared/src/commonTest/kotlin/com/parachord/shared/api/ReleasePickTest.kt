@@ -114,4 +114,67 @@ class ReleasePickTest {
         assertEquals(5, releaseTrackCount(release))
         assertEquals(0, releaseTrackCount(MbReleaseDetail(id = "e", title = "e")))
     }
+
+    // ── Rule 3 (desktop parachord#1654) ──
+
+    @Test
+    fun `digital releases all empty and a CD with the tracks — the CD`() {
+        val picked = pickRelease(
+            listOf(
+                rel("digital-a", listOf("Digital Media" to 0), "2026-11-20"),
+                rel("cd", listOf("CD" to 12), "2026-11-20"),
+                rel("digital-b", listOf("Digital Media" to 0), "2026-11-20"),
+            ),
+        )
+        assertEquals("cd", picked?.id)
+    }
+
+    // ── orderReleaseSearchHits ──
+
+    private fun hit(id: String, group: String?, media: List<Pair<String, Int>>, date: String? = "2026-11-20") = MbRelease(
+        id = id,
+        title = id,
+        date = date,
+        releaseGroup = group?.let { MbReleaseGroup(id = it) },
+        media = media.map { (format, count) -> MbMedia(format = format, trackCount = count) },
+    )
+
+    @Test
+    fun `a placeholder top hit gives way to its album's pick`() {
+        val hits = listOf(
+            hit("vinyl-empty", "gta", listOf("12\" Vinyl" to 0, "12\" Vinyl" to 0)),
+            hit("other-album", "other", listOf("Digital Media" to 10)),
+            hit("digital", "gta", listOf("Digital Media" to 34)),
+            hit("cd", "gta", listOf("CD" to 34)),
+        )
+        assertEquals(listOf("digital", "vinyl-empty", "other-album", "cd"), orderReleaseSearchHits(hits).map { it.id })
+    }
+
+    @Test
+    fun `another album never takes the top hit's place`() {
+        val hits = listOf(
+            hit("top-empty", "a", listOf("CD" to 0)),
+            hit("other-full", "b", listOf("Digital Media" to 12)),
+        )
+        assertEquals(listOf("top-empty", "other-full"), orderReleaseSearchHits(hits).map { it.id })
+    }
+
+    @Test
+    fun `hits with no group — one hit or none come back unchanged`() {
+        val noGroup = listOf(hit("x", null, listOf("CD" to 0)), hit("y", null, listOf("Digital Media" to 9)))
+        assertEquals(noGroup, orderReleaseSearchHits(noGroup))
+        val one = listOf(hit("only", "a", listOf("CD" to 0)))
+        assertEquals(one, orderReleaseSearchHits(one))
+        assertEquals(emptyList(), orderReleaseSearchHits(emptyList()))
+    }
+
+    @Test
+    fun `a search hit's media decode from MusicBrainz's JSON`() {
+        val json = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+        val body = """{"releases":[{"id":"r1","title":"T","release-group":{"id":"g1"},""" +
+            """"media":[{"format":"Digital Media","disc-count":0,"track-count":34}]}]}"""
+        val release = json.decodeFromString(MbReleaseSearchResponse.serializer(), body).releases.single()
+        assertEquals("g1", release.releaseGroup?.id)
+        assertEquals(listOf("Digital Media" to 34), release.media.map { it.format to it.trackCount })
+    }
 }

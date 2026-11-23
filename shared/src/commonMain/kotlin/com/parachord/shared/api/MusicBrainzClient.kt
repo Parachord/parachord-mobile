@@ -390,6 +390,8 @@ data class MbRelease(
     @SerialName("release-group") val releaseGroup: MbReleaseGroup? = null,
     /** Search relevance, 0–100; present only on search results. */
     val score: Int? = null,
+    /** Each medium's format and track count (search hits list no tracks); what [orderReleaseSearchHits] reads. */
+    val media: List<MbMedia> = emptyList(),
 ) {
     val artistName: String get() = artistCredit.joinToString(", ") { it.name }
     val year: Int? get() = date?.take(4)?.toIntOrNull()

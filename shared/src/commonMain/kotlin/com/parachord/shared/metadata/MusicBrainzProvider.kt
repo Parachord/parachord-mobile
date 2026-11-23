@@ -4,6 +4,7 @@ import com.parachord.shared.api.MbArtist
 import com.parachord.shared.api.MbReleaseGroup
 import com.parachord.shared.api.MbReleaseGroupEntry
 import com.parachord.shared.api.MusicBrainzClient
+import com.parachord.shared.api.orderReleaseSearchHits
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -219,7 +220,8 @@ class MusicBrainzProvider(
      * this album (desktop `fetchReleaseGroupDetails`, parachord#1199): the
      * release group's edition [MusicBrainzClient.albumReleaseOfGroup] picks
      * (#560), with its tracks, or the release itself.
-     * Otherwise a search for the release, then its lookup.
+     * Otherwise a search for the release ([RELEASE_SEARCH_HITS] hits, the top
+     * hit's album picked among them by [orderReleaseSearchHits]), then its lookup.
      */
     override suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         return try {
@@ -236,10 +238,12 @@ class MusicBrainzProvider(
                 releaseType = hint?.releaseType
                 api.getRelease(releaseId)
             } else {
-                // Search for the release to get its MBID
+                // Search for the release, then open the top hit's album as the
+                // release-group path would (#833): the top hit itself can be an
+                // empty placeholder edition.
                 val query = "release:\"$albumTitle\" AND artist:\"$artistName\""
-                val results = api.searchReleases(query, limit = 1)
-                val release = results.releases.firstOrNull() ?: return null
+                val results = api.searchReleases(query, limit = RELEASE_SEARCH_HITS)
+                val release = orderReleaseSearchHits(results.releases).firstOrNull() ?: return null
                 releaseType = normalizeReleaseType(release.releaseGroup)
                 // Look up the release with recordings included
                 api.getRelease(release.id)
@@ -327,6 +331,8 @@ class MusicBrainzProvider(
         resolveArtist(artistName)?.id
 
     companion object {
+        /** Hits an album search asks for, so the top hit's album can be picked among them (desktop asks 25). */
+        const val RELEASE_SEARCH_HITS = 25
         /** How many albums [albumHints] remembers. */
         private const val ALBUM_HINT_LIMIT = 1000
 
