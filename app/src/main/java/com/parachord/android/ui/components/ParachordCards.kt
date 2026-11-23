@@ -1,6 +1,15 @@
 package com.parachord.android.ui.components
 
 import androidx.compose.foundation.background
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.unit.em
+import com.parachord.shared.ui.ArtistPattern
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.BoxScope
@@ -229,6 +238,130 @@ fun CardSkeleton(width: Dp, modifier: Modifier = Modifier, lines: Int = 2) {
         repeat(lines) {
             Spacer(Modifier.height(CardSpec.LINE_GAP.dp + 2.dp))
             Box(Modifier.fillMaxWidth(0.55f).height(11.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+        }
+    }
+}
+
+/** An artist's stand-in art (desktop `lib/artist-pattern.js`): the name's gradient and initials at 40%. */
+@Composable
+fun ArtistPatternArt(name: String, modifier: Modifier = Modifier, initialsSize: androidx.compose.ui.unit.TextUnit = 48.sp) {
+    val pattern = androidx.compose.runtime.remember(name) { ArtistPattern.of(name) }
+    Box(
+        modifier = modifier.drawBehind {
+            val stops = pattern.gradient.stops.map { it.at to tokenColor(it.color) }.toTypedArray()
+            val brush = when (val g = pattern.gradient) {
+                is ArtistPattern.Gradient.Linear -> {
+                    val (s, e) = g.endpoints(size.width, size.height)
+                    Brush.linearGradient(*stops, start = Offset(s.first, s.second), end = Offset(e.first, e.second))
+                }
+                is ArtistPattern.Gradient.Radial -> Brush.radialGradient(
+                    *stops,
+                    center = Offset(g.centerX * size.width, g.centerY * size.height),
+                    radius = g.radius(size.width, size.height).coerceAtLeast(1f),
+                )
+            }
+            drawRect(brush)
+        },
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = pattern.initials,
+            fontSize = initialsSize,
+            fontWeight = FontWeight.Bold,
+            letterSpacing = 0.05.em,
+            color = tokenColor(pattern.textColor).copy(alpha = ArtistPattern.INITIALS_ALPHA),
+            maxLines = 1,
+        )
+    }
+}
+
+/**
+ * The artist card (desktop `artist-card.js`), used by every artist grid and
+ * row: a rounded card with the card colour and shadow, the square photo
+ * full-bleed (the name's pattern and initials when there's none or it won't
+ * load), [rank] at its top left, then the name (14 / 500) and [subtitle]
+ * (12 tertiary). [width] null fills a grid cell. The artist's top songs are
+ * in its long-press menu.
+ */
+@Composable
+fun ParachordArtistCard(
+    name: String,
+    imageUrl: String?,
+    width: Dp?,
+    onOpen: () -> Unit,
+    modifier: Modifier = Modifier,
+    onLongPress: (() -> Unit)? = null,
+    subtitle: String? = null,
+    rank: Int? = null,
+) {
+    val shape = RoundedCornerShape(CardSpec.ARTIST_RADIUS.dp)
+    Column(
+        modifier = modifier
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .shadow(2.dp, shape)
+            .clip(shape)
+            .background(ParachordTheme.colors.cardBackground)
+            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
+    ) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).background(DesignTokens.placeholderBg.current())) {
+            var failed by androidx.compose.runtime.remember(imageUrl) { androidx.compose.runtime.mutableStateOf(false) }
+            if (imageUrl.isNullOrBlank() || failed) {
+                ArtistPatternArt(name, Modifier.fillMaxSize())
+            } else {
+                coil.compose.AsyncImage(
+                    model = imageUrl,
+                    contentDescription = name,
+                    contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                    onError = { failed = true },
+                    modifier = Modifier.fillMaxSize(),
+                )
+            }
+            rank?.let { CardRankBadge(it, Modifier.align(Alignment.TopStart)) }
+        }
+        Column(Modifier.padding(CardSpec.ARTIST_TEXT_PADDING.dp)) {
+            Text(
+                text = name,
+                fontSize = CardSpec.ARTIST_NAME_SIZE.sp,
+                lineHeight = 20.sp,
+                fontWeight = FontWeight.Medium,
+                color = DesignTokens.textPrimary.current(),
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            subtitle?.let {
+                Spacer(Modifier.height(CardSpec.LINE_GAP.dp))
+                Text(
+                    text = it,
+                    fontSize = CardSpec.LINE_SIZE.sp,
+                    lineHeight = 16.sp,
+                    color = DesignTokens.textTertiary.current(),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+    }
+}
+
+/** An artist card's stand-in (desktop `ArtistCardSkeleton`): the same box, the photo and [lines] text bars. */
+@Composable
+fun ArtistCardSkeleton(width: Dp?, modifier: Modifier = Modifier, lines: Int = 1) {
+    val brush = shimmerBrush()
+    val shape = RoundedCornerShape(CardSpec.ARTIST_RADIUS.dp)
+    Column(
+        modifier = modifier
+            .then(if (width != null) Modifier.width(width) else Modifier.fillMaxWidth())
+            .shadow(2.dp, shape)
+            .clip(shape)
+            .background(ParachordTheme.colors.cardBackground),
+    ) {
+        Box(Modifier.fillMaxWidth().aspectRatio(1f).background(brush))
+        Column(Modifier.padding(CardSpec.ARTIST_TEXT_PADDING.dp)) {
+            Box(Modifier.fillMaxWidth(0.7f).height(14.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+            if (lines > 1) {
+                Spacer(Modifier.height(CardSpec.LINE_GAP.dp + 2.dp))
+                Box(Modifier.fillMaxWidth(0.4f).height(12.dp).clip(RoundedCornerShape(4.dp)).background(brush))
+            }
         }
     }
 }

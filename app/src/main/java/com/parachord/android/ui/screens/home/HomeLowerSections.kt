@@ -281,7 +281,7 @@ fun HomeHalf(
                 modifier = Modifier.fillMaxWidth(),
             ) {
                 if (body == HomeHalfBody.LOADING) {
-                    items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 1, width = cardWidth) }
+                    items(HOME_HALF_ROW_CARDS, key = { "skeleton-$it" }) { RecCardSkeleton(lines = 2, width = cardWidth) }
                 } else {
                     items(cards, key = { it.key }) { card ->
                         // A card on screen with no cover asks for one (shared withHalfCardArt).

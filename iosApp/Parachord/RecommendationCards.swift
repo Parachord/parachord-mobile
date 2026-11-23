@@ -68,35 +68,14 @@ struct RecAlbumCard: View {
     }
 }
 
-/// A recommended artist: a square 6-radius photo, else the user icon (Android's `AppIcon.User`).
+/// A recommended artist: the shared artist card.
 struct RecArtistCard: View {
     let item: IosRecItem
     var width: CGFloat = pcRecCardWidth
     let onOpen: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            Group {
-                if let url = item.imageUrl, let u = URL(string: url) {
-                    PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                        placeholder: { placeholder }
-                } else {
-                    placeholder
-                }
-            }
-            .frame(width: width, height: width)
-            .background(PC.bgInset)
-            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
-            Spacer().frame(height: 8)
-            RecCardText(text: item.name, primary: true)
-        }
-        .frame(width: width)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-    }
-
-    private var placeholder: some View {
-        PCIcon(icon: .user, size: 40, tint: PC.fg3)
+        PCArtistCard(name: item.name, imageUrl: item.imageUrl, width: width, onOpen: onOpen)
     }
 }
 
@@ -230,7 +209,10 @@ struct RecCardSkeleton: View {
     var lines: Int = 3
     var width: CGFloat = pcRecCardWidth
 
-    var body: some View { PCCardSkeleton(width: width, lines: max(lines - 1, 0)) }
+    var body: some View {
+        // One line is an artist card (the name alone); more are an album or playlist card.
+        if lines <= 1 { PCArtistCardSkeleton(width: width) } else { PCCardSkeleton(width: width, lines: lines - 1) }
+    }
 }
 
 /// Placeholder for a listener while the Listeners row loads.
@@ -480,6 +462,124 @@ struct PCCardSkeleton: View {
                 PCSkeletonBox(width: side * 0.55, height: 11, radius: 4)
             }
         }
+        .accessibilityHidden(true)
+    }
+}
+
+// MARK: - The artist card (desktop artist-card.js)
+
+/// An artist's stand-in art (desktop `lib/artist-pattern.js`, the shared `ArtistPattern`):
+/// the name's gradient and its initials at 40%.
+struct PCArtistPatternArt: View {
+    let name: String
+    var initialsSize: CGFloat = 48
+
+    var body: some View {
+        let pattern = ArtistPattern.companion.of(artistName: name)
+        let stops = pattern.gradient.stops.map {
+            Gradient.Stop(color: pcToken(Int32($0.color)), location: CGFloat($0.at))
+        }
+        GeometryReader { geo in
+            let side = max(geo.size.width, 1)
+            ZStack {
+                if let linear = pattern.gradient as? ArtistPattern.GradientLinear {
+                    let p = linear.line(width: 1, height: 1)
+                    LinearGradient(stops: stops,
+                                   startPoint: UnitPoint(x: CGFloat(p.get(index: 0)), y: CGFloat(p.get(index: 1))),
+                                   endPoint: UnitPoint(x: CGFloat(p.get(index: 2)), y: CGFloat(p.get(index: 3))))
+                } else if let radial = pattern.gradient as? ArtistPattern.GradientRadial {
+                    RadialGradient(stops: stops,
+                                   center: UnitPoint(x: CGFloat(radial.centerX), y: CGFloat(radial.centerY)),
+                                   startRadius: 0,
+                                   endRadius: CGFloat(radial.radius(width: 1, height: 1)) * side)
+                }
+                Text(pattern.initials)
+                    .font(.system(size: initialsSize, weight: .bold))
+                    .tracking(initialsSize * 0.05)
+                    .foregroundStyle(pcToken(Int32(pattern.textColor)).opacity(Double(ArtistPattern.companion.INITIALS_ALPHA)))
+                    .lineLimit(1)
+            }
+            .frame(width: geo.size.width, height: geo.size.height)
+        }
+    }
+}
+
+/// The artist card (desktop `artist-card.js`), used by every artist grid and row: a rounded card
+/// with the card colour and shadow, the square photo full-bleed (the name's pattern when there's
+/// none or it won't load), the rank at its top left, then the name (14 / 500) and a subtitle
+/// (12 tertiary). `width` nil fills a grid cell; leave `onOpen` nil inside a link or button.
+struct PCArtistCard: View {
+    let name: String
+    let imageUrl: String?
+    var width: CGFloat? = pcRecCardWidth
+    var subtitle: String? = nil
+    var rank: Int? = nil
+    var onOpen: (() -> Void)? = nil
+
+    var body: some View {
+        let radius = CGFloat(cardSpec.ARTIST_RADIUS)
+        VStack(alignment: .leading, spacing: 0) {
+            Color.clear
+                .aspectRatio(1, contentMode: .fit)
+                .overlay {
+                    PCArtistImage(url: imageUrl.flatMap { URL(string: $0) }, artistName: name) {
+                        PCArtistPatternArt(name: name)
+                    }
+                }
+                .background(PC.placeholder)
+                .clipped()
+                .overlay(alignment: .topLeading) {
+                    if let rank { PCCardRankBadge(rank: rank) }
+                }
+            VStack(alignment: .leading, spacing: CGFloat(cardSpec.LINE_GAP)) {
+                Text(name)
+                    .font(.system(size: CGFloat(cardSpec.ARTIST_NAME_SIZE), weight: .medium))
+                    .foregroundStyle(PC.fg1)
+                    .lineLimit(1)
+                if let subtitle {
+                    Text(subtitle)
+                        .font(.system(size: CGFloat(cardSpec.LINE_SIZE)))
+                        .foregroundStyle(PC.fg3)
+                        .lineLimit(1)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(CGFloat(cardSpec.ARTIST_TEXT_PADDING))
+        }
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .background(PC.cardBg)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
+        .contentShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .onTapGesture { onOpen?() }
+        .accessibilityElement(children: .combine)
+    }
+}
+
+/// An artist card's stand-in (desktop `ArtistCardSkeleton`): the same box, the photo and `lines` bars.
+struct PCArtistCardSkeleton: View {
+    var width: CGFloat? = pcRecCardWidth
+    var lines: Int = 1
+
+    var body: some View {
+        let radius = CGFloat(cardSpec.ARTIST_RADIUS)
+        VStack(alignment: .leading, spacing: 0) {
+            PCSkeletonBox(radius: 0).aspectRatio(1, contentMode: .fit)
+            VStack(alignment: .leading, spacing: CGFloat(cardSpec.LINE_GAP) + 2) {
+                PCSkeletonBox(height: 14, radius: 4).frame(maxWidth: .infinity, alignment: .leading)
+                    .scaleEffect(x: 0.7, anchor: .leading)
+                if lines > 1 {
+                    PCSkeletonBox(height: 12, radius: 4).scaleEffect(x: 0.4, anchor: .leading)
+                }
+            }
+            .padding(CGFloat(cardSpec.ARTIST_TEXT_PADDING))
+        }
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .background(PC.cardBg)
+        .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
+        .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
         .accessibilityHidden(true)
     }
 }

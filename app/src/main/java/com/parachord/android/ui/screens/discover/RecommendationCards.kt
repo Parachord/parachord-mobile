@@ -124,7 +124,7 @@ fun RecAlbumCard(
     )
 }
 
-/** A recommended artist: a round-cornered photo and the name. */
+/** A recommended artist: the shared artist card. */
 @Composable
 fun RecArtistCard(
     item: RecommendationItem,
@@ -132,38 +132,17 @@ fun RecArtistCard(
     onOpen: () -> Unit,
     onLongPress: () -> Unit,
     modifier: Modifier = Modifier,
-    /** The card's width; the cover (or hexagon) scales with it. 140 dp in a scroller, wider in an open grid. */
+    /** The card's width; the photo scales with it. 140 dp in a scroller, wider in an open grid. */
     width: Dp = RecCardWidth,
 ) {
-    Column(
-        modifier = modifier
-            .width(width)
-            .hapticCombinedClickable(onClick = onOpen, onLongClick = onLongPress),
-    ) {
-        Box(
-            modifier = Modifier
-                .size(width)
-                .clip(RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surfaceVariant),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (!imageUrl.isNullOrBlank()) {
-                AsyncImage(
-                    model = imageUrl,
-                    contentDescription = item.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                ParachordIcon(
-                    AppIcon.User, contentDescription = null, size = 40.dp,
-                    tint = MaterialTheme.colorScheme.tertiary,
-                )
-            }
-        }
-        Spacer(Modifier.height(8.dp))
-        CardText(item.name, primary = true)
-    }
+    com.parachord.android.ui.components.ParachordArtistCard(
+        name = item.name,
+        imageUrl = imageUrl,
+        width = width,
+        onOpen = onOpen,
+        modifier = modifier,
+        onLongPress = onLongPress,
+    )
 }
 
 /** A service playlist: image, name and the service it came from. */
@@ -345,7 +324,9 @@ private fun SkeletonBar(widthFraction: Float, height: androidx.compose.ui.unit.D
 /** Placeholder while a row loads: [lines] text lines under the cover (album 3, playlist 2, artist 1). */
 @Composable
 fun RecCardSkeleton(lines: Int, modifier: Modifier = Modifier, width: Dp = RecCardWidth) {
-    CardSkeleton(width, modifier, lines = (lines - 1).coerceAtLeast(0))
+    // One line is an artist card (the name alone); more are an album or playlist card.
+    if (lines <= 1) com.parachord.android.ui.components.ArtistCardSkeleton(width, modifier)
+    else CardSkeleton(width, modifier, lines = lines - 1)
 }
 
 /** Placeholder for a listener while the Listeners row loads. */

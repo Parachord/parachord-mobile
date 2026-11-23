@@ -87,7 +87,7 @@ struct HomeHalfView: View {
                     // A plain HStack (3 cards): a lazy one left the skeletons zero height.
                     HStack(alignment: .top, spacing: halfGap) {
                         if half.body == IosHomePageKt.HALF_BODY_LOADING {
-                            ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 1, width: cardWidth) }
+                            ForEach(0..<Int(HomePageKt.HOME_HALF_ROW_CARDS), id: \.self) { _ in RecCardSkeleton(lines: 2, width: cardWidth) }
                         } else {
                             ForEach(half.cards, id: \.key) { card in
                                 HomeHalfCard(card: card, width: cardWidth, onOpen: { onOpen(card) }, onPlay: { onPlay(card) }, onOpenArtist: { onOpenArtist(card) })

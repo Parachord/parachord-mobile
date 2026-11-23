@@ -242,7 +242,7 @@ fun CollectionScreen(
                         } else {
                             LazyVerticalGrid(
                                 state = artistGridState,
-                                columns = adaptiveGridCells(circles = true),
+                                columns = adaptiveGridCells(),
                                 contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                                 horizontalArrangement = Arrangement.spacedBy(12.dp),
                                 verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -258,31 +258,13 @@ fun CollectionScreen(
 
                                     var showMenu by remember { mutableStateOf(false) }
 
-                                    Column(
-                                        horizontalAlignment = Alignment.CenterHorizontally,
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .hapticCombinedClickable(
-                                                onClick = { onNavigateToArtist(artist.name) },
-                                                onLongClick = { showMenu = true },
-                                            ),
-                                    ) {
-                                        AlbumArtCard(
-                                            artworkUrl = artist.imageUrl,
-                                            size = 96.dp,
-                                            cornerRadius = 48.dp,
-                                            placeholderName = artist.name,
-                                        )
-                                        Spacer(modifier = Modifier.height(6.dp))
-                                        Text(
-                                            text = artist.name,
-                                            style = MaterialTheme.typography.bodySmall,
-                                            maxLines = 1,
-                                            overflow = TextOverflow.Ellipsis,
-                                            textAlign = TextAlign.Center,
-                                            modifier = Modifier.fillMaxWidth(),
-                                        )
-                                    }
+                                    com.parachord.android.ui.components.ParachordArtistCard(
+                                        name = artist.name,
+                                        imageUrl = artist.imageUrl,
+                                        width = null,
+                                        onOpen = { onNavigateToArtist(artist.name) },
+                                        onLongPress = { showMenu = true },
+                                    )
 
                                     if (showMenu) {
                                         com.parachord.android.ui.components.ArtistContextMenu(

@@ -232,14 +232,11 @@ struct HistoryScreen: View {
 
     // ── Top Artists (3-col grid, circular) ─────────────────────────────
     private var topArtists: some View {
-        LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3), spacing: 18) {
+        LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12), spacing: 16) {
             ForEach(Array(model.topArtists.enumerated()), id: \.offset) { _, a in
                 NavigationLink(value: PCRoute.artist(a.name)) {
-                    VStack(spacing: 6) {
-                        artistCircle(a.imageUrl, seed: a.name)
-                        Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1).multilineTextAlignment(.center)
-                        Text(FormattersKt.playCountLabel(count: a.playCount)).font(.system(size: 10)).foregroundStyle(PC.fg3)
-                    }
+                    PCArtistCard(name: a.name, imageUrl: a.imageUrl, width: nil,
+                                 subtitle: FormattersKt.playCountLabel(count: a.playCount), rank: Int(a.rank))
                 }
                 .buttonStyle(.plain)
                 .pcArtistContextMenu(name: a.name, imageUrl: a.imageUrl, coordinator: coordinator,

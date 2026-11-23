@@ -1304,18 +1304,12 @@ struct ArtistScreen: View {
             if related.isEmpty {
                 Text("No related artists.").font(.system(size: 14)).foregroundStyle(PC.fg3).padding(40)
             } else {
-                LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, minCard: LayoutRules.shared.GRID_CIRCLE_MIN, minColumns: 3, alignment: .top), spacing: 16) {
+                LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 12, alignment: .top), spacing: 16) {
                     ForEach(Array(related.enumerated()), id: \.offset) { _, a in
                         Button { navArtist = a.name } label: {
-                            VStack(spacing: 6) {
-                                relatedCircle(a)
-                                // Reserve a fixed 2-line height so 1- and 2-line
-                                // names occupy the same space — keeps every cell
-                                // identical and the circles aligned across rows.
-                                Text(a.name).font(.system(size: 12, weight: .medium)).foregroundStyle(PC.fg1)
-                                    .multilineTextAlignment(.center).lineLimit(2)
-                                    .frame(maxWidth: .infinity, minHeight: 32, alignment: .top)
-                            }
+                            PCArtistCard(name: a.name,
+                                         imageUrl: ArtistImageCache.shared.image(for: a.name) ?? nonPlaceholderArt(a.imageUrl),
+                                         width: nil)
                         }
                         .buttonStyle(.plain)
                         .onAppear { ArtistImageCache.shared.fetch(a.name) }
