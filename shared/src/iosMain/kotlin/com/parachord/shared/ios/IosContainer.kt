@@ -2442,6 +2442,11 @@ class IosContainer private constructor() {
     suspend fun recommendationsListenerPlay(service: String, username: String): IosRecQueueResult =
         listenerQueueResult(service, username, username) { s, u -> friendsRepository.listenerTopTracks(s, u) }
 
+    /** A saved friend's recent top 10 (the Friends tab's listener card play), named as the friend. */
+    @Throws(Throwable::class)
+    suspend fun friendTopTracksPlay(service: String, username: String, name: String): IosRecQueueResult =
+        listenerQueueResult(service, username, name) { s, u -> friendsRepository.listenerTopTracks(s, u) }
+
     /** Follows a listener: null on success (the page reloads without them), else the message to show. */
     @Throws(Throwable::class)
     suspend fun followListener(service: String, username: String): String? = try {
