@@ -1,6 +1,6 @@
 # Parachord for Android and iOS
 
-A unified music player that brings Spotify, Apple Music, SoundCloud, Bandcamp, and your local files into one queue. Parachord resolves every track across your available sources and plays from the best match based on a configurable resolver priority.
+A unified music player that brings Spotify, Apple Music, SoundCloud, Bandcamp, Amazon Music, your own Subsonic or Navidrome server, and your local files into one queue. Parachord finds every track on each of your services and plays it from the best match, in the order you rank them.
 
 This repo holds both mobile companions to the [Parachord desktop app](https://github.com/Parachord/parachord): a native **Android** app (Jetpack Compose) and a native **iOS** app (SwiftUI). They share one Kotlin Multiplatform core. Both apps use the same resolver pipeline, plugin system and playlist sync as desktop, and the Android app is very close to feature parity.
 
@@ -104,19 +104,23 @@ One queue across all sources. Tap any track and Parachord figures out where to p
 | **SoundCloud** | SoundCloud's own player in a hidden WebView | Same, in a hidden WKWebView |
 | **Local files** | Device media library, with artwork extraction and online enrichment | Device music library |
 | **Bandcamp** | Bandcamp's own player in a hidden WebView | Same, in a hidden WKWebView |
+| **Subsonic / Navidrome** (your own server) | ExoPlayer, from a stream URL the plug-in builds at play time | AVPlayer, the same way |
+| **Amazon Music** | ExoPlayer with Widevine, from the plug-in's manifest and licence; purchases fall back to a plain stream | FairPlay HLS through AVFoundation; purchases fall back to a plain stream |
 | **Direct HTTP streams** | ExoPlayer | AVPlayer |
+
+**Playback quality (Android).** Settings → General → Playback Quality sets the tier, adaptive streaming and "Prefer Dolby Atmos mixes" for the services that follow it (Amazon Music, and Apple Music's bitrate). Atmos is offered only when the phone, or the output it's connected to, can play it. Now Playing shows a Lossless or Dolby Atmos badge, and the car is told when a track is in Atmos. Each plug-in's settings say who sets its quality (for example "Set in the Spotify app").
 
 ### Resolver pipeline
 Sources are scored priority first, confidence second. A Spotify result at 70% confidence beats SoundCloud at 95% when Spotify is ranked higher. Matches below 60% confidence are dropped, so a wrong song never plays. An exact ISRC or MusicBrainz recording match scores 100%, even when the names differ.
 
-Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > youtube`. You can change it in settings.
+Default order: `spotify > applemusic > bandcamp > soundcloud > localfiles > subsonic > youtube`. You can change it in Settings, and a plug-in you turn off and on again goes back where you ranked it.
 
 ### Playlist and library sync
 - **Spotify, Apple Music and ListenBrainz.** Import playlists, saved tracks, albums and followed artists, and push locally created playlists to any of them. A playlist pulled from one service can mirror to the others.
 - **Hosted XSPF.** Import any `.xspf` URL, such as a radio station's "recently played" feed. Parachord polls it every 5 minutes and keeps the local copy and its mirrors in step.
-- **Three-layer dedup** prevents duplicate remote playlists on re-sync. Track removals are remembered, so a removed track isn't re-imported by the next pull.
+- **Three-layer dedup** prevents duplicate remote playlists on re-sync. Track removals are remembered, so a removed track isn't re-imported by the next pull. A song you saved on one service and synced from another stays one row in your collection.
+- **Sync never shrinks a playlist by accident.** A playlist is pushed back to the service it came from only when you edited it here. A mirror isn't rewritten while some of its tracks haven't been looked up on that service yet (offline, rate-limited); it waits for the next sync. Deleting a playlist removes it only from the services you tick.
 - **New sync engine (preview).** An opt-in sync engine merges edits made on any service. Before you switch, it shows a dry-run preview of exactly what would change.
-
 - **Remove duplicates.** When a playlist holds the same song more than once, its page shows a banner that removes the later copies (keeping the first of each) after you confirm. Synced copies on other services get the cleaned list on the next sync.
 
 Apple Music's API can't delete or rename playlists or remove tracks from them, so those changes have to be made in the Apple Music app.
@@ -126,11 +130,11 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 - **Fresh Drops** and **Critical Darlings**: curated new releases.
 - **Pop of the Tops**: chart albums and songs by country, with songs from Apple Music or Last.fm (including a global Last.fm chart).
 - **Home** (Android and iOS, from one shared model): desktop's Home. Jump back in, mixes made from your listening (ListenBrainz's Daily and Weekly Jams, Apple Music's Heavy Rotation and Replay), your playlists freshest first, albums you might love, Fresh Drops and Critical Darlings, concerts near you and Ask Shuffleupagus. A new profile gets a three-step getting-started layout instead.
-- **Weekly Jams** and **Weekly Exploration**: the last four weeks of each, pulled automatically from ListenBrainz. Weekly Jams is one of Home's mixes; Weekly Exploration is in Recommendations' Playlists row.
+- **Weekly Jams** and **Weekly Exploration**: this week's playlists from ListenBrainz. Weekly Jams is one of Home's mixes; Weekly Exploration is in Recommendations' Playlists row. Saving one keeps that week's copy under its date.
 - **On Tour**: a teal dot next to the artist name when they're playing near you. The radius is configurable.
 - **Friends**: see what your Last.fm and ListenBrainz contacts have been playing, and **Listen Along** with them.
 - **Spinoff**: start a radio of similar tracks from whatever is playing, without touching your queue. When Last.fm has few similar tracks for a song, the radio fills up with the top songs of similar artists.
-- **Android Auto and CarPlay**: browse your playlists, loved songs and Collection Radio from the car, with Now Playing buttons for the heart and Spinoff and (CarPlay) Up Next. Both draw one shared browse tree.
+- **Android Auto and CarPlay**: browse your playlists, loved songs and Collection Radio from the car, with Now Playing buttons for the heart and Spinoff and (CarPlay) Up Next. Both draw one shared browse tree. After three tracks in a row that can't play, playback stops and asks you to open Parachord on the phone, instead of running silently to the end of the queue.
 - **Concerts**: Ticketmaster and SeatGeek search, filtered by location.
 
 ### AI features (bring your own key)
@@ -144,13 +148,15 @@ Apple Music's API can't delete or rename playlists or remove tracks from them, s
 
 ### Sharing
 - **Tracks, albums and artists** share as [Achordion](https://achordion.xyz) links. Recipients get a rich preview with per-service listen buttons (Spotify, Apple Music, SoundCloud), whatever platform they're on.
-- **Playlists** share as smart links via `go.parachord.com`, falling back to a `parachord.com/go` deeplink if the smart-link service is unreachable.
+- **Playlists** share as Achordion playlist links through their ListenBrainz copy, so a playlist has to be synced to ListenBrainz first. ListenBrainz copies are private; if the one you share is, Parachord asks whether to make it public, and shares nothing if you say no.
 - **iOS share extension**: send a Spotify or Apple Music link to Parachord from any app.
 
 ### .axe plugin system
-Both apps run the same plugins as desktop. They're bundled as `.axe` files and updated at runtime from the [`parachord-plugins`](https://github.com/Parachord/parachord-plugins) marketplace, checked at most once a day. Android hosts them in a headless WebView and iOS in JavaScriptCore, and both run desktop's `resolver-loader.js` unchanged.
+Both apps run the same plugins as desktop. Most are bundled as `.axe` files, and all are updated at runtime from the [`parachord-plugins`](https://github.com/Parachord/parachord-plugins) marketplace, checked at most once a day. Android hosts them in a headless WebView and iOS in JavaScriptCore, and both run desktop's `resolver-loader.js` unchanged. A plugin can name the oldest app version it works with, and a plugin that needs something the app doesn't provide isn't loaded.
 
-Plugin types: content resolvers, AI providers, meta-services (Last.fm, MusicBrainz, Discogs, Wikipedia), scrobblers and concert services. YouTube and Ollama are filtered out on mobile (`capabilities.mobile: false`). Native resolvers (Spotify, Apple Music, plus local files on Android) take priority over their `.axe` equivalents for speed. SoundCloud and Bandcamp resolve through their plugins on both apps. A plugin that declares `capabilities.html5Stream` (Subsonic: your own Navidrome/Subsonic server) streams through the host player (ExoPlayer on Android, AVPlayer on iOS), with the plugin building the stream URL at play time; its settings fields render in Settings with a Test connection button. Amazon Music's purchases also play from a plain stream the plugin builds: on iOS always, on Android when its Widevine stream doesn't start.
+Plugin types: content resolvers, AI providers, meta-services (Last.fm, MusicBrainz, Discogs, Wikipedia), scrobblers and concert services. YouTube and Ollama are filtered out on mobile (`capabilities.mobile: false`). Native resolvers (Spotify, Apple Music, plus local files on Android) take priority over their `.axe` equivalents for speed. SoundCloud and Bandcamp resolve through their plugins on both apps. A plugin that declares `capabilities.html5Stream` (Subsonic: your own Navidrome/Subsonic server) streams through the host player (ExoPlayer on Android, AVPlayer on iOS), with the plugin building the stream URL at play time; its settings fields render in Settings with a Test connection button. Amazon Music signs in through a web session the app hosts. It plays its catalog through Widevine on Android and FairPlay on iOS, and plays your purchases from a plain stream when those don't start.
+
+Each music plug-in's settings have one **Enable** switch. While it's on, there are separate switches for **Play from**, **Use metadata from** and **Use recommendations from** that plug-in. A plug-in that reports its own account (Amazon Music) shows the account there, with Sign in and Sign out. A plan that can't play, or plays only your purchases, is shown on the plug-in's tile in the priority list.
 
 ### Background resilience (Android)
 External playback (Apple Music, Spotify Connect) survives screen-off, Doze mode and Android's foreground-service killer. A silent 1-second WAV loops on ExoPlayer, which keeps `MediaSessionService` happy while the DRM audio flows through MusicKit or Spotify. See [CLAUDE.md](CLAUDE.md), "External Playback Background Survival", for the rationale.
@@ -161,7 +167,7 @@ Parachord is a player for people who already subscribe to the services it plays 
 
 - **Your account, the service's own streams.** Each service plays through your own account, using that service's own player, its official API, or the same endpoints its own web player uses. Either way, the stream, its license and its quality come from the service. On the subscription services (Spotify, Apple Music, and any other subscription service a resolver plays from), your plays are reported to the service the way its own player reports them, so they count. Where a service needs a subscription for full tracks, so does Parachord.
 - **No ripping.** Parachord doesn't decrypt, record, download or save protected streams. It doesn't extract decryption keys, and it doesn't unlock tiers or content your subscription doesn't include.
-- **Decryption stays with the service.** On Android and iOS, Spotify plays in Spotify's own app through Spotify Connect. Apple Music on iOS plays through Apple's MusicKit. Apple Music on Android plays through Apple's MusicKit JS player and is decrypted inside Google's Widevine module, using a license Apple issues to your account. A plug-in that supplies a Widevine stream (Amazon Music, not yet enabled on the phones) plays the same way on Android: the plug-in fetches the service's manifest and licence for your account, and Google's Widevine module decrypts it. Parachord never sees the decryption keys and never saves the audio.
+- **Decryption stays with the service.** On Android and iOS, Spotify plays in Spotify's own app through Spotify Connect. Apple Music on iOS plays through Apple's MusicKit. Apple Music on Android plays through Apple's MusicKit JS player and is decrypted inside Google's Widevine module, using a license Apple issues to your account. A plug-in that supplies a DRM stream (Amazon Music) plays the same way: the plug-in fetches the service's manifest and licence for your account, and Google's Widevine module (Android) or Apple's FairPlay (iOS) decrypts it. Parachord never sees the decryption keys and never saves the audio.
 - **Plug-ins follow the same rules.** A plug-in that tries to get around a service's protections isn't accepted into the Parachord marketplace, and is removed if one slips through (see the [plug-in guidelines](https://github.com/Parachord/parachord-plugins#guidelines)). Plug-ins installed from anywhere else aren't reviewed, so Parachord can't vouch for them.
 
 If you work for a music service and have a concern about how Parachord plays your catalog, please [open an issue](https://github.com/Parachord/parachord-mobile/issues).
@@ -262,7 +268,7 @@ Run the shared tests on the iOS simulator with `./gradlew :shared:iosSimulatorAr
 git push && git push origin v0.4.0-beta.3
 ```
 
-The `v*` push triggers the release workflow. It signs the APK and AAB, attaches both to a GitHub Release, and uploads the AAB to the Play Console internal track. Prerelease version names (a hyphen in the semver) always go to `internal`, whatever the track flag says.
+The `v*` push triggers the release workflow. It signs the APK and AAB, attaches both to a GitHub Release, and uploads the AAB to Play's closed testing track (`alpha`). Prerelease version names (a hyphen in the semver) go to `internal` instead. To put a stable build on internal testing as well, add it in the Play Console.
 
 **iOS** builds are archived with `iosApp/scripts/testflight.sh` (`--upload` sends them to App Store Connect), then added to the TestFlight groups. See [iosApp/README.md](iosApp/README.md).
 
@@ -291,15 +297,21 @@ shared/src/
 ├── commonMain/kotlin/com/parachord/shared/
 │   ├── ai/          # DJ chat + recommendations: providers, tool loop, prompts
 │   ├── api/         # Ktor clients (Spotify, Apple Music, Last.fm, MusicBrainz, ListenBrainz, Achordion, …)
+│   ├── car/         # Android Auto / CarPlay browse tree and rules
 │   ├── db/          # SQLDelight schema, queries, DAOs
+│   ├── home/        # Home's model and session, drawn by both apps
 │   ├── metadata/    # Metadata cascade, MBID + image enrichment
 │   ├── model/       # Track, Album, Artist, Playlist, …
-│   ├── playback/    # Queue, scrobbling
-│   ├── plugin/      # PluginManager, JsRuntime interface, marketplace sync
+│   ├── playback/    # Queue and repeat rules, scrobbling, Listen Along, Spinoff, DRM quality
+│   ├── plugin/      # PluginManager, JsRuntime interface, marketplace sync, plug-in status
+│   ├── recommendations/ # Recommendations page model
 │   ├── repository/  # Library, history, friends, charts, concerts, recommendations, …
 │   ├── resolver/    # Resolver coordinator + scoring
+│   ├── search/      # Search session
 │   ├── settings/    # SettingsStore
-│   └── sync/        # Sync engine + Spotify / Apple Music / ListenBrainz providers
+│   ├── sync/        # Sync engine + Spotify / Apple Music / ListenBrainz providers
+│   ├── ui/          # Design tokens and desktop's icon set
+│   └── websession/  # Web-session host for cookie-based services (Amazon Music)
 ├── androidMain/     # Android actuals
 └── iosMain/         # iOS actuals, IosContainer, IosResolverRuntime
 
@@ -307,9 +319,10 @@ app/src/main/java/com/parachord/android/
 ├── auth/            # OAuth flows (Spotify, Last.fm, SoundCloud)
 ├── bridge/          # WebView JS runtime for .axe plugins
 ├── data/            # Typealias shims to shared, local media scanner
-├── playback/        # PlaybackController, PlaybackService, Spotify / Apple Music / SoundCloud handlers
+├── playback/        # PlaybackController, PlaybackService, Spotify / Apple Music / SoundCloud / Bandcamp / plug-in stream handlers, Widevine (drm/)
 ├── resolver/        # ResolverManager, AndroidResolverRuntime, TrackResolverCache
 ├── ui/              # Compose screens, components, navigation, theme
+├── websession/      # Hidden WebView and sign-in screen for web-session plug-ins
 └── widget/          # Home screen mini player widget
 
 iosApp/
@@ -332,7 +345,8 @@ For the full list of "lessons learned the hard way", see [CLAUDE.md](CLAUDE.md).
 A full security review was completed in April 2026; see [SECURITY.md](SECURITY.md). Highlights:
 - The network security config rejects cleartext traffic app-wide.
 - Release builds fail if `CI_KEYSTORE_PATH` is unset; there's no fallback to the debug keystore.
-- XSPF imports block SSRF: HTTPS only, plus a literal-host check on every poll, not just at import, in case DNS changes.
+- Playlist URL fetches (XSPF imports and polls, playlist links) block SSRF: HTTPS only, a literal-host check on every fetch and every redirect hop, and a size cap while the body is read.
+- Credentials never reach a log line: secret headers and query values are redacted, and release builds don't log HTTP at all.
 - OAuth flows use PKCE and a state parameter, with a separate verifier per flow.
 - OAuth tokens and API keys are stored in the Android Keystore-backed `EncryptedSharedPreferences` or the iOS Keychain, never in plain preferences.
 - `.claude/`, `play-service-account.json`, `local.properties` and `Secrets.xcconfig` are gitignored.
@@ -345,7 +359,7 @@ GitHub Actions workflows live in [`.github/workflows/`](.github/workflows):
 
 - **`build.yml`**: on pushes to `main`, PRs and `v*` tags.
   - **Push or PR**: builds the signed Android release APK and AAB and uploads them as 14-day artifacts.
-  - **Tag push (`v*`)**: does everything above, then publishes a GitHub Release with the APK and AAB attached, and uploads the AAB to the Play Console internal testing track (when the `PLAY_SERVICE_ACCOUNT_JSON` secret is present).
+  - **Tag push (`v*`)**: does everything above, then publishes a GitHub Release with the APK and AAB attached, and uploads the AAB to Play's closed testing track (internal for prerelease tags) when the `PLAY_SERVICE_ACCOUNT_JSON` secret is present.
 - **`android-tests.yml`**: the JVM unit test suites.
 - **`ios-tests.yml`**: the shared tests on the iOS simulator, for changes to `shared/` or the build config.
 - **`sync-plugins.yml`**: opens a PR when the marketplace has newer versions of the bundled `.axe` plugins.
