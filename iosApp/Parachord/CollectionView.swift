@@ -386,9 +386,7 @@ struct CollectionView: View {
         HStack(alignment: .top, spacing: 12) {
             // Circular avatar + on-air green dot (design's ios-drawer__avatar).
             ZStack(alignment: .bottomTrailing) {
-                Color.clear.frame(width: 46, height: 46)
-                    .overlay { PCArtistImage(url: f.avatarUrl.flatMap { URL(string: $0) }) { PCArtwork(name: f.displayName, size: nil, radius: 0) } }
-                    .clipShape(PCHexagon())   // friends = hexagons
+                PCFriendAvatar(name: f.displayName, avatarUrl: f.avatarUrl, size: .medium)
                 if f.isOnAir {
                     Circle().fill(PC.success)
                         .frame(width: 12, height: 12)

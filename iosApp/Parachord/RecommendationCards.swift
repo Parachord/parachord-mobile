@@ -154,53 +154,29 @@ struct ListenerCard: View {
     let onOpen: () -> Void
     let onPlay: () -> Void
 
-    private var avatar: CGFloat { width * (120.0 / 140.0) }
-
     var body: some View {
-        VStack(spacing: 0) {
-            ZStack {
-                Group {
-                    if let url = listener.avatarUrl, let u = URL(string: url) {
-                        PCCachedImage(url: u) { img in img.resizable().aspectRatio(contentMode: .fill) }
-                            placeholder: { initial }
-                    } else {
-                        initial
-                    }
-                }
-                .frame(width: avatar, height: avatar)
-                .background(ResolverColor.solid(listener.service))
-                .clipShape(PCHexagon())
-                if let badge = listener.badge {
+        PCListenerCard(
+            name: listener.name, avatarUrl: listener.avatarUrl, width: width,
+            badge: listener.badge.map { badge in
+                AnyView(
                     Text(badge)
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(PC.onAccent)
                         .lineLimit(1)
-                        .padding(.horizontal, 8).padding(.vertical, 2)
+                        .padding(.horizontal, 7).padding(.vertical, 1)
                         .background(Capsule().fill(ResolverColor.solid(listener.service)))
-                        .frame(width: avatar, height: avatar, alignment: .bottom)
-                }
-                // Desktop's friend card plays the person's top tracks.
-                PCArtPlayButton(title: listener.name, onPlay: onPlay)
-                    .offset(x: 8, y: -8)
-                    .frame(width: avatar, height: avatar, alignment: .topTrailing)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom))
+            },
+            onOpen: onOpen, onPlay: onPlay
+        ) {
+            VStack(spacing: 2) {
+                RecCardText(text: listener.serviceName.isEmpty ? "\u{00A0}" : listener.serviceName, center: true)
+                // Two lines always, so every card in the row is the same height.
+                RecCardText(text: listener.topArtists, tertiary: true, lines: 2, center: true)
+                    .frame(height: 32, alignment: .top)
             }
-            .frame(width: avatar, height: avatar)
-            Spacer().frame(height: 8)
-            RecCardText(text: listener.name, primary: true, center: true)
-            RecCardText(text: listener.serviceName, center: true)
-            // Fixed two-line height so every card in the row lines up.
-            RecCardText(text: listener.topArtists, tertiary: true, lines: 2, center: true)
-                .frame(height: 32, alignment: .top)
+            .padding(.top, 2)
         }
-        .frame(width: width)
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onOpen)
-    }
-
-    private var initial: some View {
-        Text(String(listener.name.prefix(1)).uppercased())
-            .font(.system(size: 48, weight: .bold))
-            .foregroundStyle(PC.onAccent)
     }
 }
 
@@ -218,19 +194,24 @@ struct RecCardSkeleton: View {
 /// Placeholder for a listener while the Listeners row loads.
 struct ListenerCardSkeleton: View {
     var width: CGFloat = pcRecCardWidth
-    private var avatar: CGFloat { width * (120.0 / 140.0) }
 
     var body: some View {
+        let spec = FriendAvatarSpec.shared
+        let avatar = CGFloat(spec.LISTENER_AVATAR)
         VStack(spacing: 0) {
             PCSkeletonBox(width: avatar, height: avatar, radius: 0)
-                .clipShape(PCHexagon())
-            Spacer().frame(height: 8)
-            VStack(spacing: 4) {
+                .clipShape(PCHexagon(listener: true))
+            Spacer().frame(height: CGFloat(spec.LISTENER_NAME_GAP))
+            VStack(spacing: 6) {
                 PCSkeletonBox(width: width * 0.6, height: 12, radius: 4)
                 PCSkeletonBox(width: width * 0.4, height: 10, radius: 4)
+                PCSkeletonBox(width: width * 0.7, height: 10, radius: 4)
             }
         }
+        .padding(.horizontal, CGFloat(spec.LISTENER_PADDING_H)).padding(.vertical, CGFloat(spec.LISTENER_PADDING_V))
         .frame(width: width)
+        .background(RoundedRectangle(cornerRadius: CGFloat(CardSpec.shared.RADIUS), style: .continuous).fill(PC.cardBg)
+            .shadow(color: .black.opacity(0.08), radius: 2, y: 1))
         .accessibilityHidden(true)
     }
 }
@@ -324,7 +305,8 @@ struct PCCardLines: View {
             Text(line.isEmpty ? "\u{00A0}" : line)
                 .font(.system(size: CGFloat(cardSpec.LINE_SIZE)))
                 .foregroundStyle(i >= tertiaryFrom ? PC.fg3 : PC.fg2)
-                .lineLimit(i == 0 ? firstLineLimit : 1)
+                // A wrapping first line keeps its full height, so a row of cards lines up.
+                .lineLimit(i == 0 ? firstLineLimit : 1, reservesSpace: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
@@ -581,5 +563,117 @@ struct PCArtistCardSkeleton: View {
         .clipShape(RoundedRectangle(cornerRadius: radius, style: .continuous))
         .shadow(color: .black.opacity(0.08), radius: 2, y: 1)
         .accessibilityHidden(true)
+    }
+}
+
+// MARK: - The friend avatar and listener card (desktop friend-avatar.js / listener-card.js)
+
+/// A friend's hexagon avatar: their photo, or their initial in white on the avatar gradient. A photo
+/// that won't load falls back to the initial. Sizes come from the shared `FriendAvatarSpec.Size`.
+struct PCFriendAvatar: View {
+    let name: String?
+    let avatarUrl: String?
+    var side: CGFloat
+    var fontSize: CGFloat
+
+    init(name: String?, avatarUrl: String?, size: FriendAvatarSpec.Size = .small) {
+        self.name = name; self.avatarUrl = avatarUrl
+        self.side = CGFloat(size.box); self.fontSize = CGFloat(size.font)
+    }
+
+    init(name: String?, avatarUrl: String?, side: CGFloat, fontSize: CGFloat) {
+        self.name = name; self.avatarUrl = avatarUrl; self.side = side; self.fontSize = fontSize
+    }
+
+    var body: some View {
+        let spec = FriendAvatarSpec.shared
+        Color.clear
+            .frame(width: side, height: side)
+            .overlay {
+                PCArtistImage(url: avatarUrl.flatMap { URL(string: $0) }) {
+                    LinearGradient(colors: [pcToken(Int32(spec.GRADIENT_FROM)), pcToken(Int32(spec.GRADIENT_TO))],
+                                   startPoint: .topLeading, endPoint: .bottomTrailing)
+                        .overlay {
+                            Text(spec.initial(name: name))
+                                .font(.system(size: fontSize, weight: .medium))
+                                .foregroundStyle(PC.onAccent)
+                        }
+                }
+            }
+            .clipShape(PCHexagon())
+            .accessibilityHidden(true)
+    }
+}
+
+/// The card for a person whose listening you follow (desktop `listener-card.js`): the card box, a
+/// 100 pt regular hexagon in a ring that's green while they're on air (with the on-air dot), their
+/// photo or initial inside, `badge` over the hexagon's foot, the play disc, the name (with a pin mark
+/// when pinned), then `details`.
+struct PCListenerCard<Details: View>: View {
+    let name: String
+    let avatarUrl: String?
+    var width: CGFloat? = pcRecCardWidth
+    var onAir = false
+    var pinned = false
+    var badge: AnyView? = nil
+    let onOpen: () -> Void
+    var onPlay: (() -> Void)? = nil
+    @ViewBuilder var details: () -> Details
+
+    var body: some View {
+        let spec = FriendAvatarSpec.shared
+        let avatar = CGFloat(spec.LISTENER_AVATAR)
+        let ring = CGFloat(spec.LISTENER_RING)
+        VStack(spacing: 0) {
+            ZStack {
+                PCHexagon(listener: true)
+                    .fill(onAir
+                          ? AnyShapeStyle(PC.success)
+                          : AnyShapeStyle(LinearGradient(colors: [PC.hoverSubtle, PC.hoverDefault],
+                                                         startPoint: .topLeading, endPoint: .bottomTrailing)))
+                Color.clear
+                    .overlay {
+                        PCArtistImage(url: avatarUrl.flatMap { URL(string: $0) }) {
+                            PC.placeholder.overlay {
+                                Text(spec.initial(name: name))
+                                    .font(.system(size: CGFloat(spec.LISTENER_INITIAL_SIZE), weight: .medium))
+                                    .foregroundStyle(PC.fg3)
+                            }
+                        }
+                    }
+                    .clipShape(PCHexagon(listener: true))
+                    .padding(ring)
+                if onAir {
+                    Circle().fill(PC.success)
+                        .frame(width: CGFloat(spec.ON_AIR_DOT), height: CGFloat(spec.ON_AIR_DOT))
+                        .overlay(Circle().strokeBorder(PC.cardBg, lineWidth: CGFloat(spec.ON_AIR_DOT_BORDER)))
+                        .padding(.trailing, CGFloat(spec.ON_AIR_DOT_END)).padding(.bottom, CGFloat(spec.ON_AIR_DOT_BOTTOM))
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottomTrailing)
+                }
+                if let badge { badge }
+                if let onPlay {
+                    PCArtPlayButton(title: name, onPlay: onPlay)
+                        .padding(recArtPlayInset)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topTrailing)
+                }
+            }
+            .frame(width: avatar, height: avatar)
+            Spacer().frame(height: CGFloat(spec.LISTENER_NAME_GAP))
+            HStack(spacing: 4) {
+                Text(name).font(.system(size: 13, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
+                if pinned { PCIcon(icon: .bookmark, size: 12, tint: PC.accentSoft) }
+            }
+            .frame(height: 20)
+            details()
+        }
+        .padding(.horizontal, CGFloat(spec.LISTENER_PADDING_H)).padding(.vertical, CGFloat(spec.LISTENER_PADDING_V))
+        .frame(width: width)
+        .frame(maxWidth: width == nil ? .infinity : nil)
+        .background(RoundedRectangle(cornerRadius: CGFloat(CardSpec.shared.RADIUS), style: .continuous).fill(PC.cardBg)
+            .shadow(color: .black.opacity(0.08), radius: 2, y: 1))
+        .contentShape(RoundedRectangle(cornerRadius: CGFloat(CardSpec.shared.RADIUS), style: .continuous))
+        .onTapGesture(perform: onOpen)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel(spec.openLabel(name: name))
     }
 }

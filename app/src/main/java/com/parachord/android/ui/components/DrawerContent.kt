@@ -304,26 +304,7 @@ private fun DrawerFriendItem(
         ) {
             // Hexagonal avatar with on-air indicator (desktop: w-8 h-8, hex clip)
             Box(modifier = Modifier.padding(top = 2.dp)) {
-                // Avatar placeholder or image, hex-clipped
-                Box(
-                    modifier = Modifier
-                        .size(32.dp)
-                        .clip(HexagonShape),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    if (!friend.avatarUrl.isNullOrBlank()) {
-                        SubcomposeAsyncImage(
-                            model = friend.avatarUrl,
-                            contentDescription = friend.displayName,
-                            contentScale = ContentScale.Crop,
-                            modifier = Modifier.size(32.dp),
-                            loading = { HexAvatarFallback(friend.displayName) },
-                            error = { HexAvatarFallback(friend.displayName) },
-                        )
-                    } else {
-                        HexAvatarFallback(friend.displayName)
-                    }
-                }
+                FriendAvatar(friend.displayName, friend.avatarUrl)
 
                 // On-air green dot with border matching sidebar bg (desktop: w-3 h-3)
                 if (friend.isOnAir) {

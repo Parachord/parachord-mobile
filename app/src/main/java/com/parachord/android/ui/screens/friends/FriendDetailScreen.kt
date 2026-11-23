@@ -157,11 +157,9 @@ fun FriendDetailScreen(
                     .padding(vertical = 12.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
             ) {
-                AlbumArtCard(
-                    artworkUrl = currentFriend.avatarUrl,
-                    size = 80.dp,
-                    cornerRadius = 40.dp,
-                    placeholderName = currentFriend.displayName,
+                com.parachord.android.ui.components.FriendAvatar(
+                    currentFriend.displayName, currentFriend.avatarUrl,
+                    size = com.parachord.shared.ui.FriendAvatarSpec.Size.LARGE,
                 )
                 if (currentFriend.isOnAir) {
                     Spacer(modifier = Modifier.height(6.dp))
