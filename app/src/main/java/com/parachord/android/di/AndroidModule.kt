@@ -341,6 +341,9 @@ val androidModule = module {
             )""".trimIndent(),
             0,
         )
+        // Track rows left behind by playlist deletes from before PlaylistDao.delete
+        // removed them (foreign keys are off, so the cascade never ran).
+        driver.execute(null, com.parachord.shared.db.OrphanPlaylistTracks.DELETE_ORPHANS, 0)
         com.parachord.shared.db.ParachordDb(driver)
     }
 
