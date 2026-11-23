@@ -1114,8 +1114,7 @@ class SettingsStore(
         kv.observeStringOrNull(ENABLED_SYNC_PROVIDERS).map(::parseEnabledSyncProviders)
     }
 
-    @Throws(Throwable::class)
-    suspend fun setEnabledSyncProviders(providers: Set<String>) {
+    override suspend fun setEnabledSyncProviders(providers: Set<String>) {
         ensureMigrated(); kv.setString(ENABLED_SYNC_PROVIDERS, providers.joinToString(","))
     }
 

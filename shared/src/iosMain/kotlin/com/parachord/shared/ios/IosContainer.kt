@@ -1249,12 +1249,9 @@ class IosContainer private constructor() {
      */
     @Throws(Throwable::class)
     suspend fun disableSyncProvider(providerId: String, removeItems: Boolean) {
-        syncEngine.stopProviderSync(providerId, removeItems)
-        val current = settingsStore.getEnabledSyncProviders().toMutableSet()
-        current.remove(providerId)
-        settingsStore.setEnabledSyncProviders(current)
+        val remaining = syncEngine.disableProvider(providerId, removeItems)
         val s = settingsStore.getSyncSettings()
-        settingsStore.saveSyncSettings(s.copy(enabled = current.isNotEmpty()))
+        settingsStore.saveSyncSettings(s.copy(enabled = remaining.isNotEmpty()))
     }
 
     // Shared FriendsRepository — full add/remove/pin/sync/activity surface.

@@ -3658,7 +3658,8 @@ private fun SyncTab(
      *  is reused — Spotify rows write `"spotify"`, the AM "Configure Sync…"
      *  row below writes `"applemusic"`. */
     var syncSetupProviderId by remember { mutableStateOf("spotify") }
-    var showStopSyncDialog by remember { mutableStateOf(false) }
+    /** The provider whose "Stop syncing" keep-or-remove prompt is up, or null. */
+    var stopSyncProviderId by remember { mutableStateOf<String?>(null) }
     /** When non-null, the per-provider "Configure what syncs" sheet (#266) is
      *  open for this provider (pull picker for Spotify/AM, push picker for LB). */
     var configSyncProviderId by remember { mutableStateOf<String?>(null) }
@@ -3780,7 +3781,7 @@ private fun SyncTab(
                                         pendingEnableProviderId = "spotify"
                                         configSyncProviderId = "spotify"
                                     } else {
-                                        showStopSyncDialog = true
+                                        stopSyncProviderId = "spotify"
                                     }
                                 },
                             )
@@ -3869,7 +3870,7 @@ private fun SyncTab(
                                         pendingEnableProviderId = "applemusic"
                                         configSyncProviderId = "applemusic"
                                     } else {
-                                        onSetAppleMusicSyncEnabled(false)
+                                        stopSyncProviderId = "applemusic"
                                     }
                                 },
                             )
@@ -3950,7 +3951,7 @@ private fun SyncTab(
                                         pendingEnableProviderId = "listenbrainz"
                                         configSyncProviderId = "listenbrainz"
                                     } else {
-                                        onSetListenBrainzSyncEnabled(false)
+                                        stopSyncProviderId = "listenbrainz"
                                     }
                                 },
                             )
@@ -4208,24 +4209,24 @@ private fun SyncTab(
         settingsViewModel.clearMigrationReport()
     }
 
-    if (showStopSyncDialog) {
+    stopSyncProviderId?.let { stopId ->
         AlertDialog(
-            onDismissRequest = { showStopSyncDialog = false },
+            onDismissRequest = { stopSyncProviderId = null },
             containerColor = ModalBg,
             titleContentColor = ModalTextActive,
             textContentColor = ModalTextPrimary,
-            title = { Text("Stop Syncing") },
+            title = { Text("Stop syncing ${com.parachord.shared.playback.resolverDisplayName(stopId)}?") },
             text = { Text("Do you want to keep or remove the synced items from your Collection?") },
             confirmButton = {
                 TextButton(onClick = {
-                    syncViewModel.stopSyncing(removeItems = true)
-                    showStopSyncDialog = false
+                    syncViewModel.stopSyncing(stopId, removeItems = true)
+                    stopSyncProviderId = null
                 }) { Text("Remove Items", color = Color(0xFFEF4444)) }
             },
             dismissButton = {
                 TextButton(onClick = {
-                    syncViewModel.stopSyncing(removeItems = false)
-                    showStopSyncDialog = false
+                    syncViewModel.stopSyncing(stopId, removeItems = false)
+                    stopSyncProviderId = null
                 }) { Text("Keep Items", color = ModalTextPrimary) }
             },
         )

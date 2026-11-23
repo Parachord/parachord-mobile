@@ -25,6 +25,7 @@ class ParachordApplication : Application() {
     private val sqlDriver: app.cash.sqldelight.db.SqlDriver by inject()
     private val kvStore: com.parachord.shared.store.KvStore by inject()
     private val pluginStatusStore: com.parachord.shared.plugin.PluginStatusStore by inject()
+    private val syncScheduler: com.parachord.android.sync.SyncScheduler by inject()
 
     private val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -47,6 +48,23 @@ class ParachordApplication : Application() {
         // never connect a streaming service. 24h periodic, unmetered +
         // battery-not-low. Idempotent via WorkManager KEEP policy.
         crossResolverEnrichmentScheduler.enable()
+
+        // Library sync's schedule (the 15-minute in-app timer and the hourly
+        // worker) while any provider syncs. Both were started only when a
+        // provider was switched on, so a schedule cancelled by an older build's
+        // Spotify stop (which also cancelled Apple Music's and ListenBrainz's)
+        // never came back. The worker is KEEP, so this is idempotent.
+        appScope.launch {
+            try {
+                val legacy = settingsStore.getSyncSettings().enabled
+                if (com.parachord.shared.sync.isAnySyncProviderEnabled(legacy, settingsStore.getEnabledSyncProviders())) {
+                    syncScheduler.startInAppTimer()
+                    syncScheduler.enableWorkManagerSync()
+                }
+            } catch (_: Exception) {
+                // Retried next launch.
+            }
+        }
 
         // Sweep tombstones older than the 365-day TTL once per launch (#172).
         // Fire-and-forget; never fail startup on a prune error.

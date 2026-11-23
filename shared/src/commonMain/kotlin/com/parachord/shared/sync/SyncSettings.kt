@@ -128,6 +128,13 @@ interface SyncSettingsProvider {
     /** Provider IDs the user has enabled. Default is `setOf("spotify")`. */
     suspend fun getEnabledSyncProviders(): Set<String>
 
+    /** Replace the enabled provider set ([getEnabledSyncProviders]). Only
+     *  [SyncEngine.disableProvider] calls it; the real store overrides it, and a
+     *  test fake that doesn't is never asked to write. */
+    suspend fun setEnabledSyncProviders(providers: Set<String>) {
+        throw UnsupportedOperationException("setEnabledSyncProviders")
+    }
+
     /**
      * Per-provider opt-in for collection axes (`tracks`, `albums`, `artists`,
      * `playlists`). Defaults to all four when nothing has been written for
@@ -255,3 +262,19 @@ interface SyncSettingsProvider {
  */
 fun isAnySyncProviderEnabled(legacyEnabled: Boolean, enabledProviders: Set<String>): Boolean =
     legacyEnabled || enabledProviders.any { it != SpotifySyncProvider.PROVIDER_ID }
+
+/**
+ * The providers that actually sync: [enabledProviders], with Spotify only while
+ * its own switch ([legacyEnabled]) is on. The engine, the "Sync now" gate and the
+ * settings cards all read this, so a card can't say "Syncing disabled" while the
+ * engine syncs.
+ *
+ * `enabled_sync_providers` defaults to `setOf("spotify")` and Android's wizard
+ * adds to that default, so an Android user who only ever turned on Apple Music
+ * has `{spotify, applemusic}` with Spotify's switch off; reading the set alone
+ * synced their Spotify library uninvited. On iOS [legacyEnabled] means "any
+ * provider is on" and the set holds only providers turned on, so this is the
+ * set itself there.
+ */
+fun syncingProviders(legacyEnabled: Boolean, enabledProviders: Set<String>): Set<String> =
+    if (legacyEnabled) enabledProviders else enabledProviders - SpotifySyncProvider.PROVIDER_ID

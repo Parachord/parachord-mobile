@@ -538,7 +538,7 @@ class SyncEngine constructor(
         // selects Spotify. Skipping it for non-Spotify wizards keeps
         // the user-visible progress bar focused on the provider the
         // wizard is configuring.
-        val enabled = settingsStore.getEnabledSyncProviders()
+        val enabled = syncingProviders()
         // Spotify legacy path gates on BOTH the enabled set AND the axis. A
         // connected-but-not-enabled Spotify (OAuth token present, but the user
         // never turned Spotify sync on) must NOT sync — albums/artists already
@@ -935,7 +935,7 @@ class SyncEngine constructor(
         onProgress: (SyncProgress) -> Unit,
         providerFilter: String? = null,
     ): TypeSyncResult {
-        val enabled = settingsStore.getEnabledSyncProviders()
+        val enabled = syncingProviders()
         var aggregate = TypeSyncResult()
         for (provider in providers.filter {
             it.id in enabled && (providerFilter == null || providerFilter == it.id)
@@ -1049,7 +1049,7 @@ class SyncEngine constructor(
         onProgress: (SyncProgress) -> Unit,
         providerFilter: String? = null,
     ): TypeSyncResult {
-        val enabled = settingsStore.getEnabledSyncProviders()
+        val enabled = syncingProviders()
         var aggregate = TypeSyncResult()
         for (provider in providers.filter {
             it.id in enabled && (providerFilter == null || providerFilter == it.id)
@@ -1442,7 +1442,7 @@ class SyncEngine constructor(
             return
         }
         // One list call per enabled provider → externalId -> SyncedPlaylist.
-        val enabled = settingsStore.getEnabledSyncProviders()
+        val enabled = syncingProviders()
         val remoteLists = mutableMapOf<String, Map<String, SyncedPlaylist>>()
         for (provider in providers.filter { it.id in enabled }) {
             remoteLists[provider.id] = runCatching {
@@ -1671,7 +1671,7 @@ class SyncEngine constructor(
 
     /** One paginated playlist-list call per enabled provider → externalId map. */
     private suspend fun fetchEnabledProviderPlaylistLists(): Map<String, Map<String, SyncedPlaylist>> {
-        val enabled = settingsStore.getEnabledSyncProviders()
+        val enabled = syncingProviders()
         val out = mutableMapOf<String, Map<String, SyncedPlaylist>>()
         for (provider in providers.filter { it.id in enabled }) {
             out[provider.id] = runCatching {
@@ -2509,7 +2509,7 @@ class SyncEngine constructor(
         // `remotePlaylists` empty, and an empty remote must NOT be read as
         // "everything was deleted remotely" (that would wipe the user's Spotify
         // playlist rows).
-        val spotifyPlaylistsEnabled = SpotifySyncProvider.PROVIDER_ID in settingsStore.getEnabledSyncProviders()
+        val spotifyPlaylistsEnabled = SpotifySyncProvider.PROVIDER_ID in syncingProviders()
             && providerHasAxis(SpotifySyncProvider.PROVIDER_ID, "playlists")
             && (providerFilter == null || providerFilter == SpotifySyncProvider.PROVIDER_ID)
         val remotePlaylists = if (spotifyPlaylistsEnabled) {
@@ -2789,7 +2789,7 @@ class SyncEngine constructor(
         // Spotify push skips them; AM push doesn't, so they propagate
         // into AM as expected).
         if (settings.pushLocalPlaylists) {
-            val enabledProviderIds = settingsStore.getEnabledSyncProviders()
+            val enabledProviderIds = syncingProviders()
             val enabledProviders = providers.filter {
                 it.id in enabledProviderIds && (providerFilter == null || providerFilter == it.id)
             }
@@ -2864,7 +2864,7 @@ class SyncEngine constructor(
         // fix). Other providers (Apple Music today; Tidal-style future
         // ones) run through the helper, which mirrors the Spotify
         // import/cleanup body but parameterized on `provider`.
-        val enabledProviderIds = settingsStore.getEnabledSyncProviders()
+        val enabledProviderIds = syncingProviders()
         val nonSpotifyProviders = providers.filter {
             it.id in enabledProviderIds && it.id != SpotifySyncProvider.PROVIDER_ID
                 && (providerFilter == null || providerFilter == it.id)
@@ -4390,7 +4390,7 @@ class SyncEngine constructor(
         settingsStore.getPlaylistChannels(localPlaylistId)?.let { return it }
         val playlist = playlistDao.getById(localPlaylistId) ?: return emptySet()
         val result = getPlaylistMirrors(localPlaylistId).keys.toMutableSet()
-        for (pid in settingsStore.getEnabledSyncProviders()) {
+        for (pid in syncingProviders()) {
             if (pid in result) continue
             // Mode-default mirror only for playlists that auto-mirror — a
             // ListenBrainz-imported playlist is opt-in (it gains a provider only via
@@ -4470,13 +4470,31 @@ class SyncEngine constructor(
             .groupBy { it.localPlaylistId }
             .mapValues { e -> e.value.map { it.providerId }.distinct() }
 
+    /** The providers that sync now: the enabled set, with Spotify only while
+     *  its own switch is on (shared [syncingProviders], both apps). */
+    private suspend fun syncingProviders(): Set<String> =
+        syncingProviders(settingsStore.getSyncSettings().enabled, settingsStore.getEnabledSyncProviders())
+
     // ── Stop syncing ─────────────────────────────────────────────
 
-    /** Legacy single-provider (Spotify) stop — also wipes ALL sync settings.
-     *  Kept for the Android wizard's existing "disconnect sync" action. */
-    suspend fun stopSyncing(removeItems: Boolean) {
-        stopProviderSync(SpotifySyncProvider.PROVIDER_ID, removeItems)
-        settingsStore.clearSyncSettings()
+    /**
+     * Stop syncing ONE provider, from a Settings switch, on both apps: its sync
+     * data goes ([stopProviderSync]; [removeItems] also deletes what only it
+     * synced) and it leaves `enabled_sync_providers`. Returns the providers left
+     * in that set. The legacy `SyncSettings.enabled` flag means different things
+     * on the two apps (see [isAnySyncProviderEnabled]), so the caller sets it.
+     *
+     * Every other provider keeps syncing. Android's Spotify stop used to wipe
+     * every sync setting (the last-sync time with it) and cancel the background
+     * schedule while Apple Music and ListenBrainz were still on, and it left
+     * Spotify in the set, so the engine kept syncing Spotify under a card that
+     * read "Syncing disabled".
+     */
+    suspend fun disableProvider(providerId: String, removeItems: Boolean): Set<String> {
+        stopProviderSync(providerId, removeItems)
+        val remaining = settingsStore.getEnabledSyncProviders() - providerId
+        settingsStore.setEnabledSyncProviders(remaining)
+        return remaining
     }
 
     /**
