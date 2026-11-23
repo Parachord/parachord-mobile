@@ -26,8 +26,8 @@ These are from the Android app; the iOS app follows the same layout with native 
       <sub><b>Home</b> — jump back in, your mixes and playlists, picks for you</sub>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="docs/screenshots/sidebar.png" alt="Sidebar" width="240"><br>
-      <sub><b>Sidebar</b> — friends with live listening status</sub>
+      <img src="docs/screenshots/plugins.png" alt="Plug-ins" width="240"><br>
+      <sub><b>Plug-ins</b> — drag to set which service plays first</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/fab.png" alt="FAB menu" width="240"><br>
@@ -37,11 +37,11 @@ These are from the Android app; the iOS app follows the same layout with native 
   <tr>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/now-playing.png" alt="Now Playing" width="240"><br>
-      <sub><b>Now Playing</b> — resolver chip shows active source</sub>
+      <sub><b>Now Playing</b> — the source picker shows which service is playing</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/queue.png" alt="Up Next queue" width="240"><br>
-      <sub><b>Queue</b> — mixed Spotify + Apple Music rows</sub>
+      <sub><b>Queue</b> — every service that has each track</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/shuffleupagus.png" alt="Shuffleupagus AI DJ" width="240"><br>
@@ -51,7 +51,7 @@ These are from the Android app; the iOS app follows the same layout with native 
   <tr>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/fresh-drops.png" alt="Fresh Drops" width="240"><br>
-      <sub><b>Fresh Drops</b> — new releases from artists you follow</sub>
+      <sub><b>Fresh Drops</b> — new releases from artists you listen to</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/critical-darlings.png" alt="Critical Darlings" width="240"><br>
@@ -59,7 +59,7 @@ These are from the Android app; the iOS app follows the same layout with native 
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/recommendations.png" alt="Recommendations" width="240"><br>
-      <sub><b>Recommendations</b> — ListenBrainz, Last.fm + Apple Music blended feed</sub>
+      <sub><b>Recommendations</b> — picks from each connected service, with a filter per source</sub>
     </td>
   </tr>
   <tr>
@@ -69,25 +69,25 @@ These are from the Android app; the iOS app follows the same layout with native 
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/concerts.png" alt="Concerts" width="240"><br>
-      <sub><b>Concerts</b> — Ticketmaster + SeatGeek, library-aware</sub>
+      <sub><b>Concerts</b> — Ticketmaster + SeatGeek, near you</sub>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="docs/screenshots/friend-history.png" alt="Friend history" width="240"><br>
-      <sub><b>Friends</b> — their Last.fm top albums at a glance</sub>
+      <img src="docs/screenshots/friend-history.png" alt="Friend page" width="240"><br>
+      <sub><b>Friends</b> — what they've been playing, ready to play</sub>
     </td>
   </tr>
   <tr>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/playlists.png" alt="Playlists" width="240"><br>
-      <sub><b>Playlists</b> — hosted XSPF + Spotify-synced side by side</sub>
+      <sub><b>Playlists</b> — with the services each one syncs to</sub>
     </td>
     <td align="center" valign="top" width="33%">
       <img src="docs/screenshots/artist.png" alt="Artist page" width="240"><br>
       <sub><b>Artist</b> — discography with release-type filter</sub>
     </td>
     <td align="center" valign="top" width="33%">
-      <img src="docs/screenshots/sync.png" alt="Sync wizard" width="240"><br>
-      <sub><b>Sync wizard</b> — pick what to pull from Spotify</sub>
+      <img src="docs/screenshots/sync.png" alt="Sync settings" width="240"><br>
+      <sub><b>Sync</b> — pick what syncs with each service</sub>
     </td>
   </tr>
 </table>
