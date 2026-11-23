@@ -44,6 +44,7 @@ class PlaylistDetailViewModel constructor(
     private val spotifySyncProvider: SpotifySyncProvider,
     private val imageEnrichmentService: ImageEnrichmentService,
     private val syncPlaylistLinkDao: SyncPlaylistLinkDao,
+    private val syncPlaylistSourceDao: com.parachord.shared.db.dao.SyncPlaylistSourceDao,
 ) : ViewModel() {
 
     companion object {
@@ -126,6 +127,10 @@ class PlaylistDetailViewModel constructor(
             // suppressed entirely. Mirrors desktop's pull-banner behavior
             // for hosted rows (CLAUDE.md "Hosted XSPF Playlists").
             if (pl.sourceUrl != null) return@launch
+            // Only the playlist's pull source may replace its tracks: a
+            // Spotify copy of a ListenBrainz or Apple Music playlist is a
+            // mirror, and its changes are not the playlist's.
+            if (!pullFromSpotifyOffered(pl)) return@launch
             val spotifyId = pl.spotifyId ?: return@launch
             val localSnapshot = pl.snapshotId ?: return@launch
 
@@ -145,11 +150,21 @@ class PlaylistDetailViewModel constructor(
     fun pullRemoteChanges() {
         viewModelScope.launch {
             val pl = playlistDao.getById(playlistId) ?: return@launch
+            if (!pullFromSpotifyOffered(pl)) {
+                _hasRemoteUpdate.value = false
+                return@launch
+            }
             val spotifyId = pl.spotifyId ?: return@launch
 
             _isPulling.value = true
             try {
                 val remoteTracks = spotifySyncProvider.fetchPlaylistTracks(spotifyId)
+                val localCount = playlistTrackDao.getByPlaylistIdSync(playlistId).size
+                if (!com.parachord.shared.sync.PlaylistPullBanner.acceptsPulledTracks(localCount, remoteTracks.size)) {
+                    Log.w(TAG, "Pull from Spotify $spotifyId returned no tracks; keeping the $localCount here")
+                    _toastEvents.trySend(com.parachord.shared.sync.PlaylistPullBanner.emptyPullMessage("Spotify"))
+                    return@launch
+                }
                 val remoteSnapshot = spotifySyncProvider.getPlaylistSnapshotId(spotifyId)
 
                 playlistTrackDao.replaceAll(playlistId, remoteTracks)
@@ -180,6 +195,14 @@ class PlaylistDetailViewModel constructor(
             }
         }
     }
+
+    /** Whether this playlist's pull source is Spotify (shared [com.parachord.shared.sync.PlaylistPullBanner]). */
+    private suspend fun pullFromSpotifyOffered(pl: PlaylistEntity): Boolean =
+        com.parachord.shared.sync.PlaylistPullBanner.offersPull(
+            sourceProviderId = syncPlaylistSourceDao.selectForLocal(pl.id)?.providerId,
+            playlistId = pl.id,
+            providerId = SpotifySyncProvider.PROVIDER_ID,
+        )
 
     /** Dismiss the remote update banner without pulling. */
     fun dismissRemoteUpdate() {
