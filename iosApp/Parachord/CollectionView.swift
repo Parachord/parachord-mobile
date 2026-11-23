@@ -350,14 +350,17 @@ struct CollectionView: View {
     }
 
     // ── Friends (list) ─────────────────────────────────────────────────
+    // Desktop's Friends tab: a grid of listener cards (`collection-page.js`), with this tab's menu.
     private var friendsList: some View {
         let items = model.sortedFriends
-        return LazyVStack(spacing: 0) {
+        return LazyVGrid(columns: PCLayout.columns(layoutWidth, gutter: homeGutter, spacing: 16), spacing: 20) {
             ForEach(items, id: \.id) { f in
-                NavigationLink(value: PCRoute.friend(id: f.id, username: f.username, service: f.service, name: f.displayName)) {
-                    friendRow(f)
-                }
-                .buttonStyle(.plain)
+                PCListenerCard(
+                    name: f.displayName, avatarUrl: f.avatarUrl, width: nil,
+                    onAir: f.isOnAir, pinned: FriendCard.shared.pinned(friend: f),
+                    onOpen: { path.append(.friend(id: f.id, username: f.username, service: f.service, name: f.displayName)) },
+                    onPlay: { playTopTracks(f) }
+                ) { friendLines(f) }
                     .contextMenu {
                         // Listen along only while they're on air (Android parity);
                         // keep it available to STOP if already listening.
@@ -377,49 +380,38 @@ struct CollectionView: View {
                         }
                     }
             }
-            if items.isEmpty { emptyState(icon: "person.2", text: "No friends yet.\nAdd friends in Settings.") }
         }
-        .padding(.vertical, 4).padding(.bottom, 130)
+        .padding(.horizontal, 16).padding(.vertical, 8).padding(.bottom, 130)
+        .overlay { if items.isEmpty { emptyState(icon: "person.2", text: "No friends yet.\nAdd friends in Settings.") } }
     }
 
-    @ViewBuilder private func friendRow(_ f: Friend) -> some View {
-        HStack(alignment: .top, spacing: 12) {
-            // Circular avatar + on-air green dot (design's ios-drawer__avatar).
-            ZStack(alignment: .bottomTrailing) {
-                PCFriendAvatar(name: f.displayName, avatarUrl: f.avatarUrl, size: .medium)
-                if f.isOnAir {
-                    Circle().fill(PC.success)
-                        .frame(width: 12, height: 12)
-                        .overlay(Circle().strokeBorder(PC.bgPrimary, lineWidth: 2))
-                }
-            }
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(f.displayName).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
-                    Text(serviceBadge(f.service).0).font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(serviceBadge(f.service).1)
-                        .padding(.horizontal, 5).padding(.vertical, 1)
-                        .background(serviceBadge(f.service).1.opacity(0.18), in: RoundedRectangle(cornerRadius: 4))
-                }
-                if f.isOnAir, let track = f.cachedTrackName {
-                    Text("♫ \(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")")
-                        .font(.system(size: 13)).foregroundStyle(PC.success).lineLimit(1)
-                } else if f.hidesListening {
-                    // A Last.fm profile that hides its recent listening is never
-                    // on-air; say why instead of a stale track (desktop parachord#1140).
-                    Text("Listening hidden").font(.system(size: 13)).foregroundStyle(PC.fg3)
-                } else if let track = f.cachedTrackName {
-                    // Offline: last track + when they were last active (Android parity).
-                    let ago = f.cachedTrackTimestamp > 0 ? " · \(RelativeTime.shared.agoSeconds(timestampSeconds: f.cachedTrackTimestamp))" : ""
-                    Text("\(track)\(f.cachedTrackArtist.map { " · \($0)" } ?? "")\(ago)")
-                        .font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
+    /// The lines under a friend's card: the service badge, the track while on air, or "Listening hidden".
+    @ViewBuilder private func friendLines(_ f: Friend) -> some View {
+        let card = FriendCard.shared
+        VStack(spacing: 6) {
+            PCNeutralBadge(text: card.serviceLabel(service: f.service)).padding(.top, 4)
+            // One line always, empty when there's nothing to say, so every card in a row is one height.
+            Group {
+                if let track = card.nowPlaying(friend: f) {
+                    Text(card.NOW_PLAYING_MARK).foregroundStyle(PC.textSuccess) + Text(track).foregroundStyle(PC.fg2)
+                } else if card.showsHidden(friend: f) {
+                    Text(card.LISTENING_HIDDEN).foregroundStyle(PC.fg3)
                 } else {
-                    Text("Offline").font(.system(size: 13)).foregroundStyle(PC.fg3)
+                    Text("\u{00A0}")
                 }
             }
-            Spacer(minLength: 0)
+            .font(.system(size: 11)).lineLimit(1).multilineTextAlignment(.center)
         }
-        .padding(.horizontal, 20).padding(.vertical, 8).contentShape(Rectangle())
+    }
+
+    /// Plays the friend's recent top 10 (desktop's `playListenerTopTracks`).
+    private func playTopTracks(_ f: Friend) {
+        Task {
+            guard let r = try? await IosContainer.companion.shared.friendTopTracksPlay(
+                service: f.service, username: f.username, name: f.displayName) else { return }
+            if let q = r.queue { coordinator.setQueue(q.tracks, startIndex: 0, context: q.context) }
+            if let m = r.message { coordinator.notice = QueuePlaybackCoordinator.Notice(message: m) }
+        }
     }
 
     /// Relative "last active" label — port of Android FriendsScreen.formatTimeAgo.

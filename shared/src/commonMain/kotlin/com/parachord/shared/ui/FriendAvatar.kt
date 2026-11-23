@@ -60,3 +60,28 @@ object FriendAvatarSpec {
     /** Screen readers' name for opening a listener (desktop's label). */
     fun openLabel(name: String): String = "Open $name’s profile"
 }
+
+/**
+ * What Collection's Friends tab puts under a friend's listener card (desktop
+ * `collection-page.js`): the service as a neutral badge, the track they're on
+ * while on air, or "Listening hidden" for a Last.fm profile that hides it.
+ * The pin mark shows for a friend pinned by hand, not one pinned automatically.
+ */
+object FriendCard {
+    const val LISTENING_HIDDEN = "Listening hidden"
+    /** The note before the on-air track, drawn in the success text colour. */
+    const val NOW_PLAYING_MARK = "♪ "
+
+    /** "Last.fm" or "ListenBrainz": desktop names only these two. */
+    fun serviceLabel(service: String): String = if (service == "lastfm") "Last.fm" else "ListenBrainz"
+
+    /** The track to show under an on-air friend, else null. */
+    fun nowPlaying(friend: com.parachord.shared.model.Friend): String? =
+        friend.cachedTrackName?.takeIf { friend.isOnAir && it.isNotBlank() }
+
+    /** Whether to say [LISTENING_HIDDEN]: not on air, and the profile hides its listening. */
+    fun showsHidden(friend: com.parachord.shared.model.Friend): Boolean = !friend.isOnAir && friend.hidesListening
+
+    /** The pin mark: pinned by hand, not automatically. */
+    fun pinned(friend: com.parachord.shared.model.Friend): Boolean = friend.pinnedToSidebar && !friend.autoPinned
+}

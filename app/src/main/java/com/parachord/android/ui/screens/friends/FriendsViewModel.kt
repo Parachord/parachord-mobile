@@ -12,7 +12,25 @@ import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 class FriendsViewModel constructor(
     private val friendsRepository: FriendsRepository,
+    private val playbackController: com.parachord.android.playback.PlaybackController,
 ) : ViewModel() {
+
+    /** Messages for the screen to show (a friend's top tracks that couldn't load, or none). */
+    private val _messages = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 4)
+    val messages: kotlinx.coroutines.flow.SharedFlow<String> = _messages
+
+    /** Plays a friend's recent top 10 (desktop's `playListenerTopTracks`, the listener card's play button). */
+    fun playTopTracks(friend: FriendEntity) {
+        viewModelScope.launch {
+            when (val play = com.parachord.shared.recommendations.listenerPlay(
+                friend.service, friend.username, friend.displayName, friendsRepository::listenerTopTracks,
+            )) {
+                is com.parachord.shared.recommendations.ListenerPlay.Play ->
+                    playbackController.playQueue(play.queue.tracks, startIndex = 0, context = play.queue.context)
+                is com.parachord.shared.recommendations.ListenerPlay.Message -> _messages.tryEmit(play.text)
+            }
+        }
+    }
 
     val friends: StateFlow<List<FriendEntity>> = friendsRepository.getAllFriends()
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())

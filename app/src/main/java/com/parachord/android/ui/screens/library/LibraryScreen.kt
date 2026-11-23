@@ -28,6 +28,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.ui.text.withStyle
+import com.parachord.android.ui.theme.current
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.items
@@ -131,6 +133,10 @@ fun CollectionScreen(
     val rawTracks by viewModel.tracks.collectAsStateWithLifecycle()
     val rawAlbums by viewModel.albums.collectAsStateWithLifecycle()
     val friends by friendsViewModel.friends.collectAsState()
+    val friendsContext = androidx.compose.ui.platform.LocalContext.current
+    LaunchedEffect(Unit) {
+        friendsViewModel.messages.collect { android.widget.Toast.makeText(friendsContext, it, android.widget.Toast.LENGTH_SHORT).show() }
+    }
 
     val artistSort by viewModel.artistSort.collectAsStateWithLifecycle()
     val albumSort by viewModel.albumSort.collectAsStateWithLifecycle()
@@ -450,6 +456,7 @@ fun CollectionScreen(
                         onRemoveFriend = { friendsViewModel.removeFriend(it) },
                         onPinFriend = { friendsViewModel.pinFriend(it) },
                         onListenAlong = { /* TODO: wire up listen-along */ },
+                        onPlayFriend = { friendsViewModel.playTopTracks(it) },
                     )
                 }
             }
@@ -478,12 +485,13 @@ private fun FriendsTab(
     onRemoveFriend: (String) -> Unit,
     onPinFriend: (String) -> Unit,
     onListenAlong: (FriendEntity) -> Unit,
+    onPlayFriend: (FriendEntity) -> Unit,
 ) {
     val sortedFriends = remember(friends, friendSort, searchQuery) {
         com.parachord.shared.library.CollectionSort.friends(friends, friendSort, searchQuery)
     }
 
-    val friendListState = rememberLazyListState()
+    val friendListState = androidx.compose.foundation.lazy.grid.rememberLazyGridState()
     val friendScope = rememberCoroutineScope()
 
     LaunchedEffect(friendSort, searchQuery) {
@@ -533,110 +541,58 @@ private fun FriendsTab(
         if (sortedFriends.isEmpty()) {
             EmptyState("No friends yet", Icons.Default.People)
         } else {
-            LazyColumn(state = friendListState, modifier = Modifier.fillMaxSize()) {
+            // Desktop's Friends tab: a grid of listener cards (`collection-page.js`).
+            LazyVerticalGrid(
+                state = friendListState,
+                columns = adaptiveGridCells(),
+                contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalArrangement = Arrangement.spacedBy(20.dp),
+                modifier = Modifier.fillMaxSize(),
+            ) {
                 items(sortedFriends, key = { it.id }) { friend ->
                     var showMenu by remember { mutableStateOf(false) }
-                    val surfaceColor = MaterialTheme.colorScheme.surface
 
                     Box {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(surfaceColor)
-                                .hapticCombinedClickable(
-                                    onClick = { onNavigateToFriend(friend.id) },
-                                    onLongClick = { showMenu = true },
-                                )
-                                .padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalAlignment = Alignment.Top,
+                        com.parachord.android.ui.components.ListenerCard(
+                            name = friend.displayName,
+                            avatarUrl = friend.avatarUrl,
+                            onOpen = { onNavigateToFriend(friend.id) },
+                            onPlay = { onPlayFriend(friend) },
+                            onLongPress = { showMenu = true },
+                            onAir = friend.isOnAir,
+                            pinned = com.parachord.shared.ui.FriendCard.pinned(friend),
                         ) {
-                            // Hexagonal avatar with on-air indicator
-                            Box(modifier = Modifier.padding(top = 2.dp)) {
-                                com.parachord.android.ui.components.FriendAvatar(
-                                    friend.displayName, friend.avatarUrl,
-                                    size = com.parachord.shared.ui.FriendAvatarSpec.Size.MEDIUM,
-                                )
-                                if (friend.isOnAir) {
-                                    Box(
-                                        modifier = Modifier
-                                            .align(Alignment.BottomEnd)
-                                            .offset(x = 1.dp, y = 1.dp)
-                                            .size(14.dp)
-                                            .clip(CircleShape)
-                                            .background(surfaceColor)
-                                            .padding(2.dp)
-                                            .clip(CircleShape)
-                                            .background(OnAirGreen),
-                                    )
-                                }
-                            }
-
-                            Spacer(modifier = Modifier.width(12.dp))
-
-                            Column(modifier = Modifier.weight(1f)) {
-                                Row(verticalAlignment = Alignment.CenterVertically) {
-                                    Text(
-                                        text = friend.displayName,
-                                        style = MaterialTheme.typography.bodyLarge,
-                                        fontWeight = FontWeight.Medium,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                        modifier = Modifier.weight(1f, fill = false),
-                                    )
-                                    Spacer(modifier = Modifier.width(6.dp))
-                                    // Service badge
-                                    val (badgeText, badgeColor) = when (friend.service) {
-                                        "lastfm" -> "Last.fm" to LastFmRed
-                                        "listenbrainz" -> "LB" to ListenBrainzOrange
-                                        else -> friend.service to MaterialTheme.colorScheme.outline
-                                    }
-                                    Text(
-                                        text = badgeText,
-                                        style = MaterialTheme.typography.labelSmall,
-                                        color = badgeColor,
-                                        modifier = Modifier
-                                            .background(
-                                                color = badgeColor.copy(alpha = 0.18f),
-                                                shape = RoundedCornerShape(4.dp),
-                                            )
-                                            .padding(horizontal = 6.dp, vertical = 2.dp),
-                                    )
-                                }
-
-                                // On-air: mini playbar pill. Offline: plain muted text.
-                                if (friend.isOnAir && friend.cachedTrackName != null) {
-                                    Spacer(modifier = Modifier.height(4.dp))
-                                    FriendListMiniPlaybar(
-                                        trackName = friend.cachedTrackName!!,
-                                        artistName = friend.cachedTrackArtist,
-                                        artworkUrl = friend.cachedTrackArtworkUrl,
-                                    )
-                                } else if (friend.hidesListening) {
-                                    // A Last.fm profile that hides its recent listening is
-                                    // never on-air; say why instead of a stale track
-                                    // (desktop parachord#1140).
-                                    Text(
-                                        text = "Listening hidden",
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                    )
-                                } else if (friend.cachedTrackName != null) {
-                                    Text(
-                                        text = buildString {
-                                            append(friend.cachedTrackName)
-                                            friend.cachedTrackArtist?.let { append("  ·  $it") }
-                                            if (friend.cachedTrackTimestamp > 0) {
-                                                append("  ·  ")
-                                                append(RelativeTime.agoSeconds(friend.cachedTrackTimestamp))
+                            Spacer(Modifier.height(4.dp))
+                            com.parachord.android.ui.components.NeutralBadge(
+                                com.parachord.shared.ui.FriendCard.serviceLabel(friend.service),
+                            )
+                            // One line always, empty when there's nothing to say, so every card in a row is one height.
+                            Spacer(Modifier.height(6.dp))
+                            val nowPlaying = com.parachord.shared.ui.FriendCard.nowPlaying(friend)
+                            val hidden = com.parachord.shared.ui.FriendCard.showsHidden(friend)
+                            Text(
+                                text = androidx.compose.ui.text.buildAnnotatedString {
+                                    when {
+                                        nowPlaying != null -> {
+                                            withStyle(androidx.compose.ui.text.SpanStyle(color = com.parachord.shared.ui.DesignTokens.textSuccess.current())) {
+                                                append(com.parachord.shared.ui.FriendCard.NOW_PLAYING_MARK)
                                             }
-                                        },
-                                        style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                }
-                            }
+                                            append(nowPlaying)
+                                        }
+                                        hidden -> append(com.parachord.shared.ui.FriendCard.LISTENING_HIDDEN)
+                                        else -> append(" ")
+                                    }
+                                },
+                                fontSize = 11.sp,
+                                lineHeight = 16.sp,
+                                color = if (hidden) com.parachord.shared.ui.DesignTokens.textTertiary.current()
+                                    else com.parachord.shared.ui.DesignTokens.textSecondary.current(),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
 
                         // Always-dark context menu bottom sheet
