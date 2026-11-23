@@ -268,6 +268,12 @@ class LibraryRepository(
     suspend fun getPlaylistMirrors(localPlaylistId: String): Map<String, String> =
         syncEngine.getPlaylistMirrors(localPlaylistId)
 
+    /** The provider a playlist is pulled from, for its page's source line (shared `PlaylistOrigin`). */
+    suspend fun getPlaylistPullProvider(localPlaylistId: String): String? =
+        com.parachord.shared.playlist.PlaylistOrigin.pullProvider(
+            localPlaylistId, syncPlaylistSourceDao.selectForLocal(localPlaylistId)?.providerId,
+        )
+
     /** localPlaylistId -> push-mirror providers, for the playlist-list chips. */
     suspend fun getAllPlaylistLinkProviders(): Map<String, List<String>> =
         syncEngine.getAllPlaylistLinkProviders()

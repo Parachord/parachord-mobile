@@ -210,7 +210,7 @@ struct FriendProfileScreen: View {
             ScrollView {
                 if model.loading {
                     if tabIndex == 0 || tabIndex == 3 { VStack(spacing: 0) { ForEach(0..<8, id: \.self) { _ in PCTrackRowSkeleton() } } }
-                    else { PCSkeletonGrid(count: 6, columns: tabIndex == 2 ? 3 : 2) }
+                    else { PCSkeletonGrid(count: 6, artists: tabIndex == 2) }
                 } else if tabIsEmpty, let error = model.error(tab: tabIndex, period: period) {
                     errorState(error)
                 } else {

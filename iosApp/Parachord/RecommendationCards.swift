@@ -430,18 +430,22 @@ struct PCPlaylistCard<Art: View>: View {
 
 /// A card's shimmer stand-in: the same box, the art and `lines` text bars under the title bar.
 struct PCCardSkeleton: View {
-    var width: CGFloat = pcRecCardWidth
+    /// The cover's width, as `PCAlbumCard`'s; nil fills a grid cell.
+    var width: CGFloat? = pcRecCardWidth
     var lines: Int = 1
 
     var body: some View {
-        let side = pcCardArtSize(width)
+        let side = width.map(pcCardArtSize)
         PCCardBox(width: width) {
             PCSkeletonBox(width: side, height: side, radius: CGFloat(cardSpec.ART_RADIUS))
+                .aspectRatio(1, contentMode: .fit)
             Spacer().frame(height: CGFloat(cardSpec.TEXT_GAP))
-            PCSkeletonBox(width: side * 0.8, height: 13, radius: 4)
+            PCSkeletonBox(height: 13, radius: 4).frame(maxWidth: .infinity, alignment: .leading)
+                .scaleEffect(x: 0.8, anchor: .leading)
             ForEach(0..<max(lines, 0), id: \.self) { _ in
                 Spacer().frame(height: CGFloat(cardSpec.LINE_GAP) + 2)
-                PCSkeletonBox(width: side * 0.55, height: 11, radius: 4)
+                PCSkeletonBox(height: 11, radius: 4).frame(maxWidth: .infinity, alignment: .leading)
+                    .scaleEffect(x: 0.55, anchor: .leading)
             }
         }
         .accessibilityHidden(true)

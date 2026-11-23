@@ -1,5 +1,9 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.shared.playlist.PlaylistOrigin
+import com.parachord.android.ui.components.ParachordBadge
+import com.parachord.android.ui.theme.serviceColor
+import com.parachord.shared.ui.PlaylistSyncBadges
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
@@ -99,6 +103,7 @@ fun PlaylistDetailScreen(
 ) {
     val playlist by viewModel.playlist.collectAsStateWithLifecycle()
     val mirrors by viewModel.mirrors.collectAsStateWithLifecycle()
+    val pullProvider by viewModel.pullProvider.collectAsStateWithLifecycle()
     val tracks by viewModel.tracks.collectAsStateWithLifecycle()
     val allPlaylists by viewModel.allPlaylists.collectAsStateWithLifecycle()
     val nowPlayingTitle by viewModel.nowPlayingTitle.collectAsStateWithLifecycle()
@@ -340,21 +345,10 @@ fun PlaylistDetailScreen(
                         textAlign = TextAlign.Center,
                     )
 
-                    // Author and source line
+                    // Author and track count, then where it came from and
+                    // where it syncs (shared PlaylistOrigin, desktop's page).
                     val metaParts = buildList {
                         playlist?.ownerName?.let { add("by $it") }
-                        // Source chip:
-                        //   - Hosted XSPF → hostname-derived label
-                        //     (spinitron.com → "Spinitron").
-                        //   - Local playlist (id starts with "local-") →
-                        //     no source chip even if mirrored to Spotify.
-                        //     The `spotifyId` on these rows is an outbound
-                        //     sync link, not the origin.
-                        //   - Spotify-imported playlist → "Spotify".
-                        val isLocal = playlist?.id?.startsWith("local-") == true
-                        val sourceLabel = playlist?.sourceUrl?.let { hostLabelFromUrl(it) }
-                            ?: playlist?.spotifyId?.takeIf { !isLocal }?.let { "Spotify" }
-                        sourceLabel?.let { add(it) }
                         add("${tracks.size} tracks")
                     }
                     Text(
@@ -362,25 +356,36 @@ fun PlaylistDetailScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    PlaylistOrigin.label(playlistId = playlist?.id.orEmpty(), sourceUrl = playlist?.sourceUrl, pullProvider = pullProvider)?.let { label ->
+                        Text(
+                            text = PlaylistOrigin.sourceLine(label),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
 
-                    // Source/mirror chips — each opens the playlist on that
-                    // service. Driven off sync_playlist_link (+ id-prefix /
-                    // pull source), so a multi-mirror playlist shows them all.
-                    if (mirrors.isNotEmpty()) {
+                    // A badge per service it pushes to; each opens the playlist there.
+                    val pushMirrors = PlaylistOrigin.pushMirrors(mirrors, pullProvider)
+                    if (pushMirrors.isNotEmpty()) {
                         val mirrorCtx = LocalContext.current
                         Spacer(modifier = Modifier.height(8.dp))
                         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                            mirrors.forEach { (providerId, externalId) ->
-                                playlistMirrorUrl(providerId, externalId)?.let { url ->
-                                    MirrorLinkChip(
-                                        label = playlistProviderLabel(providerId),
-                                        color = playlistProviderColor(providerId),
-                                    ) {
-                                        runCatching {
-                                            mirrorCtx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            val byProvider = pushMirrors
+                            PlaylistSyncBadges.of(byProvider.keys.toList(), playlist?.localOnly == true).forEach { badge ->
+                                val url = byProvider[badge.providerId]?.let { PlaylistSyncBadges.pageUrl(badge.providerId, it) }
+                                ParachordBadge(
+                                    text = badge.label,
+                                    color = if (badge.colored) serviceColor(badge.providerId) else null,
+                                    description = badge.note,
+                                    onClick = url?.let { u ->
+                                        {
+                                            runCatching {
+                                                mirrorCtx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u)))
+                                            }
+                                            Unit
                                         }
-                                    }
-                                }
+                                    },
+                                )
                             }
                         }
                     }
@@ -695,75 +700,10 @@ private fun PlaylistOptionsSheet(
 }
 
 /**
- * Derive a short human label from a hosted-XSPF source URL. Standard
- * hosts use the first hostname label (`spinitron.com/...` → "Spinitron").
- * Project-hosting domains like GitHub Pages bury the meaningful name in
- * the path — `https://jherskowitz.github.io/spinbin/...` is "Spinbin",
- * not "Jherskowitz" — so those are special-cased to use the first path
- * segment instead. Returns null if the URL can't be parsed.
- */
-private fun hostLabelFromUrl(url: String): String? {
-    val uri = try {
-        android.net.Uri.parse(url)
-    } catch (_: Exception) {
-        null
-    } ?: return null
-    val host = uri.host?.removePrefix("www.") ?: return null
-
-    // Project-hosting domains where the user/org is the subdomain and
-    // the project name is the first path segment. Add new suffixes here
-    // as they come up (gitlab.io, netlify.app, vercel.app, etc).
-    val projectHostSuffixes = listOf(".github.io", ".gitlab.io", ".netlify.app", ".vercel.app", ".pages.dev")
-    if (projectHostSuffixes.any { host.endsWith(it) }) {
-        val firstSegment = uri.pathSegments?.firstOrNull()?.trim('/')?.ifBlank { null }
-        if (firstSegment != null) return firstSegment.titlecase()
-    }
-
-    // Standard path — first hostname label. `radio.example.co.uk` → "radio".
-    val first = host.substringBefore('.').ifBlank { return null }
-    return first.titlecase()
-}
-
-private fun String.titlecase(): String =
-    replaceFirstChar { if (it.isLowerCase()) it.titlecase(java.util.Locale.ROOT) else it.toString() }
-
-/**
  * "X ago" style relative-time formatter for the playlist detail header.
  * Mirrors the settings screen's sync-status formatter but kept local
  * to avoid dragging the helper across modules.
  */
-/** Web URL for a playlist on a given service, or null if not linkable. */
-private fun playlistMirrorUrl(providerId: String, externalId: String): String? = when (providerId) {
-    "spotify" -> "https://open.spotify.com/playlist/$externalId"
-    "listenbrainz" -> "https://listenbrainz.org/playlist/$externalId/"
-    "applemusic" -> "https://music.apple.com/library/playlist/$externalId"
-    else -> null
-}
 
-private fun playlistProviderLabel(providerId: String): String = when (providerId) {
-    "spotify" -> "Spotify"
-    "applemusic" -> "Apple Music"
-    "listenbrainz" -> "ListenBrainz"
-    else -> providerId.replaceFirstChar { it.uppercase() }
-}
 
-private fun playlistProviderColor(providerId: String): Color = when (providerId) {
-    "spotify" -> Color(0xFF1DB954)
-    "applemusic" -> Color(0xFFFA243C)
-    "listenbrainz" -> Color(0xFFEB743B)
-    else -> Color(0xFF9CA3AF)
-}
 
-@Composable
-private fun MirrorLinkChip(label: String, color: Color, onClick: () -> Unit) {
-    Text(
-        text = "$label ↗",
-        style = MaterialTheme.typography.labelSmall,
-        color = color,
-        modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
-            .background(color = color.copy(alpha = 0.12f))
-            .clickable { onClick() }
-            .padding(horizontal = 8.dp, vertical = 3.dp),
-    )
-}

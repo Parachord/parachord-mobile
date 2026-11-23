@@ -59,7 +59,6 @@ import com.parachord.android.ui.components.PlaylistSyncChannelsSheet
 import com.parachord.shared.model.Playlist
 import com.parachord.android.ui.components.AnnouncementBanner
 import com.parachord.android.ui.components.AppleMusicReauthBanner
-import com.parachord.android.ui.components.ShimmerAlbumCard
 import com.parachord.android.ui.components.SpotifyExpiryWarningBanner
 import com.parachord.android.ui.components.SpotifyReauthBanner
 import com.parachord.android.ui.components.shimmerBrush
@@ -495,7 +494,7 @@ private fun HomeSkeleton() {
         Spacer(Modifier.size(12.dp))
         bar(180, 20)
         Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-            repeat(3) { ShimmerAlbumCard() }
+            repeat(3) { com.parachord.android.ui.components.CardSkeleton(homeRowCardWidth(), lines = 1) }
         }
     }
 }

@@ -736,3 +736,46 @@ extension View {
     /// See `PCListColumn`.
     func pcListColumn() -> some View { modifier(PCListColumn()) }
 }
+
+/// The status pill (desktop `badge.js`, the shared `BadgeSpec`; Android's
+/// `ParachordBadge`): a tone's colours, or, with `color`, the service's colour
+/// as a tint and a dot with primary text. `description` is read out in place
+/// of the label (desktop's tooltip).
+struct PCBadge: View {
+    let text: String
+    var tone: BadgeTone = .neutral
+    var color: Color? = nil
+    var description: String? = nil
+
+    private var spec: BadgeSpec { BadgeSpec.shared }
+
+    private var look: (fill: Color, ink: Color) {
+        if let color { return (color.opacity(Double(spec.SERVICE_TINT_ALPHA)), PC.fg1) }
+        switch tone {
+        case .info: return (PC.textInfo.opacity(Double(spec.INFO_TINT_ALPHA)), PC.textInfo)
+        case .accent: return (PC.accentSurface, PC.accent)
+        case .surface: return (PC.cardBg, PC.fg1)
+        default: return (PC.bgSecondary, PC.fg2)
+        }
+    }
+
+    var body: some View {
+        HStack(spacing: CGFloat(spec.GAP)) {
+            if let color {
+                Circle().fill(color).frame(width: CGFloat(spec.DOT_SIZE), height: CGFloat(spec.DOT_SIZE))
+            }
+            Text(text)
+                .font(.system(size: CGFloat(spec.TEXT_SIZE), weight: .semibold))
+                .lineLimit(1)
+                .fixedSize()
+                .frame(minHeight: CGFloat(spec.LINE_HEIGHT))
+        }
+        .foregroundStyle(look.ink)
+        .padding(.horizontal, CGFloat(spec.PADDING_H))
+        .padding(.vertical, CGFloat(spec.PADDING_V))
+        .background(Capsule().fill(look.fill))
+        .shadow(color: tone == .surface && color == nil ? .black.opacity(0.12) : .clear, radius: 2, y: 1)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(description ?? text)
+    }
+}
