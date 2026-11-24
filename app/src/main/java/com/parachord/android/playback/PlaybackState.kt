@@ -1,6 +1,7 @@
 package com.parachord.android.playback
 
 import com.parachord.android.data.db.entity.TrackEntity
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 
 /** Represents the current playback state exposed to the UI layer. */
 data class PlaybackState(
@@ -68,6 +69,14 @@ data class PlaybackState(
 /** The play buttons' spinner: the engine is buffering, or a play is still starting. */
 val PlaybackState.showsLoading: Boolean
     get() = isBuffering || isStartingPlay
+
+/**
+ * The queue is parked under a spinoff or a listen-along session, dimmed with
+ * "··" numbers in the queue views (the phone's `QueueSheet`/Now Playing and
+ * the AAOS car queue).
+ */
+val PlaybackState.queueSuspended: Boolean
+    get() = spinoffMode || playbackContext?.type == LISTEN_ALONG_CONTEXT
 
 /**
  * Actual metadata reported by the streaming source (Spotify Connect / Apple Music MusicKit).

@@ -297,13 +297,20 @@ fun ParachordApp() {
             com.parachord.android.ui.theme.LocalSourceColumnWidth provides sourceColumnWidth,
             com.parachord.android.ui.theme.LocalTrackRowCache provides trackRowCache,
         ) {
-            ParachordAppContent(mainViewModel)
+            // On a car's own Android (Android Automotive) the app's root is the car UI
+            // (recommendations home, Now Playing, queue, search, a parked-only full app);
+            // a phone keeps the phone app unchanged.
+            if (com.parachord.android.car.CarEnvironment.isAutomotive(LocalContext.current)) {
+                com.parachord.android.ui.car.CarRoot(mainViewModel)
+            } else {
+                ParachordAppContent(mainViewModel)
+            }
         }
     }
 }
 
 @Composable
-private fun ParachordAppContent(mainViewModel: MainViewModel) {
+internal fun ParachordAppContent(mainViewModel: MainViewModel, startRoute: String? = null, topInsetConsumed: Boolean = false) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -561,6 +568,14 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         ) {
             Scaffold(
                 snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
+                // The AAOS full UI shows its own bar above the app: the status
+                // band under it is already consumed, so the Scaffold must not pad
+                // for it again (Scaffold's insets don't observe consumeWindowInsets).
+                contentWindowInsets = if (topInsetConsumed) {
+                    androidx.compose.foundation.layout.WindowInsets(0.dp)
+                } else {
+                    androidx.compose.material3.ScaffoldDefaults.contentWindowInsets
+                },
                 bottomBar = {
                     if (showBottomBar) {
                         Column {
@@ -702,6 +717,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                     ) {
                     ParachordNavHost(
                         navController = navController,
+                        startRoute = startRoute ?: Routes.HOME,
                         onOpenDrawer = onOpenDrawer,
                         onOpenChat = onOpenChat,
                         onOpenImportPlaylist = { showImportPlaylistDialog = true },

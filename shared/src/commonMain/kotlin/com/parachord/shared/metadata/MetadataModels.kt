@@ -65,6 +65,26 @@ data class TrackSearchResult(
     val isrc: String? = null,
 )
 
+/**
+ * A search result as a playable, metadata-only track — what both apps' search screens
+ * play (the phone's `SearchViewModel.toPlayable` layers its own artwork fallbacks on
+ * top via [artworkUrl]; the AAOS car search plays it as it is). One place for the
+ * id scheme (`search-<title hash>-<artist hash>`) and the ids a result carries, so
+ * they can't drift between the two consumers.
+ */
+fun TrackSearchResult.toTrackEntity(artworkUrl: String? = this.artworkUrl): com.parachord.shared.model.Track =
+    com.parachord.shared.model.Track(
+        id = "search-${title.hashCode()}-${artist.hashCode()}",
+        title = title,
+        artist = artist,
+        album = album,
+        duration = duration,
+        artworkUrl = artworkUrl,
+        spotifyId = spotifyId,
+        recordingMbid = mbid,
+        artistMbid = artistMbid,
+    )
+
 @Serializable
 data class AlbumSearchResult(
     val title: String,

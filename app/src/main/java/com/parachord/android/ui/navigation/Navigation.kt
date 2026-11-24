@@ -132,10 +132,12 @@ fun ParachordNavHost(
     listenAlongCanAdvance: Boolean = false,
     onListenAlongNext: () -> Unit = {},
     modifier: Modifier = Modifier,
+    /** The graph's start destination; the AAOS parked full UI opens at Settings. */
+    startRoute: String = Routes.HOME,
 ) {
     NavHost(
         navController = navController,
-        startDestination = Routes.HOME,
+        startDestination = startRoute,
         modifier = modifier,
         enterTransition = {
             fadeIn(animationSpec = tween(300)) + slideInHorizontally(

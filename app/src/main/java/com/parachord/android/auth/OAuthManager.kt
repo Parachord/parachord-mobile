@@ -503,11 +503,26 @@ class OAuthManager constructor(
         // with NEW_TASK if no Activity is tracked (defensive; should always
         // have one since OAuth is initiated from the Settings screen).
         val activity = com.parachord.android.app.CurrentActivityHolder.current
+        val launchContext: android.content.Context
         if (activity != null) {
-            customTabsIntent.launchUrl(activity, uri)
+            launchContext = activity
         } else {
             customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            customTabsIntent.launchUrl(context, uri)
+            launchContext = context
+        }
+        try {
+            customTabsIntent.launchUrl(launchContext, uri)
+        } catch (e: android.content.ActivityNotFoundException) {
+            // No Custom Tab provider — Android Automotive ships Chrome Beta or
+            // the OEM's own link viewer, not the phone's Chrome. Fall back to
+            // any activity that can view the URL.
+            try {
+                val view = Intent(Intent.ACTION_VIEW, uri)
+                if (activity == null) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                launchContext.startActivity(view)
+            } catch (e2: Exception) {
+                Log.e(TAG, "No browser to open sign-in", e2)
+            }
         }
     }
 

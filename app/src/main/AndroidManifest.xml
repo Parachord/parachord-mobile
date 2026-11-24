@@ -15,6 +15,13 @@
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
 
+    <!-- The app runs on a car's own Android too (Android Automotive, e.g. a
+         Volvo EX90): on such a device MainActivity swaps its root to the car
+         UI. required="false" so phones install it unchanged. -->
+    <uses-feature
+        android:name="android.hardware.type.automotive"
+        android:required="false" />
+
     <!--
       Package visibility (Android 11+): without this Parachord can't see Spotify,
       so getLaunchIntentForPackage("com.spotify.music") returns null and the
@@ -25,6 +32,14 @@
         <package android:name="com.spotify.music" />
         <!-- Android Auto's car-connection state (CarConnections.confirmed). -->
         <provider android:authorities="androidx.car.app.connection" />
+        <!-- A browser, for OAuth on a car: Custom Tabs fall back to a plain
+             ACTION_VIEW when no custom-tab provider resolves (Android
+             Automotive has Chrome Beta, or the OEM's own link viewer). -->
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <category android:name="android.intent.category.BROWSABLE" />
+            <data android:scheme="https" />
+        </intent>
     </queries>
 
     <application
