@@ -210,9 +210,11 @@ class CarSearchViewModel(
     }
 }
 
-/** The car's search screen: a text field on the car's own keyboard, then one merged list of results. */
+/** The car's search screen: a text field on the car's own keyboard, then one merged list of results.
+ * While the car moves the field is off (driver distraction: no text entry in motion) —
+ * the car's voice assistant searches and plays through the shared MediaLibrarySession instead. */
 @Composable
-fun CarSearchScreen(onBack: () -> Unit, onPlayed: () -> Unit) {
+fun CarSearchScreen(onBack: () -> Unit, onPlayed: () -> Unit, restricted: Boolean = false) {
     val viewModel: CarSearchViewModel = koinViewModel()
     val query by viewModel.query.collectAsStateWithLifecycle()
     val items by viewModel.items.collectAsStateWithLifecycle()
@@ -244,8 +246,13 @@ fun CarSearchScreen(onBack: () -> Unit, onPlayed: () -> Unit) {
                     .heightIn(min = 68.dp)
                     .padding(end = 24.dp),
                 placeholder = {
-                    Text("Search your music", fontSize = 16.sp, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text(
+                        if (restricted) "Voice search only while driving" else "Search your music",
+                        fontSize = 16.sp,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
                 },
+                enabled = !restricted,
                 singleLine = true,
                 textStyle = TextStyle(fontSize = 16.sp),
                 leadingIcon = { ParachordIcon(AppIcon.Search, contentDescription = null, size = 26.dp) },
@@ -256,6 +263,14 @@ fun CarSearchScreen(onBack: () -> Unit, onPlayed: () -> Unit) {
                     focusedContainerColor = MaterialTheme.colorScheme.surface,
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                 ),
+            )
+        }
+        if (restricted) {
+            Text(
+                text = "Typing is off while driving — ask your car’s voice assistant to play music on Parachord",
+                fontSize = 13.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 28.dp, vertical = 4.dp),
             )
         }
         if (searching) {
@@ -275,6 +290,7 @@ fun CarSearchScreen(onBack: () -> Unit, onPlayed: () -> Unit) {
             ) {
                 Text(
                     text = when {
+                        restricted -> "Voice search only while driving"
                         hasSearched -> "No results"
                         else -> "Type at least ${SearchSession.MIN_QUERY_LENGTH} characters"
                     },

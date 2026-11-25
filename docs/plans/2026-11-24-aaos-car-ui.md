@@ -73,6 +73,11 @@ restricted) when the car service is unavailable — the gate is a convenience,
 not a safety interlock. The gear and the NotConfigured button are disabled
 while restricted.
 
+While restricted, the drive UI follows the driver-distraction rules: the
+search field is off (typing is not allowed in motion — the car's voice
+assistant searches through the shared MediaLibrarySession instead) and the
+queue caps at 8 jump targets with a "Park to see the full queue" line.
+
 ## Reuse (the "shared code" check)
 
 - `RecommendationsViewModel` is used verbatim by the car home (its play

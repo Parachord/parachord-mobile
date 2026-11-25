@@ -42,6 +42,9 @@ import com.parachord.shared.ui.TrackRowRules
 import com.parachord.shared.ui.icons.AppIcon
 import org.koin.androidx.compose.koinViewModel
 
+/** While the car moves, this many rows of the queue are jump targets (driver distraction: short lists in motion). */
+private const val DRIVE_QUEUE_CAP = 8
+
 /**
  * The car's queue: the current track, then Up Next. A row tap jumps to that
  * song (`playFromQueue`) and that is all the queue does — no reordering, no
@@ -49,11 +52,11 @@ import org.koin.androidx.compose.koinViewModel
  * user's queue) dim and number with "··", as the phone's `QueueSheet` does.
  */
 @Composable
-fun CarQueueScreen(mainViewModel: MainViewModel, onBack: () -> Unit) {
+fun CarQueueScreen(mainViewModel: MainViewModel, onBack: () -> Unit, restricted: Boolean = false) {
     val nowPlaying: NowPlayingViewModel = koinViewModel()
     val state by nowPlaying.playbackState.collectAsStateWithLifecycle()
     val trackArtwork by mainViewModel.trackArtwork.collectAsStateWithLifecycle()
-    val upNext = state.upNext
+    val upNext = if (restricted) state.upNext.take(DRIVE_QUEUE_CAP) else state.upNext
     val suspended = state.queueSuspended
 
     Column(
@@ -125,6 +128,7 @@ fun CarQueueScreen(mainViewModel: MainViewModel, onBack: () -> Unit) {
                         )
                     }
                 }
+                val capped = restricted && state.upNext.size > DRIVE_QUEUE_CAP
                 itemsIndexed(upNext, key = { index, track -> "car:queue:${track.id}-$index" }) { index, track ->
                     CarQueueRow(
                         track = track,
@@ -133,6 +137,16 @@ fun CarQueueScreen(mainViewModel: MainViewModel, onBack: () -> Unit) {
                         trackArtwork = trackArtwork,
                         onTap = { nowPlaying.playFromQueue(index) },
                     )
+                }
+                if (capped) {
+                    item(key = "car:queue:more") {
+                        Text(
+                            text = "Park to see the full queue",
+                            fontSize = 13.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(horizontal = 28.dp, vertical = 12.dp),
+                        )
+                    }
                 }
             }
         }

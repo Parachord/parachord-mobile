@@ -188,10 +188,12 @@ fun CarRoot(mainViewModel: MainViewModel) {
                 CarScreen.QUEUE -> CarQueueScreen(
                     mainViewModel = mainViewModel,
                     onBack = { screen = CarScreen.HOME },
+                    restricted = restricted,
                 )
                 CarScreen.SEARCH -> CarSearchScreen(
                     onBack = { screen = CarScreen.HOME },
                     onPlayed = { screen = CarScreen.NOW_PLAYING },
+                    restricted = restricted,
                 )
             }
         }
