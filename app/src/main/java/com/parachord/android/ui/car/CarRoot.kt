@@ -2,6 +2,7 @@ package com.parachord.android.ui.car
 
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -13,11 +14,14 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -190,8 +194,8 @@ fun CarRoot(mainViewModel: MainViewModel) {
 
 /**
  * The bar over the full app. A bar (not a floating disc) so the close button
- * can't sit on top of the app's own top-right controls; its label says where
- * the close goes.
+ * can't sit on top of the app's own top-right controls — and a labeled button,
+ * because a bare X in the corner proved easy to miss on the car screen.
  */
 @Composable
 private fun CarFullUiBar(onClose: () -> Unit) {
@@ -200,7 +204,7 @@ private fun CarFullUiBar(onClose: () -> Unit) {
             .fillMaxWidth()
             .background(PlayerSurface)
             .statusBarsPadding()
-            .height(56.dp)
+            .height(64.dp)
             .padding(horizontal = 20.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -210,19 +214,21 @@ private fun CarFullUiBar(onClose: () -> Unit) {
             fontSize = 13.sp,
             fontWeight = FontWeight.Medium,
         )
-        Text(
-            text = "  —  close returns to the car home",
-            color = PlayerTextSecondary.copy(alpha = 0.7f),
-            fontSize = 12.sp,
-        )
         Spacer(Modifier.weight(1f))
-        IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+        OutlinedButton(
+            onClick = onClose,
+            modifier = Modifier.height(48.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = Color.White),
+            border = BorderStroke(1.dp, Color.White.copy(alpha = 0.4f)),
+            shape = RoundedCornerShape(24.dp),
+        ) {
             Icon(
                 imageVector = Icons.Default.Close,
-                contentDescription = "Close",
-                tint = Color.White,
-                modifier = Modifier.size(26.dp),
+                contentDescription = null,
+                modifier = Modifier.size(20.dp),
             )
+            Spacer(Modifier.width(6.dp))
+            Text(text = "Close", fontSize = 14.sp)
         }
     }
 }
