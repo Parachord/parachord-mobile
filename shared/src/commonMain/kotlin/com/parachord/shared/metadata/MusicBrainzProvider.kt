@@ -1,6 +1,7 @@
 package com.parachord.shared.metadata
 
 import com.parachord.shared.api.MbArtist
+import com.parachord.shared.api.MbRelease
 import com.parachord.shared.api.MbReleaseGroup
 import com.parachord.shared.api.MbReleaseGroupEntry
 import com.parachord.shared.api.MusicBrainzClient
@@ -221,7 +222,9 @@ class MusicBrainzProvider(
      * release group's edition [MusicBrainzClient.albumReleaseOfGroup] picks
      * (#560), with its tracks, or the release itself.
      * Otherwise a search for the release ([RELEASE_SEARCH_HITS] hits, the top
-     * hit's album picked among them by [orderReleaseSearchHits]), then its lookup.
+     * hit's album picked among them by [orderReleaseSearchHits]), then its lookup;
+     * a joint credit the search doesn't find is searched again by its names
+     * ([jointCreditHits]).
      */
     override suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         return try {
@@ -242,8 +245,9 @@ class MusicBrainzProvider(
                 // release-group path would (#833): the top hit itself can be an
                 // empty placeholder edition.
                 val query = "release:\"$albumTitle\" AND artist:\"$artistName\""
-                val results = api.searchReleases(query, limit = RELEASE_SEARCH_HITS)
-                val release = orderReleaseSearchHits(results.releases).firstOrNull() ?: return null
+                val hits = api.searchReleases(query, limit = RELEASE_SEARCH_HITS).releases
+                    .ifEmpty { jointCreditHits(albumTitle, artistName) }
+                val release = orderReleaseSearchHits(hits).firstOrNull() ?: return null
                 releaseType = normalizeReleaseType(release.releaseGroup)
                 // Look up the release with recordings included
                 api.getRelease(release.id)
@@ -278,6 +282,22 @@ class MusicBrainzProvider(
             // without it (a null here would read as "no such album").
             throw e
         }
+    }
+
+    /**
+     * The search again with each name of a joint credit on its own, when the
+     * whole credit found nothing (#843): MusicBrainz joins a credit its own way
+     * ("Jay‐Z & Kanye West"), and services (and our own rows) write "A, B", a
+     * phrase it doesn't have. Asked second because an act's own name can carry
+     * a separator ("Tyler, The Creator"). Only hits credited to the same act
+     * are kept. Nothing is asked for a single name.
+     */
+    private suspend fun jointCreditHits(albumTitle: String, artistName: String): List<MbRelease> {
+        val names = AlbumCatalog.creditedArtists(artistName)
+        if (names.size < 2) return emptyList()
+        val query = names.joinToString(" AND ", prefix = "release:\"${quoted(albumTitle)}\" AND ") { "artist:\"${quoted(it)}\"" }
+        return api.searchReleases(query, limit = RELEASE_SEARCH_HITS).releases
+            .filter { AlbumCatalog.creditMatches(artistName, it.artistName) }
     }
 
     /**
@@ -335,6 +355,9 @@ class MusicBrainzProvider(
         const val RELEASE_SEARCH_HITS = 25
         /** How many albums [albumHints] remembers. */
         private const val ALBUM_HINT_LIMIT = 1000
+
+        /** Text inside a quoted search phrase. */
+        private fun quoted(text: String) = text.replace("\\", "\\\\").replace("\"", "\\\"")
 
         private fun albumKey(artist: String, title: String) = "${artist.lowercase().trim()}\u0000${title.lowercase().trim()}"
 
