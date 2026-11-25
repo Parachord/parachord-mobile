@@ -179,6 +179,11 @@ class TrackDao(private val db: ParachordDb, private val driver: SqlDriver) {
         queries.updateArtworkById(artworkUrl = artworkUrl, id = id)
     }
 
+    /** Blank local files' covers that came from an online lookup, so they're looked up again. */
+    suspend fun clearLookedUpLocalArtwork(): Unit = withContext(Dispatchers.Default) {
+        queries.clearLookedUpLocalArtwork()
+    }
+
     /** Replace a dead cover URL on every track row that holds it. */
     suspend fun replaceArtworkUrl(dead: String, fresh: String): Unit = withContext(Dispatchers.Default) {
         queries.replaceArtworkUrl(fresh = fresh, dead = dead)

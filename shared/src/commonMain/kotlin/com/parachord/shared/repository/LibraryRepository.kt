@@ -106,6 +106,9 @@ class LibraryRepository(
     suspend fun getLocalFiles(): List<Track> = trackDao.getLocalFiles()
     fun searchAlbums(query: String): Flow<List<Album>> = albumDao.search(query)
 
+    /** See [TrackDao.clearLookedUpLocalArtwork]. */
+    suspend fun clearLookedUpLocalArtwork() = trackDao.clearLookedUpLocalArtwork()
+
     fun getAlbumTracks(albumId: String): Flow<List<Track>> = trackDao.getByAlbumId(albumId)
 
     suspend fun getAlbumByTitleAndArtist(title: String, artist: String): Album? =

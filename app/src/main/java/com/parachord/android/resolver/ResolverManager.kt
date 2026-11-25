@@ -269,7 +269,7 @@ class ResolverManager constructor(
         )
         val cascadeResults = cascade.sources
         val cascadeByResolver = cascadeResults.associateBy { it.resolver }
-        val mergedHints = results.map { hint ->
+        val mergedHints = com.parachord.shared.resolver.ResolverRetry.demoteWrongHints(results, cascadeResults, targetTitle, targetArtist).map { hint ->
             if (hint.artworkUrl == null) {
                 val cascadeArt = cascadeByResolver[hint.resolver]?.artworkUrl
                 if (cascadeArt != null) hint.copy(artworkUrl = cascadeArt) else hint
@@ -306,6 +306,10 @@ class ResolverManager constructor(
                 isrc = com.parachord.shared.resolver.validateIsrc(track.externalIds?.isrc),
                 // Direct-ID match — see SoundCloud branch above (~L190).
                 confidence = 1.0,
+                // The song the id stands for, so a wrong one shows
+                // ([demoteWrongHints]).
+                matchedTitle = track.name,
+                matchedArtist = track.artistName,
                 artworkUrl = track.album?.images?.firstOrNull()?.url,
             )
         } catch (e: com.parachord.shared.api.SpotifyRateLimitedException) {

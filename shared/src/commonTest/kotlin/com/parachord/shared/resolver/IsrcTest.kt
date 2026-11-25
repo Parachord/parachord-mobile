@@ -60,6 +60,17 @@ class IsrcTest {
         assertEquals("USRC12500400", picked)
     }
 
+    @Test fun pickTrackIsrc_skipsAMatchBelowTheFloor() {
+        // Spotify's wrong song for a local file, kept at 0.50: its ISRC must
+        // never become the track's, or the wrong song comes back at 1.0.
+        val wrong = source("spotify", "GBUM71029604").copy(confidence = 0.5)
+        assertNull(pickTrackIsrc(null, listOf(wrong)))
+        assertEquals(
+            "USRC12500400",
+            pickTrackIsrc(null, listOf(wrong, source("applemusic", "USRC12500400").copy(confidence = 0.95))),
+        )
+    }
+
     @Test fun pickTrackIsrc_normalizesAndDropsMalformed() {
         // First source's value is malformed → skipped; second normalizes.
         val picked = pickTrackIsrc(

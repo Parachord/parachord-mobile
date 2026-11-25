@@ -447,7 +447,7 @@ fun validateIsrc(raw: String?): String? =
 /**
  * Pick the best ISRC for a track, mirroring desktop's `window.pickTrackIsrc`:
  * the track's own (carried) ISRC first, then walk the resolved sources in order,
- * skipping `noMatch`. Every candidate is [validateIsrc]-normalized, so the result
+ * skipping `noMatch` and anything below the confidence floor. Every candidate is [validateIsrc]-normalized, so the result
  * is always canonical or null. Byte-equivalent precedence with desktop so the
  * same track yields the same ISRC→MBID fallback result on either client.
  *
@@ -458,7 +458,10 @@ fun validateIsrc(raw: String?): String? =
 fun pickTrackIsrc(topLevelIsrc: String?, sources: List<ResolvedSource>): String? {
     validateIsrc(topLevelIsrc)?.let { return it }
     for (source in sources) {
-        if (source.noMatch) continue
+        // A match below the floor is another song, kept only so the resolver
+        // isn't asked again (desktop never holds one): its ISRC would make that
+        // song the track's identity, and the next resolve would accept it at 1.0.
+        if (source.noMatch || (source.confidence ?: 1.0) < ResolverScoring.MIN_CONFIDENCE_THRESHOLD) continue
         validateIsrc(source.isrc)?.let { return it }
     }
     return null
