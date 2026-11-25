@@ -52,6 +52,11 @@ User-reported issues and their fixes (all verified on the API-35 playstore emula
 
 Also: `minCarApiLevel` must be **application-level** meta-data (the host's `AppInfo.create` reads it from the Context — not from the service, the activity, or the metadata holder service); tabs require icons (`Tab.Builder.setIcon`); the TabTemplate requires `setHeaderAction(Action.APP_ICON)`.
 
+## Round 3 — Now Playing access, the queue, and the media card's art
+
+- **No way into Now Playing** — the car's media card taps out with a plain launcher intent (not `ACTION_SHOW_MEDIA_PLAYBACK`, which only the host itself would send), so nothing in the drive app ever reached the playback view. The home now has a fourth **Now Playing** tab (after For You, before Search) that pushes the `MediaPlaybackTemplate` — guarded by "something has played", the same rule as the show-playback intent, because an idle session renders an empty dark surface. The queue stays one tap further, on the playback view's header.
+- **The home-screen media card had no album art** — the AAOS media card (and the CAL playback view) read the session's *compat bitmap*, which only `MediaMetadata.artworkData` becomes; a `artworkUri` URI alone renders no art. The service now embeds the playing item's artwork as PNG bytes: the artwork the notification already fetches is re-encoded and published through `sessionArtworkData` (a `MutableStateFlow<url, bytes>`) into the `queueSnapshotJob` combine, and the timeline's current item carries it when the fetched URL is the item's (`toAutoMediaItem(artworkData = …)`). The fetch self-corrects: `createNotification` reads the effective artwork URL from the player's metadata — the same URL the timeline item carries.
+
 ## Known limitations (v1)
 
 - Not tested on a device (the EX90): the drive-mode gate on the full app (AAOS blocks non-`distractionOptimized` activities while moving — the emulator is a user build, no VHAL injection), real audio playback, and the actual media card tap while playing.

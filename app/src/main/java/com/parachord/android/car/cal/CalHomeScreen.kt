@@ -41,6 +41,7 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     private val recommendationsRepository: RecommendationsRepository by lazy { GlobalContext.get().get() }
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
     private val art: CalArt by lazy { GlobalContext.get().get() }
+    private val stateHolder: com.parachord.android.playback.PlaybackStateHolder by lazy { GlobalContext.get().get() }
 
     private var activeTabId = TAB_LIBRARY
     private var playlists: List<Playlist> = emptyList()
@@ -53,6 +54,15 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                 when (contentId) {
                     TAB_SEARCH -> {
                         screenManager.push(CalSearchScreen(carContext))
+                        invalidate()
+                    }
+                    TAB_NOW_PLAYING -> {
+                        // Only once something has played: the host renders the
+                        // playback view from the session, and with nothing
+                        // playing it is an empty dark surface.
+                        if (stateHolder.state.value.currentTrack != null) {
+                            screenManager.push(CalNowPlayingScreen(carContext))
+                        }
                         invalidate()
                     }
                     else -> {
@@ -72,6 +82,11 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             .addTab(
                 Tab.Builder().setTitle("For You").setContentId(TAB_FOR_YOU)
                     .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, com.parachord.android.R.drawable.ic_auto_heart_outline)).build())
+                    .build(),
+            )
+            .addTab(
+                Tab.Builder().setTitle("Now Playing").setContentId(TAB_NOW_PLAYING)
+                    .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, android.R.drawable.ic_media_play)).build())
                     .build(),
             )
             .addTab(
@@ -247,6 +262,7 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     private companion object {
         const val TAB_LIBRARY = "library"
         const val TAB_FOR_YOU = "for_you"
+        const val TAB_NOW_PLAYING = "now_playing"
         const val TAB_SEARCH = "search"
     }
 }

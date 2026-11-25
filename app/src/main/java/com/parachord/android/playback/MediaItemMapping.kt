@@ -35,7 +35,7 @@ internal fun immersiveAudioExtras(): android.os.Bundle =
  *   Auto fetches over HTTPS for remote URIs and accepts `content://` for
  *   local files.
  */
-fun TrackEntity.toAutoMediaItem(immersive: Boolean = false): MediaItem {
+fun TrackEntity.toAutoMediaItem(immersive: Boolean = false, artworkData: ByteArray? = null): MediaItem {
     val builder = MediaMetadata.Builder()
         .setTitle(title)
         .setSubtitle(artist)
@@ -45,6 +45,10 @@ fun TrackEntity.toAutoMediaItem(immersive: Boolean = false): MediaItem {
         .setIsPlayable(true)
         .setIsBrowsable(false)
     artworkUrl?.let { builder.setArtworkUri(Uri.parse(it)) }
+    // The car's home-screen media card (and the CAL playback view) read the
+    // session's compat bitmap — which only the embedded artworkData becomes
+    // (artworkUri stays a URI the system renderers don't fetch).
+    artworkData?.let { builder.setArtworkData(it) }
     if (immersive) builder.setExtras(immersiveAudioExtras())
     return MediaItem.Builder()
         .setMediaId(id)

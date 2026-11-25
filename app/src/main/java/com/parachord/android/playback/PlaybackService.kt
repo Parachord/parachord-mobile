@@ -175,6 +175,35 @@ class PlaybackService : MediaLibraryService() {
     private var currentArtworkUrl: String? = null
     private var currentArtworkBitmap: Bitmap? = null
 
+    /**
+     * The playing track's artwork as encoded bytes (url → PNG), published into
+     * the session's [androidx.media3.common.MediaMetadata] so the car's
+     * home-screen media card — and the CAL host's `MediaPlaybackTemplate` —
+     * show the album art. A URI alone doesn't cross: the system renderers read
+     * the compat bitmap, which only `artworkData` becomes.
+     */
+    private val sessionArtworkData = kotlinx.coroutines.flow.MutableStateFlow<Pair<String?, ByteArray?>>(null to null)
+
+    /** Sets the current artwork everywhere it's needed: the notification fields and the session metadata flow. */
+    private fun setCurrentArtwork(url: String?, bitmap: Bitmap?) {
+        currentArtworkUrl = url
+        currentArtworkBitmap = bitmap
+        serviceScope.launch {
+            val bytes = bitmap?.let { bmp ->
+                kotlinx.coroutines.withContext(Dispatchers.IO) {
+                    try {
+                        val out = java.io.ByteArrayOutputStream()
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
+                        out.toByteArray()
+                    } catch (_: Exception) {
+                        null
+                    }
+                }
+            }
+            sessionArtworkData.value = url to bytes
+        }
+    }
+
     companion object {
         /**
          * The service's session as a compat token — the CAL media templates host
@@ -452,21 +481,32 @@ class PlaybackService : MediaLibraryService() {
                 queueManager.snapshot,
                 stateHolder.state,
                 trackResolverCache.trackArtwork,
-            ) { qs, state, trackArtwork ->
+                sessionArtworkData,
+            ) { qs, state, trackArtwork, artworkData ->
                 // The phone's Now Playing: the service's reported title, artist
                 // and cover over the queued track (#721), so the car never shows
                 // one song's names with another's cover.
                 val current = state.effectiveTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
-                Triple(
+                listOf(
                     current,
                     qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) },
                     // A Dolby Atmos mix playing: the car leaves its own sound effects out.
                     com.parachord.shared.playback.drm.isImmersiveQuality(state.playingQualityLabel),
+                    // The playing track's embedded artwork (url → bytes), for the
+                    // car's media card and the CAL playback view.
+                    artworkData,
                 )
             }
                 .distinctUntilChanged()
-                .collect { (current, upNext, immersive) ->
-                    wrapper.updateQueueSnapshot(currentTrack = current, upNext = upNext, currentImmersive = immersive)
+                .collect { parts ->
+                    @Suppress("UNCHECKED_CAST")
+                    val artworkData = parts[3] as Pair<String?, ByteArray?>?
+                    wrapper.updateQueueSnapshot(
+                        currentTrack = parts[0] as com.parachord.shared.model.Track?,
+                        upNext = parts[1] as List<com.parachord.shared.model.Track>,
+                        currentImmersive = parts[2] as Boolean,
+                        currentArtworkData = artworkData,
+                    )
                 }
         }
     }
@@ -1183,10 +1223,8 @@ class PlaybackService : MediaLibraryService() {
 
                 // Load artwork if URL changed
                 if (artworkUrl != currentArtworkUrl) {
-                    currentArtworkUrl = artworkUrl
-                    currentArtworkBitmap = if (artworkUrl != null) {
-                        fetchArtworkBitmap(artworkUrl)
-                    } else null
+                    val bitmap = if (artworkUrl != null) fetchArtworkBitmap(artworkUrl) else null
+                    setCurrentArtwork(artworkUrl, bitmap)
                 }
 
                 val nm = getSystemService(NotificationManager::class.java)
@@ -1374,15 +1412,14 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun loadArtworkAndUpdateNotification(title: String, artist: String, artworkUrl: String?) {
-        currentArtworkUrl = artworkUrl
         if (artworkUrl == null) {
-            currentArtworkBitmap = null
+            setCurrentArtwork(null, null)
             return
         }
         serviceScope.launch {
             val bitmap = fetchArtworkBitmap(artworkUrl)
             if (currentArtworkUrl == artworkUrl) {
-                currentArtworkBitmap = bitmap
+                setCurrentArtwork(artworkUrl, bitmap)
                 if (isExternalForeground) {
                     val nm = getSystemService(NotificationManager::class.java)
                     nm?.notify(
@@ -1576,7 +1613,7 @@ class PlaybackService : MediaLibraryService() {
                 serviceScope.launch {
                     val bitmap = fetchArtworkBitmap(artworkUrl)
                     if (currentArtworkUrl == artworkUrl) {
-                        currentArtworkBitmap = bitmap
+                        setCurrentArtwork(artworkUrl, bitmap)
                         val updated = buildNotification(title, artist, isPlaying, bitmap)
                         repostMediaNotification(isExternalForeground) {
                             onNotificationChangedCallback.onNotificationChanged(
@@ -2171,7 +2208,12 @@ class PlaybackService : MediaLibraryService() {
          * warning log) to avoid clobbering the snapshot mid-dispatch. Auto's
          * typical usage doesn't trigger this; the guard is defensive.
          */
-        fun updateQueueSnapshot(currentTrack: TrackEntity?, upNext: List<TrackEntity>, currentImmersive: Boolean = false) {
+        fun updateQueueSnapshot(
+            currentTrack: TrackEntity?,
+            upNext: List<TrackEntity>,
+            currentImmersive: Boolean = false,
+            currentArtworkData: Pair<String?, ByteArray?>? = null,
+        ) {
             if (dispatching) {
                 Log.w(TAG, "updateQueueSnapshot called re-entrantly from a listener callback; ignoring inner call to avoid clobbering snapshot state")
                 return
@@ -2212,7 +2254,12 @@ class PlaybackService : MediaLibraryService() {
                     emptyList()
                 }
                 val immersive = currentTrack != null && currentImmersive
-                val items = combined.mapIndexed { i, t -> t.toAutoMediaItem(immersive = i == 0 && immersive) }
+                val items = combined.mapIndexed { i, t ->
+                    // The current track's artwork rides as embedded bytes when the
+                    // fetched artwork is for this track's URL.
+                    val data = currentArtworkData?.takeIf { it.first == t.artworkUrl && i == 0 }?.second
+                    t.toAutoMediaItem(immersive = i == 0 && immersive, artworkData = data)
+                }
                 val durationsUs = LongArray(combined.size) { i ->
                     val durMs = combined[i].duration ?: 0L
                     if (durMs > 0L) durMs * 1000L else C.TIME_UNSET
