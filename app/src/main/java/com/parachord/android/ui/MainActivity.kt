@@ -269,7 +269,11 @@ class MainActivity : ComponentActivity() {
 fun ParachordApp() {
     val mainViewModel: MainViewModel = koinViewModel()
     val themeMode by mainViewModel.themeMode.collectAsStateWithLifecycle()
-    val darkTheme = when (themeMode) {
+    // A car's screen is always dark: Android Auto's own template is, and the
+    // player surfaces already are (the player surface) — a light car home in
+    // day mode would read as broken next to them. The parked full UI shares the
+    // same display and follows.
+    val darkTheme = com.parachord.android.car.CarEnvironment.isAutomotive(LocalContext.current) || when (themeMode) {
         "dark" -> true
         "light" -> false
         else -> isSystemInDarkTheme()

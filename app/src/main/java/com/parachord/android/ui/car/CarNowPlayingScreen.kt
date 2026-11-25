@@ -54,6 +54,7 @@ import com.parachord.android.ui.theme.PlayerTextPrimary
 import com.parachord.android.ui.theme.PlayerTextSecondary
 import com.parachord.android.ui.theme.PurpleDark
 import com.parachord.shared.car.CarNowPlayingButton
+import com.parachord.shared.playback.shuffleAllowed
 import com.parachord.shared.car.carNowPlayingButtons
 import com.parachord.shared.ui.LayoutRules
 import com.parachord.shared.ui.DesignTokens
@@ -250,8 +251,21 @@ fun CarNowPlayingScreen(
                         }
                     }
                     Spacer(Modifier.height(20.dp))
-                    // The same custom buttons Auto's now playing shows.
                     Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        // Shuffle, as the phone's Now Playing: disabled during a
+                        // spinoff or Listen Along (the shared shuffleAllowed rule).
+                        IconButton(
+                            onClick = { nowPlaying.toggleShuffle() },
+                            enabled = shuffleAllowed(state.spinoffMode, state.playbackContext?.type),
+                            modifier = Modifier.size(64.dp),
+                            colors = IconButtonDefaults.iconButtonColors(
+                                contentColor = if (state.shuffleEnabled) ActiveControlColor else PlayerTextSecondary,
+                                disabledContentColor = PlayerTextSecondary.copy(alpha = 0.3f),
+                            ),
+                        ) {
+                            ParachordIcon(AppIcon.Shuffle, contentDescription = "Shuffle", size = 30.dp)
+                        }
+                        // The same custom buttons Auto's now playing shows.
                         carNowPlayingButtons(
                             loved = loved,
                             spinoffMode = state.spinoffMode,

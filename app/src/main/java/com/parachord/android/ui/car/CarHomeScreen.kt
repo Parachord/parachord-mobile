@@ -1,18 +1,21 @@
 package com.parachord.android.ui.car
 
 import android.widget.Toast
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.LazyRow
@@ -41,10 +44,12 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.parachord.android.R
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.ui.MainViewModel
+import com.parachord.android.ui.components.AlbumArtCard
 import com.parachord.android.ui.components.ParachordAlbumCard
 import com.parachord.android.ui.components.ParachordIcon
 import com.parachord.android.ui.components.ResolveWhileVisible
 import com.parachord.android.ui.components.SectionHeader
+import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.screens.discover.ListenerCard
 import com.parachord.android.ui.screens.discover.RecAlbumCard
 import com.parachord.android.ui.screens.discover.RecArtistCard
@@ -60,6 +65,7 @@ import kotlinx.datetime.TimeZone
 import kotlinx.datetime.todayIn
 import org.koin.androidx.compose.koinViewModel
 import com.parachord.shared.playback.resolverDisplayName
+import com.parachord.shared.home.HomeCopy
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
 import com.parachord.shared.recommendations.RecommendationPageBlock
@@ -105,6 +111,8 @@ fun CarHomeScreen(
     onOpenNowPlaying: () -> Unit,
 ) {
     val viewModel: RecommendationsViewModel = koinViewModel()
+    val libraryViewModel: CarHomeLibraryViewModel = koinViewModel()
+    val playlists by libraryViewModel.playlists.collectAsStateWithLifecycle()
     val page by viewModel.page.collectAsStateWithLifecycle()
     val context = LocalContext.current
 
@@ -114,6 +122,9 @@ fun CarHomeScreen(
     LaunchedEffect(Unit) {
         viewModel.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
     }
+    LaunchedEffect(Unit) {
+        libraryViewModel.messages.collect { Toast.makeText(context, it, Toast.LENGTH_SHORT).show() }
+    }
 
     Column(
         Modifier
@@ -122,7 +133,14 @@ fun CarHomeScreen(
     ) {
         CarHomeTopBar(restricted = restricted, onOpenSearch = onOpenSearch, onOpenFullUi = onOpenFullUi)
         Box(Modifier.weight(1f)) {
-            CarRecommendations(viewModel = viewModel, page = page, restricted = restricted, onOpenFullUi = onOpenFullUi)
+            CarRecommendations(
+                viewModel = viewModel,
+                page = page,
+                restricted = restricted,
+                onOpenFullUi = onOpenFullUi,
+                libraryViewModel = libraryViewModel,
+                playlists = playlists,
+            )
         }
         CarNowPlayingBar(mainViewModel = mainViewModel, onClick = onOpenNowPlaying)
     }
@@ -172,10 +190,17 @@ private fun CarRecommendations(
     page: RecommendationPageState,
     restricted: Boolean,
     onOpenFullUi: () -> Unit,
+    libraryViewModel: CarHomeLibraryViewModel,
+    playlists: List<com.parachord.android.data.db.entity.PlaylistEntity>,
 ) {
     // No source chips in the car: every category shows, from every source.
     val filter = activeSourceFilter(null, page.sources)
-    when (val status = pageStatus(page, filter)) {
+    Column(Modifier.fillMaxSize()) {
+        // The Library is the user's own: it shows whatever the recommendations
+        // are doing — loading, failed, or not configured.
+        CarLibrarySection(libraryViewModel = libraryViewModel, playlists = playlists)
+        Box(Modifier.weight(1f)) {
+            when (val status = pageStatus(page, filter)) {
         PageStatus.Loading -> CarPageSkeleton()
         PageStatus.NotConfigured -> CarPageMessage(
             title = RecommendationCopy.NOT_CONFIGURED_TITLE,
@@ -198,13 +223,55 @@ private fun CarRecommendations(
             onButton = { viewModel.retry() },
         )
         PageStatus.Content -> CarRecRows(viewModel = viewModel, page = page, filter = filter)
+            }
+        }
     }
 }
 
-// ── Rows ───────────────────────────────────────────────────────────
-
+/**
+ * The Library section: Collection Radio and the saved playlists. It renders
+ * whatever the recommendations are doing — loading, failed, or not configured —
+ * because it is the user's own music, not a service's answer.
+ */
 @Composable
-private fun CarRecRows(viewModel: RecommendationsViewModel, page: RecommendationPageState, filter: String?) {
+private fun CarLibrarySection(libraryViewModel: CarHomeLibraryViewModel, playlists: List<com.parachord.android.data.db.entity.PlaylistEntity>) {
+    SectionHeader(title = "Library")
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = Gutter),
+        horizontalArrangement = Arrangement.spacedBy(CardGap),
+    ) {
+        item(key = "car:collection-radio") {
+            CarCollectionRadioTile(onPlay = libraryViewModel::playCollectionRadio)
+        }
+        items(playlists, key = { it.id }) { playlist ->
+            com.parachord.android.ui.components.ParachordPlaylistCard(
+                title = playlist.name,
+                lines = listOf("${playlist.trackCount} track${if (playlist.trackCount != 1) "s" else ""}"),
+                width = CarCardWidth,
+                onOpen = { libraryViewModel.playPlaylist(playlist) },
+            ) { side ->
+                AlbumArtCard(
+                    artworkUrl = playlist.artworkUrl,
+                    size = side,
+                    cornerRadius = 0.dp,
+                    elevation = 0.dp,
+                    placeholderName = playlist.name,
+                    contentDescription = playlist.name,
+                )
+            }
+        }
+    }
+}
+
+// ── Rows ───────────────────────────────────────────────────────────// ── Rows ───────────────────────────────────────────────────────────
+
+/** The recommendations blocks of a loaded page, one row of cards per category. */
+@Composable
+private fun CarRecRows(
+    viewModel: RecommendationsViewModel,
+    page: RecommendationPageState,
+    filter: String?,
+) {
     val trackArtwork by viewModel.trackArtwork.collectAsStateWithLifecycle()
     // Read on every composition, so a page left open past midnight updates its "Coming" pills.
     val today = Clock.System.todayIn(TimeZone.currentSystemDefault())
@@ -399,6 +466,42 @@ private fun LazyListScope.carSkeletonCards(key: String, lines: Int) {
         ) {
             items(6) { RecCardSkeleton(lines, width = CarCardWidth) }
         }
+    }
+}
+
+/**
+ * The Library row's Collection Radio tile: the shared radio icon on the fill
+ * accent. Tapping it plays the collection, shuffled (the shared HomeQueues
+ * collection-radio path -- the same thing Home's header button and the Android
+ * Auto tree's "Collection Radio" play).
+ */
+@Composable
+private fun CarCollectionRadioTile(onPlay: () -> Unit, width: Dp = CarCardWidth) {
+    // The shared card box, so the tile's width matches the playlist cards beside it.
+    com.parachord.android.ui.components.ParachordCardBox(width = width, onClick = onPlay) {
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .aspectRatio(1f)
+                .background(FillAccent),
+            contentAlignment = Alignment.Center,
+        ) {
+            ParachordIcon(AppIcon.Radio, contentDescription = null, size = 48.dp, tint = OnFill)
+        }
+        Text(
+            text = HomeCopy.COLLECTION_RADIO,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+        )
+        Text(
+            text = "Everything you have, shuffled",
+            fontSize = 12.sp,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 8.dp),
+        )
+        Spacer(Modifier.height(12.dp))
     }
 }
 

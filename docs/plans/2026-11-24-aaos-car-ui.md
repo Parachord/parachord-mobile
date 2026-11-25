@@ -23,7 +23,9 @@ in `PlaybackService`.
 `CarRoot` holds two states:
 
 - **Car home** (`CarHomeScreen`): top bar with app name, a **search** button
-  and a **settings gear**; the body is the shared recommendations page
+  and a **settings gear**; the body is a **Library section first** (a
+  Collection Radio tile + the library's saved playlists as tiles; plays go
+  through the shared `HomeQueues`), then the shared recommendations page
   (`RecommendationsRepository.page` → `recommendationPageLayout`, previews
   only, no See-all, no source chips); the bottom is a car-scaled
   now-playing bar (the phone `MiniPlayer`'s shape: art, title/artist, heart,
@@ -33,22 +35,28 @@ in `PlaybackService`.
 - **Full UI (parked only)**: the whole `ParachordAppContent` (start route
   Settings) under a close bar that returns to the car home.
 
+**Theme: the app runs always dark on a car** (Android Auto's template is dark;
+  our player surfaces are) — forced in `ParachordApp`'s theme decision.
+
 Car screens below home:
 
 - **Now Playing** (`CarNowPlayingScreen`): Android-Auto-style — large art,
   title/artist, seek slider + times, prev / play-pause (FillAccent disc) /
-  next, and the shared `carNowPlayingButtons` row (heart + Spinoff). A
-  **queue button sits in the corner** and opens the queue.
+  next, shuffle (the shared `shuffleAllowed` rule disables it during a
+  spinoff or Listen Along), and the shared `carNowPlayingButtons` row (heart +
+  Spinoff). A **queue button sits in the corner** and opens the queue.
 - **Queue** (`CarQueueScreen`): the current track + Up Next
   (`PlaybackState.upNext`); a row tap is `playFromQueue(index)` and that is
   all it does (no reorder/remove/clear). Suspended dim (spinoff /
   listen-along) mirrors `QueueSheet`.
 - **Search** (`CarSearchScreen` + `CarSearchViewModel`): a text field on the
-  system IME; queries run through the shared `ResolverSearch`
-  (`streamingResolverSearch`) — every result row is playable (streaming +
-  local files). Results debounce 300 ms from 2 characters, as `SearchSession`
-  does. **A result tap replaces the queue with that one track**
-  (`playTrack` under a `"search"` context) and opens Now Playing.
+  system IME; queries run through the shared `SearchSession` (the phone
+  search's engine — library tracks/albums + remote tracks/albums/artists),
+  with all results **merged into one list** (song/album/artist rows, kind +
+  source badges; the same song once, the library copy first). **A song tap
+  replaces the queue with that one track** (`playTrack` under a `"search"`
+  context), an album plays its tracks, an artist their top songs, and it opens
+  Now Playing.
 
 ## Driving state
 
@@ -56,6 +64,10 @@ Car screens below home:
 `CarUxRestrictionsManager` **through reflection** (`android.car` isn't in the
 public SDK; `CarDrivingStateMonitor` is system-only): `Car.createCar` →
 `getCarManager("uxrestriction")` → current restrictions + a listener proxy.
+The register method's name differs across AAOS builds — `registerListener`
+(on the API-35 car image, verified against its `android.car.jar`) or
+`registerCarUxRestrictionsListener` — so it tries both. `createCar` uses the
+API-30+ two-arg timeout form, falling back to one-arg on older builds.
 `isRequiresDistractionOptimization` ≈ moving. It **fails open** (not
 restricted) when the car service is unavailable — the gate is a convenience,
 not a safety interlock. The gear and the NotConfigured button are disabled
