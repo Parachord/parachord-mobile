@@ -202,6 +202,7 @@ class AndroidProtocolInputResolver constructor(
                         title = t.title,
                         album = t.album ?: detail.title,
                         mbid = t.mbid,
+                        albumArtist = com.parachord.shared.metadata.trackAlbumArtist(t.artist, detail.artist),
                     )
                 },
                 albumArt = detail.artworkUrl,

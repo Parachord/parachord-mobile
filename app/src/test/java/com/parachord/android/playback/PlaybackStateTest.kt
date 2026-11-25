@@ -42,6 +42,19 @@ class PlaybackStateTest {
     }
 
     @Test
+    fun `effectiveTrack keeps the album artist only for the track's own album`() {
+        val track = TrackEntity(
+            id = "1", title = "Lust for Life", artist = "Iggy Pop",
+            album = "Trainspotting", albumArtist = "Various Artists",
+        )
+        fun with(album: String?) =
+            PlaybackState(currentTrack = track, streamingMetadata = StreamingMetadata(album = album)).effectiveTrack?.albumArtist
+        assertEquals("Various Artists", with(null))
+        assertEquals("Various Artists", with("Trainspotting"))
+        assertNull(with("Lust for Life"))
+    }
+
+    @Test
     fun `effectiveTrack uses original values when streaming metadata fields are null`() {
         val track = TrackEntity(
             id = "1", title = "Song", artist = "Artist",

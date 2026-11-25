@@ -13,7 +13,6 @@ import com.parachord.android.data.metadata.ImageEnrichmentService
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.data.store.SettingsStore
-import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
@@ -251,7 +250,7 @@ class LibraryViewModel constructor(
     }
 
     /** Play all tracks from an album in the collection. */
-    fun playAlbum(albumId: String, albumTitle: String) {
+    fun playAlbum(albumId: String, albumTitle: String, albumArtist: String) {
         viewModelScope.launch {
             try {
                 val albumTracks = repository.getAlbumTracks(albumId).first()
@@ -259,7 +258,7 @@ class LibraryViewModel constructor(
                 playbackController.playQueue(
                     albumTracks,
                     startIndex = 0,
-                    context = PlaybackContext(type = "album", name = albumTitle),
+                    context = com.parachord.shared.playback.CatalogQueues.albumContext(albumTitle, albumArtist),
                 )
             } catch (e: Exception) {
                 Log.e("LibraryVM", "Failed to play album '$albumTitle'", e)
