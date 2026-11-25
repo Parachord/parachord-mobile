@@ -121,6 +121,34 @@ object Routes {
 }
 
 /**
+ * Opens a page from outside it (a link, an import): a new entry, unless that
+ * very page is on top. `launchSingleTop` alone reuses the entry on top for
+ * another album too, and its view model keeps the first one's arguments, so
+ * an album link over an album page did nothing.
+ */
+fun NavHostController.openPage(route: String) {
+    val showing = isShowing(route)
+    navigate(route) { launchSingleTop = showing }
+}
+
+/** Whether the page on top is [route]. */
+fun NavHostController.isShowing(route: String): Boolean {
+    val entry = currentBackStackEntry ?: return false
+    val pattern = entry.destination.route ?: return false
+    return filledRoute(pattern, { entry.arguments?.getString(it) }, Uri::encode) == route
+}
+
+/** [pattern] with its arguments filled in, as [Routes]' builders write it: a query argument with no value is left out. */
+internal fun filledRoute(pattern: String, arg: (String) -> String?, encode: (String) -> String): String {
+    val path = Regex("\\{([^}]+)\\}").replace(pattern.substringBefore('?')) { m ->
+        encode(arg(m.groupValues[1]).orEmpty())
+    }
+    val query = pattern.substringAfter('?', "").split('&').filter { it.isNotEmpty() }
+        .mapNotNull { pair -> pair.substringBefore('=').let { name -> arg(name)?.let { "$name=${encode(it)}" } } }
+    return if (query.isEmpty()) path else path + query.joinToString("&", prefix = "?")
+}
+
+/**
  * Every link to an artist's page goes through here, so none reaches one that
  * doesn't exist: Various Artists says so and stays where it is (#840).
  */

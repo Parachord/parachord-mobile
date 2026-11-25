@@ -124,6 +124,14 @@ class AlbumCatalogTest {
         assertNull(AlbumCatalog.pickCatalogAlbum(null, "Wild Pink", "Dulling the Horns"))
     }
 
+    @Test fun aServicesOtherAlbumIsNotPicked() {
+        val hits = listOf("Music Inspired by the Trainspotting Movies" to "Various Artists", "Trainspotting 2" to "Someone", "Trainspotting" to "Various Artists")
+        fun pick(list: List<Pair<String, String>>) =
+            AlbumCatalog.pickAlbum(list, "Various Artists", "Trainspotting", { it.first }, { it.second })
+        assertEquals("Trainspotting", pick(hits)?.first)
+        assertNull(pick(hits.take(1)))
+    }
+
     // ── order ──
 
     @Test fun activeServicesInPriorityOrderFirst_thenTheRest() {
