@@ -1511,6 +1511,9 @@ val androidModule = module {
 
     // ── Android Automotive (AAOS) ───────────────────────────────────
 
+    // Cover art for the CAL rows, loaded through the app's Coil ImageLoader.
+    single { com.parachord.android.car.cal.CalArt() }
+
     // The CAL media templates bridge: every template tap plays through it (the
     // shared queues), and it registers the Media3 session token with the host.
     single {

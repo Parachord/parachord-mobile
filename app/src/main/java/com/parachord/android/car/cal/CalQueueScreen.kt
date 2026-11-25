@@ -5,6 +5,7 @@ import androidx.car.app.Screen
 import androidx.car.app.model.Header
 import androidx.car.app.model.Row
 import androidx.car.app.model.RowSection
+import androidx.car.app.model.Action
 import androidx.car.app.model.SectionedItemTemplate
 import androidx.car.app.model.Template
 import com.parachord.android.playback.PlaybackStateHolder
@@ -13,6 +14,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
@@ -27,8 +30,32 @@ class CalQueueScreen(carContext: CarContext) : Screen(carContext) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
     private val stateHolder: PlaybackStateHolder by lazy { GlobalContext.get().get() }
+    private val art: CalArt by lazy { GlobalContext.get().get() }
+
+    /** Follows the queue: track art loads and row changes invalidate the template. */
+    private var observed = false
+
+    private fun observeState() {
+        if (observed) return
+        observed = true
+        scope.launch {
+            // The state flow ticks with the position; the queue's rows only
+            // change when the current track, Up Next or the context does.
+            stateHolder.state
+                .map { state ->
+                    listOfNotNull(
+                        state.currentTrack?.id,
+                        state.playbackContext?.name,
+                        state.upNext.joinToString(",") { it.id },
+                    )
+                }
+                .distinctUntilChanged()
+                .collect { invalidate() }
+        }
+    }
 
     override fun onGetTemplate(): Template {
+        observeState()
         val state = stateHolder.state.value
         val current = state.currentTrack
         val upNext = state.upNext
@@ -39,18 +66,22 @@ class CalQueueScreen(carContext: CarContext) : Screen(carContext) {
             .setTitle("Queue")
             .apply {
                 current?.let { track ->
+                    track.artworkUrl?.let { art.load(carContext, it) { invalidate() } }
                     addItem(
                         Row.Builder()
                             .setTitle("Now Playing: ${track.title}")
                             .addText(track.artist)
+                            .setImageWhenReady(art.icon(track.artworkUrl))
                             .build(),
                     )
                 }
                 upNext.forEachIndexed { index, track ->
+                    track.artworkUrl?.let { art.load(carContext, it) { invalidate() } }
                     addItem(
                         Row.Builder()
                             .setTitle(track.title)
                             .addText(track.artist)
+                            .setImageWhenReady(art.icon(track.artworkUrl))
                             .setOnClickListener {
                                 playback.playFromQueue(index)
                             }
@@ -67,6 +98,7 @@ class CalQueueScreen(carContext: CarContext) : Screen(carContext) {
                     .apply {
                         contextLine?.let { setTitle("$contextLine — Queue") }
                     }
+                    .setStartHeaderAction(Action.BACK)
                     .build(),
             )
             .setSections(listOf(queue))

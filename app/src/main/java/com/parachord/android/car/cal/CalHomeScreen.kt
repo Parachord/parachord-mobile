@@ -40,12 +40,14 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     private val libraryRepository: LibraryRepository by lazy { GlobalContext.get().get() }
     private val recommendationsRepository: RecommendationsRepository by lazy { GlobalContext.get().get() }
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
+    private val art: CalArt by lazy { GlobalContext.get().get() }
 
     private var activeTabId = TAB_LIBRARY
     private var playlists: List<Playlist> = emptyList()
+    private var libraryLoaded = false
 
     override fun onGetTemplate(): Template {
-        if (playlists.isEmpty()) loadLibrary()
+        if (!libraryLoaded) loadLibrary()
         val callback = object : TabTemplate.TabCallback {
             override fun onTabSelected(contentId: String) {
                 when (contentId) {
@@ -103,10 +105,13 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             )
             .apply {
                 playlists.forEach { playlist ->
+                    val artworkUrl = playlist.artworkUrl
+                    artworkUrl?.let { art.load(carContext, it) { invalidate() } }
                     addItem(
                         Row.Builder()
                             .setTitle(playlist.name)
                             .addText("${playlist.trackCount} ${if (playlist.trackCount != 1) "tracks" else "track"}")
+                            .setImageWhenReady(art.icon(artworkUrl))
                             .setOnClickListener { playback.playPlaylist(playlist.id, playlist.name) }
                             .build(),
                     )
@@ -116,9 +121,41 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             .build()
         return SectionedItemTemplate.Builder()
             .setHeader(Header.Builder().setTitle("Parachord").build())
-            .setSections(listOf<androidx.car.app.model.Section<*>>(library))
+            .setSections(listOf<androidx.car.app.model.Section<*>>(library, settingsSection()))
             .build()
     }
+
+    /** The parked-only way into the full app (settings, accounts, setup). */
+    private fun settingsSection(): androidx.car.app.model.Section<*> =
+        RowSection.Builder()
+            .setTitle("Full app")
+            .addItem(
+                Row.Builder()
+                    .setTitle("Open Parachord")
+                    .addText("Settings and setup — parked")
+                    .setImage(
+                        CarIcon.Builder(
+                            androidx.core.graphics.drawable.IconCompat.createWithResource(
+                                carContext,
+                                android.R.drawable.ic_menu_preferences,
+                            ),
+                        ).build(),
+                    )
+                    .setOnClickListener {
+                        // From the application context, not the CarContext: the
+                        // CarContext targets the host's virtual display (the
+                        // SecurityException "with launchDisplayId=13"), while the
+                        // app context starts MainActivity on the car's own display.
+                        carContext.applicationContext.startActivity(
+                            android.content.Intent(
+                                carContext,
+                                com.parachord.android.ui.MainActivity::class.java,
+                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    }
+                    .build(),
+            )
+            .build()
 
     // ── For You tab ─────────────────────────────────────────────────
 
@@ -138,9 +175,11 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                                         ?.takeIf { it.isNotBlank() }
                                         ?.let { "${item.name} — $it" }
                                         ?: item.name
+                                    item.imageUrl?.let { art.load(carContext, it) { invalidate() } }
                                     addItem(
                                         Row.Builder()
                                             .setTitle(label)
+                                            .setImageWhenReady(art.icon(item.imageUrl))
                                             .setOnClickListener {
                                                 playback.playRecommendation(block.row, item, items)
                                             }
@@ -170,11 +209,13 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
         }
         return SectionedItemTemplate.Builder()
             .setHeader(Header.Builder().setTitle("Parachord").build())
-            .setSections(sections)
+            .setSections(sections + settingsSection())
             .build()
     }
 
     private fun loadLibrary() {
+        if (libraryLoaded) return
+        libraryLoaded = true
         scope.launch {
             try {
                 playlists = libraryRepository.getAllPlaylists().first()
@@ -189,8 +230,15 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     init {
         lifecycle.addObserver(object : androidx.lifecycle.LifecycleEventObserver {
             override fun onStateChanged(source: androidx.lifecycle.LifecycleOwner, event: androidx.lifecycle.Lifecycle.Event) {
-                if (event == androidx.lifecycle.Lifecycle.Event.ON_DESTROY) {
-                    scope.cancel()
+                when (event) {
+                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
+                        // Refresh: a playlist made in the full app (the Settings
+                        // row) shows when the drive app comes back.
+                        libraryLoaded = false
+                        loadLibrary()
+                    }
+                    androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> scope.cancel()
+                    else -> Unit
                 }
             }
         })

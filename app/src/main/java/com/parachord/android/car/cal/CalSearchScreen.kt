@@ -4,6 +4,7 @@ import androidx.car.app.CarContext
 import androidx.car.app.Screen
 import androidx.car.app.model.ItemList
 import androidx.car.app.model.Row
+import androidx.car.app.model.Action
 import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
 import com.parachord.android.data.metadata.MetadataService
@@ -14,6 +15,7 @@ import com.parachord.shared.playback.CatalogQueues
 import com.parachord.shared.search.MergedSearchItem
 import com.parachord.shared.metadata.SearchArtwork
 import com.parachord.shared.search.SearchSession
+import com.parachord.shared.model.Album
 import com.parachord.shared.search.asSearchCatalog
 import com.parachord.shared.search.mergeSearchResults
 import kotlinx.coroutines.CoroutineScope
@@ -22,7 +24,6 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.flow.map
 import org.koin.core.context.GlobalContext
 
 /**
@@ -42,11 +43,27 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
     private val metadataService: MetadataService by lazy { GlobalContext.get().get() }
     private val searchArtwork: SearchArtwork by lazy { GlobalContext.get().get() }
     private val trackResolverCache: TrackResolverCache by lazy { GlobalContext.get().get() }
+    private val art: CalArt by lazy { GlobalContext.get().get() }
 
     private val catalogQueues: CatalogQueues by lazy { CatalogQueues(metadataService) }
     private var session: SearchSession? = null
     private var query = ""
     private var items: List<MergedSearchItem> = emptyList()
+    private var artMap: Map<String, String> = emptyMap()
+
+    /** A row's artwork: its own URL, else one the shared session looked up. */
+    private fun artworkFor(item: MergedSearchItem): String? = when (item) {
+        is MergedSearchItem.Song ->
+            item.track.artworkUrl ?: artMap[SearchSession.trackArtKey(item.track.title, item.track.artist)]
+        is MergedSearchItem.RemoteSong ->
+            item.result.artworkUrl ?: artMap[SearchSession.trackArtKey(item.result.title, item.result.artist)]
+        is MergedSearchItem.LibraryAlbum ->
+            item.album.artworkUrl ?: artMap[SearchSession.albumArtKey(item.album.title, item.album.artist)]
+        is MergedSearchItem.RemoteAlbum ->
+            item.album.artworkUrl ?: artMap[SearchSession.albumArtKey(item.album.title, item.album.artist)]
+        is MergedSearchItem.Artist ->
+            item.artist.imageUrl ?: artMap[SearchSession.artistArtKey(item.artist.name)]
+    }
 
     override fun onGetTemplate(): Template {
         if (session == null) {
@@ -70,10 +87,13 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
                     is MergedSearchItem.RemoteAlbum -> item.album.title to item.album.artist
                     is MergedSearchItem.Artist -> item.artist.name to ""
                 }
+                val artUrl = artworkFor(item)
+                artUrl?.let { art.load(carContext, it) { invalidate() } }
                 addItem(
                     Row.Builder()
                         .setTitle(title)
                         .addText(line)
+                        .setImageWhenReady(art.icon(artUrl))
                         .setOnClickListener {
                             when (item) {
                                 is MergedSearchItem.Song ->
@@ -112,6 +132,7 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
                 }
             },
         )
+            .setHeaderAction(Action.BACK)
             .setSearchHint("Search your music")
             .setInitialSearchText(query)
             .setItemList(itemList)
@@ -120,8 +141,9 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
 
     private fun observeResults() {
         scope.launch {
-            session!!.state.map { mergeSearchResults(it) }.collect { merged ->
-                items = merged
+            session!!.state.collect { state ->
+                artMap = state.art
+                items = mergeSearchResults(state)
                 invalidate()
             }
         }

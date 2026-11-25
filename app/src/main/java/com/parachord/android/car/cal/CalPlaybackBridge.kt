@@ -28,6 +28,8 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.first
 import com.parachord.android.data.metadata.MetadataService
@@ -186,19 +188,38 @@ class CalPlaybackBridge(
         _messages.tryEmit(text)
     }
 
-    /** Registers the Media3 session token with the host, so its `MediaPlaybackTemplate` and the car's media card track our playback. */
+    /**
+     * Registers the Media3 session token with the host, so its
+     * `MediaPlaybackTemplate` and the car's media card track our playback. The
+     * connect starts the service, but its session can land a beat later, so the
+     * token is awaited for a few seconds rather than read once.
+     */
     fun register(carContext: CarContext) {
+        if (registered) return
         scope.launch {
             try {
                 playbackController.awaitConnected()
             } catch (_: Exception) {
                 return@launch
             }
-            val token = com.parachord.android.playback.PlaybackService.sessionCompatToken ?: return@launch
+            var token: MediaSessionCompat.Token? = null
+            var tries = 0
+            while (token == null && tries++ < TOKEN_WAIT_TRIES && isActive) {
+                token = com.parachord.android.playback.PlaybackService.sessionCompatToken
+                if (token == null) delay(TOKEN_WAIT_MS)
+            }
+            if (token == null) {
+                com.parachord.shared.platform.Log.w("CalUI", "register: no session token after ${TOKEN_WAIT_TRIES * TOKEN_WAIT_MS}ms")
+                return@launch
+            }
             val manager = carContext.getCarService(MediaPlaybackManager::class.java)
             manager.registerMediaPlaybackToken(token)
+            registered = true
         }
     }
+
+    @Volatile
+    private var registered = false
 
     private fun play(load: suspend () -> HomeQueue) {
         scope.launch {
@@ -219,5 +240,10 @@ class CalPlaybackBridge(
 
     private fun onMain(block: () -> Unit) {
         mainHandler.post(block)
+    }
+
+    private companion object {
+        const val TOKEN_WAIT_TRIES = 30
+        const val TOKEN_WAIT_MS = 200L
     }
 }

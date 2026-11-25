@@ -119,16 +119,28 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode"
             android:theme="@style/Theme.Parachord" />
 
+        <!--
+            The phone's launcher entry: an alias so the car can drop it at runtime
+            (CarLauncherMode) without disabling MainActivity itself — the CAL
+            drive app opens the full app from its Settings row while parked, and
+            that needs the activity to stay enabled. Phones never flip anything:
+            this alias is their only launcher icon.
+        -->
+        <activity-alias
+            android:name=".PhoneLauncher"
+            android:targetActivity=".ui.MainActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <activity
             android:name=".ui.MainActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.Parachord">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-
             <!--
                 Deep links for all Parachord protocol URLs. Hosts are listed
                 explicitly (rather than a catch-all scheme match) so that the
@@ -260,6 +272,17 @@
             android:name=".playback.PlaybackService"
             android:exported="true"
             android:foregroundServiceType="mediaPlayback">
+            <!--
+                The AAOS media-card opt-in: without this the car's launcher logs
+                "No opt-in info found ... Skipping MBS ... belonging to non media
+                template app" and won't open the app's own UI from the media
+                card. The system's own radio app declares the same key (false);
+                true marks the app launchable from the media card, which opens
+                the CAL drive app (the launcher entry on a car).
+            -->
+            <meta-data
+                android:name="androidx.car.app.launchable"
+                android:value="true" />
             <intent-filter>
                 <action android:name="androidx.media3.session.MediaLibraryService" />
                 <action android:name="android.media.browse.MediaBrowserService" />
@@ -298,18 +321,32 @@
         </service>
 
         <!--
-            The CAL media templates host launches this activity on the car; it
-            only ever runs on AAOS with the templates host (API 29+, checked by
-            the uses-feature below).
+            The CAL drive app's launcher entry. Disabled by default so phones
+            never see a second icon; a car with the templates host enables it
+            at process start (CarLauncherMode) and drops the phone alias, so the
+            car launcher — and the home-screen media card's tap-out, which
+            resolves the launcher intent — open the drive app.
         -->
         <activity
             android:name="androidx.car.app.activity.CarAppActivity"
+            android:enabled="false"
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+            <!--
+                The AAOS media-center opt-in for apps with their own UI: the car
+                opens this activity from the media card and the media center
+                instead of the generic browse (without it the system logs
+                "Skipping MBS ... belonging to non media template app" and won't
+                treat the app as a media-template app).
+            -->
+            <intent-filter>
+                <action android:name="android.car.intent.action.MEDIA_TEMPLATE" />
+                <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
 
