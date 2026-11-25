@@ -1642,6 +1642,7 @@ class IosContainer private constructor() {
                 // so a Spotify source is verified without a title/artist search;
                 // resolver left null so priority still decides + fallback works.
                 id = "protocol-$ts-$i", title = t.title, artist = t.artist, album = t.album,
+                albumArtist = t.albumArtist,
                 artworkUrl = art, recordingMbid = t.mbid, isrc = t.isrc, spotifyId = t.spotifyId,
             )
         }

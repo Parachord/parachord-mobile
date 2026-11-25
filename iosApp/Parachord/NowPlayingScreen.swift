@@ -193,7 +193,7 @@ struct PCNowPlaying: View {
                             // Android: a single tap opens the track's album.
                             onSingleTap: track.flatMap { t in
                                 t.album.flatMap { album in
-                                    album.isEmpty || t.artist.isEmpty ? nil : { onAlbum(album, t.artist) }
+                                    album.isEmpty || t.artist.isEmpty ? nil : { onAlbum(album, AlbumArtistForTrackKt.albumArtistForTrack(track: t, albumName: album)) }
                                 }
                             },
                             onNext: {
@@ -419,7 +419,9 @@ struct PCNowPlaying: View {
                     Button { onArtist(t.artist) } label: { Label("Go to Artist", systemImage: "music.mic") }
                 }
                 if let album = t.album, !album.isEmpty {
-                    Button { onNavigateToContext(PlaybackContext(type: "album", name: album, id: t.artist)) } label: {
+                    Button { onNavigateToContext(PlaybackContext(
+                        type: "album", name: album,
+                        id: AlbumArtistForTrackKt.albumArtistForTrack(track: t, albumName: album))) } label: {
                         Label("Go to Album", systemImage: "square.stack")
                     }
                 }

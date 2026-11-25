@@ -104,6 +104,8 @@ val PlaybackState.effectiveTrack: TrackEntity?
             title = meta.title ?: track.title,
             artist = meta.artist ?: track.artist,
             album = meta.album ?: track.album,
+            // It describes the track's own album, not the stream's.
+            albumArtist = track.albumArtist.takeIf { meta.album == null || meta.album == track.album },
             artworkUrl = meta.artworkUrl ?: track.artworkUrl,
         )
     }

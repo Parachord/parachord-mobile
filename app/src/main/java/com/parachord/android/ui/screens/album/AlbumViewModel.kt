@@ -11,13 +11,14 @@ import com.parachord.android.data.db.entity.TrackEntity
 import com.parachord.android.data.metadata.AlbumDetail
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.metadata.TrackSearchResult
-import com.parachord.android.playback.PlaybackContext
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.resolver.ResolvedSource
 import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.ResolverScoring
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
+import com.parachord.shared.metadata.trackAlbumArtist
+import com.parachord.shared.playback.CatalogQueues
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -206,7 +207,6 @@ class AlbumViewModel constructor(
                 // 2. Resolve remaining tracks in background and add to queue
                 val remaining = tracks.subList(index + 1, tracks.size)
                 if (remaining.isNotEmpty()) {
-                    val context = PlaybackContext(type = "album", name = detail.title)
                     val entities = remaining.mapNotNull { t ->
                         val q = "${t.artist} - ${t.title}"
                         val k = "${t.title.lowercase().trim()}|${t.artist.lowercase().trim()}"
@@ -251,6 +251,7 @@ class AlbumViewModel constructor(
             title = track.title,
             artist = track.artist,
             album = detail.title,
+            albumArtist = trackAlbumArtist(track.artist, detail.artist),
             duration = track.duration,
             artworkUrl = track.artworkUrl ?: detail.artworkUrl,
             sourceType = best?.sourceType,
@@ -322,7 +323,7 @@ class AlbumViewModel constructor(
             try {
                 val entities = resolveAllTracks(detail)
                 if (entities.isNotEmpty()) {
-                    val context = PlaybackContext(type = "album", name = detail.title)
+                    val context = CatalogQueues.albumContext(detail.title, detail.artist)
                     playbackController.playQueue(entities, startIndex = 0, context = context)
                 }
             } catch (_: Exception) {
@@ -378,6 +379,7 @@ private fun TrackSearchResult.toTrackEntity(
     title = title,
     artist = artist,
     album = album.title,
+    albumArtist = trackAlbumArtist(artist, album.artist),
     duration = duration,
     artworkUrl = artworkUrl ?: album.artworkUrl,
     sourceType = source.sourceType,

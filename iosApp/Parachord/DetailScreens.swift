@@ -41,14 +41,17 @@ extension AlbumSearchResult {
 
 // Non-private so the shared context menus (Interactions.swift) can build queue
 // entities from search/album/top-track results. (#204)
-func pcTrack(from t: TrackSearchResult) -> Track {
+/// [albumArtist]: the album's artist when [t] is from that album's list; kept
+/// on the track only when the track's own artist isn't it (a compilation, #839).
+func pcTrack(from t: TrackSearchResult, albumArtist: String? = nil) -> Track {
     Track(
         id: "\(t.title)|\(t.artist)", title: t.title, artist: t.artist,
         album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
         sourceType: nil, sourceUrl: nil, addedAt: 0,
         resolver: nil, spotifyUri: nil, soundcloudId: nil,
         spotifyId: t.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: t.mbid,
-        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
+        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true,
+        albumArtist: AlbumArtistForTrackKt.trackAlbumArtist(trackArtist: t.artist, albumArtist: albumArtist)
     )
 }
 
@@ -543,7 +546,7 @@ final class AlbumDetailModel {
                 guard let self, let d = v as? AlbumDetail else { return }
                 self.detail = d
                 if self.coverUrl == nil, let art = d.artworkUrl, !art.isEmpty { self.coverUrl = art }
-                self.entities = d.tracks.map { pcTrack(from: $0) }
+                self.entities = d.tracks.map { pcTrack(from: $0, albumArtist: d.artist) }
                 if !d.tracks.isEmpty { self.isLoading = false; self.loaded = true }
                 // Only the providers' list is reused on reopen; a catalog
                 // list must not hide MusicBrainz's when it comes back.
@@ -558,7 +561,7 @@ final class AlbumDetailModel {
 
     private func refresh() async {
         if let d = try? await container.getAlbumDetail(albumTitle: title, artistName: artist) {
-            detail = d; entities = d.tracks.map { pcTrack(from: $0) }
+            detail = d; entities = d.tracks.map { pcTrack(from: $0, albumArtist: d.artist) }
             AlbumDetailCache.shared.put(cacheKey, .init(detail: d, entities: entities, ts: Date()))
         }
     }

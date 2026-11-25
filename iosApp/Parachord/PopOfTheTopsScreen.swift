@@ -86,7 +86,7 @@ final class PopOfTheTopsModel {
             sourceType: nil, sourceUrl: nil, addedAt: 0,
             resolver: nil, spotifyUri: nil, soundcloudId: nil,
             spotifyId: s.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: s.mbid,
-            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
+            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true, albumArtist: nil
         )
     }
 }

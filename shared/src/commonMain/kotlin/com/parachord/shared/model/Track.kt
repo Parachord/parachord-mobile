@@ -66,6 +66,14 @@ data class Track(
      * for a local file the user hearted.
      */
     val inCollection: Boolean = true,
+    /**
+     * The album's artist, only on a track whose own artist isn't the album's (a
+     * compilation's): what its album is looked up by
+     * ([com.parachord.shared.metadata.albumArtistForTrack]). It describes [album],
+     * so code that changes [album] sets it too, even to null. Kept in the queue
+     * and the saved queue; not a database column, so a saved track loses it.
+     */
+    val albumArtist: String? = null,
 ) {
     /**
      * Derive all available resolvers from stored IDs.
