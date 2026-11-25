@@ -53,6 +53,7 @@ import org.koin.core.context.GlobalContext
  */
 class CalPlaybackBridge(
     private val playbackController: PlaybackController,
+    private val stateHolder: com.parachord.android.playback.PlaybackStateHolder,
     private val carBrowse: CarBrowse,
     private val libraryRepository: LibraryRepository,
     metadataService: MetadataService,
@@ -87,6 +88,21 @@ class CalPlaybackBridge(
 
     fun playFromQueue(index: Int) = onMain {
         playbackController.playFromQueue(index)
+    }
+
+    /** Toggles Parachord's shuffle, as the phone's Now Playing button does. */
+    fun toggleShuffle() = onMain {
+        playbackController.toggleShuffle()
+    }
+
+    /**
+     * Starts a spinoff from the playing track, or ends the running one — the
+     * media button's rule: a tap while the pool is still being built is
+     * ignored, so it can't restart it.
+     */
+    fun toggleSpinoff() {
+        if (stateHolder.state.value.spinoffLoading) return
+        onMain { playbackController.toggleSpinoff() }
     }
 
     fun playSearchTrack(track: com.parachord.shared.model.Track, query: String) = onMain {

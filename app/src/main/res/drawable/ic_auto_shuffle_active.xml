@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Android Auto / media controls / the car header: shuffle is ON — the
+     shuffle arrows cut out of a filled disc, the same treatment as
+     ic_auto_spinoff_active (the fork in a disc), since the car draws its
+     buttons in one colour. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="44"
+    android:viewportHeight="44">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:fillType="evenOdd"
+        android:pathData="M22,0A22,22 0,1 1,22 44A22,22 0,1 1,22 0z M20.59,19.17 L15.41,14 L14,15.41 l5.17,5.17 l1.42,-1.41 z M24.5,14 l2.04,2.04 L14,28.59 L15.41,30 L27.96,17.46 L30,19.5 V14 h-5.5 z M24.83,23.41 l-1.41,1.41 l3.13,3.13 L24.5,30 H30 v-5.5 l-2.04,2.04 l-3.13,-3.13 z" />
+</vector>

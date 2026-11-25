@@ -57,6 +57,16 @@ Also: `minCarApiLevel` must be **application-level** meta-data (the host's `AppI
 - **No way into Now Playing** — the car's media card taps out with a plain launcher intent (not `ACTION_SHOW_MEDIA_PLAYBACK`, which only the host itself would send), so nothing in the drive app ever reached the playback view. The home now has a fourth **Now Playing** tab (after For You, before Search) that pushes the `MediaPlaybackTemplate` — guarded by "something has played", the same rule as the show-playback intent, because an idle session renders an empty dark surface. The queue stays one tap further, on the playback view's header.
 - **The home-screen media card had no album art** — the AAOS media card (and the CAL playback view) read the session's *compat bitmap*, which only `MediaMetadata.artworkData` becomes; a `artworkUri` URI alone renders no art. The service now embeds the playing item's artwork as PNG bytes: the artwork the notification already fetches is re-encoded and published through `sessionArtworkData` (a `MutableStateFlow<url, bytes>`) into the `queueSnapshotJob` combine, and the timeline's current item carries it when the fetched URL is the item's (`toAutoMediaItem(artworkData = …)`). The fetch self-corrects: `createNotification` reads the effective artwork URL from the player's metadata — the same URL the timeline item carries.
 
+## Round 4 — Shuffle and Spinoff on Now Playing
+
+The playback view's header carries the extra Now Playing controls (the header is the reliable place — the CAL 1.8.0-rc01 `MediaPlaybackTemplate.Builder` has no action strip, and the host's playback view does not render the session's custom actions):
+
+- **Shuffle** — `playbackController.toggleShuffle()` through the bridge; disabled (never hidden) during a spinoff or Listen Along by the shared `shuffleAllowed`. Two drawables: `ic_auto_shuffle` (the phone's Shuffle glyph, `ParachordIcons.Shuffle`, hand-translated to a vector) and `ic_auto_shuffle_active` (the glyph cut out of a filled disc — the same treatment as `ic_auto_spinoff_active`). Both verified rendering on the emulator.
+- **Spinoff** — the shared `carNowPlayingButtons` rule decides the button (hidden when nothing similar exists, the fork in a disc while it runs, a tap while the pool builds ignored), and the click goes through the bridge's `toggleSpinoff` (the media button's loading rule).
+- **Three end actions accepted** — Spinoff + Shuffle + Queue render together with no host validation error (the two-action cap is an Android Auto projection guideline, not enforced by the automotive host; verified by forcing all three on the emulator).
+
+The screen re-renders when the button state changes (an observer on `PlaybackStateHolder.state`, distinct by shuffle/spinoff/context-type, like the queue screen's).
+
 ## Known limitations (v1)
 
 - Not tested on a device (the EX90): the drive-mode gate on the full app (AAOS blocks non-`distractionOptimized` activities while moving — the emulator is a user build, no VHAL injection), real audio playback, and the actual media card tap while playing.

@@ -1519,6 +1519,7 @@ val androidModule = module {
     single {
         com.parachord.android.car.cal.CalPlaybackBridge(
             playbackController = get(),
+            stateHolder = get(),
             carBrowse = get(),
             libraryRepository = get(),
             metadataService = get(),
