@@ -73,9 +73,20 @@ class CarDrivingState(private val context: Context) {
                 readRestricted(args.firstOrNull())?.let { _restricted.value = it }
                 null
             }
-            manager.javaClass
-                .getMethod("registerCarUxRestrictionsListener", listenerClass)
-                .invoke(manager, listener)
+            // The manager's register method has had two names across AAOS builds:
+            // this API-35 car image calls it `registerListener` (verified against
+            // its android.car.jar); other builds `registerCarUxRestrictionsListener`.
+            // Try both — either takes the same listener interface.
+            val register = listOf("registerListener", "registerCarUxRestrictionsListener")
+                .firstNotNullOfOrNull { name ->
+                    try {
+                        manager.javaClass.getMethod(name, listenerClass)
+                    } catch (_: NoSuchMethodException) {
+                        null
+                    }
+                }
+                ?: throw NoSuchMethodException("registerListener / registerCarUxRestrictionsListener")
+            register.invoke(manager, listener)
         } catch (e: Throwable) {
             // No car service, or it refused: fail open — the gear stays available.
             Log.w(TAG, "Car UX restrictions unavailable (${e.javaClass.simpleName}: ${e.message})")
