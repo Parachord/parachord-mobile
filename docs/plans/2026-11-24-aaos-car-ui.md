@@ -94,8 +94,8 @@ while restricted.
   the phone app feeds, so play links play; links that only *navigate* (an
   artist/album/page link) are dropped — their nav events find no nav host. Links
   that ask first still ask (the shared confirmation dialog).
-- The drive-mode gate only blocks *entering* the full UI; if the user starts
-  driving while it's open it stays open.
+- The drive-mode gate blocks *entering* the full UI and closes it by itself
+  when the car starts moving.
 - Card/row text sizes are the shared phone components' (13sp on cards); on
   low-density car displays they read small.
 - `PlaybackNotice` action buttons ("Open in SoundCloud") show as plain toasts

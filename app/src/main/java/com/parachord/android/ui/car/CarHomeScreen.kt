@@ -2,6 +2,7 @@ package com.parachord.android.ui.car
 
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -24,6 +25,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -161,9 +163,19 @@ private fun CarHomeTopBar(restricted: Boolean, onOpenSearch: () -> Unit, onOpenF
             color = MaterialTheme.colorScheme.onBackground,
         )
         Spacer(Modifier.weight(1f))
-        // Search stays offered while driving (the car spec keeps it on the driving home).
-        IconButton(onClick = onOpenSearch, modifier = Modifier.size(56.dp)) {
-            ParachordIcon(AppIcon.Search, contentDescription = "Search", size = 28.dp)
+        // Search stays offered while driving (the car spec keeps it on the driving home) —
+        // a labeled button, not a corner icon: corner affordances proved croppable on a
+        // car display (and in an emulator window).
+        OutlinedButton(
+            onClick = onOpenSearch,
+            modifier = Modifier.height(48.dp),
+            colors = ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.onBackground),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+            shape = RoundedCornerShape(24.dp),
+        ) {
+            ParachordIcon(AppIcon.Search, contentDescription = null, size = 22.dp)
+            Spacer(Modifier.width(6.dp))
+            Text(text = "Search", fontSize = 14.sp)
         }
         IconButton(
             onClick = onOpenFullUi,

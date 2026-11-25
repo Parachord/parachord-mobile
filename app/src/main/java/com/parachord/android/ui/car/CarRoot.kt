@@ -77,6 +77,13 @@ fun CarRoot(mainViewModel: MainViewModel) {
     var fullUi by rememberSaveable { mutableStateOf(false) }
     var screen by rememberSaveable { mutableStateOf(CarScreen.HOME) }
 
+    // Driving away closes the full app by itself: the drive UI is the safe
+    // surface, and a car that starts moving while parked-in-the-full-app should
+    // not stay there.
+    LaunchedEffect(restricted) {
+        if (restricted && fullUi) fullUi = false
+    }
+
     if (fullUi) {
         // Registered BEFORE the full app composes, so the app's own back handling
         // (its nav stack) takes precedence while it can pop; at the stack's root
