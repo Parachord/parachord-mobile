@@ -1,117 +1,44 @@
-# Android Automotive (AAOS) car UI — 2026-11-24
+# Android Automotive (AAOS) drive UI — CAL media templates
 
-A minimal first-party UI for Parachord running on a car's own Android (Android
-Automotive / Google built-in, e.g. a Volvo EX90), sideloaded as the same APK
-that installs on phones. Until now the app only supported Android Auto
-(projected from the phone): the shared `CarBrowse` tree + `MediaLibraryService`
-in `PlaybackService`.
+The car drive UI is **Android for Cars App Library (CAL) media templates**: the car's template host (`android.software.car.templates_host.media`) renders every screen and enforces driver-distraction compliance by construction. Our Media3 `MediaLibraryService` (shared with Android Auto) feeds the playback state and the Assistant.
 
-## Decisions (user-confirmed)
+## The adaptive APK
 
-- **One APK, same app.** The app detects AAOS at runtime
-  (`PackageManager.FEATURE_AUTOMOTIVE`) and swaps its root to the car UI; a
-  phone install is unchanged.
-- **System keyboard** for search (the car's own IME, whatever it allows in
-  drive mode), not an app-rendered keyboard.
-- **Every recommendation entry is playable on tap** — track, album (its
-  tracks), artist (top songs), playlist, weekly, listener (their top tracks).
-  No album/artist detail views exist in the car UI.
+- **AAOS with the templates host** (Android 14+ cars — the EX90, modern Google built-in): the CAL drive UI renders.
+- **Older AAOS** (Android 10–13): the car's own Media Center renders the shared `CarBrowse` tree.
+- **Phones**: the phone app unchanged.
+- `uses-feature android.software.car.templates_host.media required="false"` — the car picks what it has.
 
-## Surface
+## The screens (`app/.../car/cal/`)
 
-`ParachordApp` → `CarRoot` (on AAOS) instead of `ParachordAppContent`.
-`CarRoot` holds two states:
+- **Home** (`CalHomeScreen`): `TabTemplate` with three tabs.
+  - **Library**: Collection Radio + the saved playlists (plays through the shared `HomeQueues`).
+  - **For You**: the shared recommendations page as `SectionedItemTemplate` sections.
+  - **Search**: opens the `SearchTemplate`.
+- **Search** (`CalSearchScreen`): the host's keyboard (its own distraction compliance) through the shared `SearchSession` + `mergeSearchResults`; a song tap replaces the queue with that track, an album plays its tracks, an artist their top songs.
+- **Now Playing** (`CalNowPlayingScreen`): a `MediaPlaybackTemplate` — the host renders the controls from the registered session token; no playback UI of ours to build. Its header carries a Queue button.
+- **Queue** (`CalQueueScreen`): a `SectionedItemTemplate` — current track + Up Next; tap = `playFromQueue`, nothing else.
 
-- **Car home** (`CarHomeScreen`): top bar with app name, a **search** button
-  and a **settings gear**; the body is a **Library section first** (a
-  Collection Radio tile + the library's saved playlists as tiles; plays go
-  through the shared `HomeQueues`), then the shared recommendations page
-  (`RecommendationsRepository.page` → `recommendationPageLayout`, previews
-  only, no See-all, no source chips); the bottom is a car-scaled
-  now-playing bar (the phone `MiniPlayer`'s shape: art, title/artist, heart,
-  play/pause, next) that opens Now Playing. Not-configured / failed / empty
-  states mirror the phone page's copy; NotConfigured's "Open settings" is
-  parked-only like the gear.
-- **Full UI (parked only)**: the whole `ParachordAppContent` (start route
-  Settings) under a close bar that returns to the car home.
+## The wiring
 
-**Theme: the app runs always dark on a car** (Android Auto's template is dark;
-  our player surfaces are) — forced in `ParachordApp`'s theme decision.
-
-Car screens below home:
-
-- **Now Playing** (`CarNowPlayingScreen`): Android-Auto-style — large art,
-  title/artist, seek slider + times, prev / play-pause (FillAccent disc) /
-  next, shuffle (the shared `shuffleAllowed` rule disables it during a
-  spinoff or Listen Along), and the shared `carNowPlayingButtons` row (heart +
-  Spinoff). A **queue button sits in the corner** and opens the queue.
-- **Queue** (`CarQueueScreen`): the current track + Up Next
-  (`PlaybackState.upNext`); a row tap is `playFromQueue(index)` and that is
-  all it does (no reorder/remove/clear). Suspended dim (spinoff /
-  listen-along) mirrors `QueueSheet`.
-- **Search** (`CarSearchScreen` + `CarSearchViewModel`): a text field on the
-  system IME; queries run through the shared `SearchSession` (the phone
-  search's engine — library tracks/albums + remote tracks/albums/artists),
-  with all results **merged into one list** (song/album/artist rows, kind +
-  source badges; the same song once, the library copy first). **A song tap
-  replaces the queue with that one track** (`playTrack` under a `"search"`
-  context), an album plays its tracks, an artist their top songs, and it opens
-  Now Playing.
-
-## Driving state
-
-`CarDrivingState` (app, Koin single) reaches `android.car`'s
-`CarUxRestrictionsManager` **through reflection** (`android.car` isn't in the
-public SDK; `CarDrivingStateMonitor` is system-only): `Car.createCar` →
-`getCarManager("uxrestriction")` → current restrictions + a listener proxy.
-The register method's name differs across AAOS builds — `registerListener`
-(on the API-35 car image, verified against its `android.car.jar`) or
-`registerCarUxRestrictionsListener` — so it tries both. `createCar` uses the
-API-30+ two-arg timeout form, falling back to one-arg on older builds.
-`isRequiresDistractionOptimization` ≈ moving. It **fails open** (not
-restricted) when the car service is unavailable — the gate is a convenience,
-not a safety interlock. The gear and the NotConfigured button are disabled
-while restricted.
-
-While restricted, the drive UI follows the driver-distraction rules: the
-search field is off (typing is not allowed in motion — the car's voice
-assistant searches through the shared MediaLibrarySession instead) and the
-queue caps at 8 jump targets with a "Park to see the full queue" line.
-
-## Reuse (the "shared code" check)
-
-- `RecommendationsViewModel` is used verbatim by the car home (its play
-  methods, `cardShown`, `weeklyCovers`, `messages`, `retry`).
-- `NowPlayingViewModel` drives Now Playing and the queue; `MainViewModel`
-  drives the bar (playback state, `trackArtwork`, heart, on-tour) and the
-  full UI.
-- Cards are the existing `RecAlbumCard` / `RecArtistCard` / `RecPlaylistCard`
-  / `RecWeeklyCard` / `ListenerCard` / `ParachordAlbumCard` at a wider car
-  width; `carNowPlayingButtons` picks the custom buttons as on Auto.
-- Search reuses `streamingResolverSearch` (the DJ tools' search surface).
-- iOS has no AAOS counterpart (CarPlay draws from the same shared models —
-  no new shared decision logic was needed; everything the car UI decides with
-  already lives in shared code).
-
-## Known limitations (v1)
-
-- While the car home is up, deep links go through the same `DeepLinkViewModel`
-  the phone app feeds, so play links play; links that only *navigate* (an
-  artist/album/page link) are dropped — their nav events find no nav host. Links
-  that ask first still ask (the shared confirmation dialog).
-- The drive-mode gate blocks *entering* the full UI and closes it by itself
-  when the car starts moving.
-- Card/row text sizes are the shared phone components' (13sp on cards); on
-  low-density car displays they read small.
-- `PlaybackNotice` action buttons ("Open in SoundCloud") show as plain toasts
-  on the car screens.
-- Sign-in assumes a browser exists on the car (Chrome Beta / the OEM's link
-  viewer): `OAuthManager.launchCustomTab` now falls back to a plain
-  `ACTION_VIEW` when no Custom Tab provider resolves, and the manifest queries
-  for browsers.
+- `CalCarAppService` (category `MEDIA`) + `CalMediaSession` (returns the home screen; handles `ACTION_SHOW_MEDIA_PLAYBACK` from the car's home media card).
+- `CalPlaybackBridge` (Koin singleton): every template tap plays through it (the shared `HomeQueues`, `CatalogQueues`, `CarBrowse.playRequest`, `PlaybackController` calls posted to the main thread). Registers the Media3 session compat token with `MediaPlaybackManager` so the host's `MediaPlaybackTemplate` and the car's media card stay in sync.
+- `PlaybackService.sessionCompatToken` (a companion var, set when the session is built) is what the bridge reads.
 
 ## Manifest
 
-`<uses-feature android:name="android.hardware.type.automotive"
-android:required="false"/>` + a browser `<queries>` intent for the fallback.
-The Android Auto descriptor and the browse tree are untouched.
+- `MEDIA_TEMPLATES` permission; `minCarApiLevel 8` as **application-level** meta-data (the host reads it from there — NOT from the service, the activity, or the metadata holder service).
+- `automotive_app_desc.xml`: `<uses name="template"/>` beside `<uses name="media"/>`.
+- CAL 1.8.0-rc01 (the first with `CATEGORY_MEDIA_APP`/`MEDIA_TEMPLATES`/`ACTION_SHOW_MEDIA_PLAYBACK`); no 1.8.0 stable exists yet.
+- `app-automotive` (CarAppActivity) wants minSdk 29; our minSdk is 26, but car templates only launch on API 29+ cars — manifest override.
+
+## What replaced
+
+The hand-drawn Compose drive UI (CarRoot, CarHomeScreen, CarNowPlayingBar/Screen, CarQueueScreen, CarSearchScreen, CarHomeLibraryViewModel, CarEnvironment, CarDrivingState and the drive-mode rules) is **removed** — the CAL host provides all of that by construction (its keyboard, its list caps, its rendering). The parked-only gear/full-UI is gone: the CAL drive UI IS the car surface; the full phone app still runs on the car via the launcher.
+
+## Known limitations (v1)
+
+- Verified rendering on the API-35 playstore emulator (arm64): the templates host accepted the manifest, rendered the TabTemplate home (screen has content, brightness ~18 dark UI with bright pixels = icons/text). Not yet interactively tested.
+- Not tested on a device.
+- `CarIcon` for tabs uses placeholder drawables (launcher icon, heart, android search icon) — should be proper desktop icons.
+- Recommendations sections have no covers (text-only rows in the SectionedItemTemplate v1).

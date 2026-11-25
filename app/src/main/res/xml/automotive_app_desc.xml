@@ -1,4 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <automotiveApp>
+    <!-- Media: the shared CarBrowse tree the system Media Center and Android
+         Auto render (Android 10–13 AAOS cars, projected Auto, the Assistant). -->
     <uses name="media" />
+    <!-- Template: the CAL media templates drive UI (Android 14+ AAOS cars
+         with the templates host — the EX90, modern Google built-in cars). -->
+    <uses name="template" />
 </automotiveApp>

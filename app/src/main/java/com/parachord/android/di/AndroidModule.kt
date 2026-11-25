@@ -58,8 +58,6 @@ import com.parachord.android.sync.SyncEngine
 import com.parachord.shared.sync.ListenBrainzSyncProvider
 import com.parachord.android.sync.SyncScheduler
 import com.parachord.android.ui.MainViewModel
-import com.parachord.android.ui.car.CarHomeLibraryViewModel
-import com.parachord.android.ui.car.CarSearchViewModel
 import com.parachord.android.ui.screens.album.AlbumViewModel
 import com.parachord.android.ui.screens.artist.ArtistViewModel
 import com.parachord.android.ui.screens.chat.ChatViewModel
@@ -1513,12 +1511,18 @@ val androidModule = module {
 
     // ── Android Automotive (AAOS) ───────────────────────────────────
 
-    // The parked-only gate's UX-restriction listener (reflection into android.car,
-    // which isn't in the public SDK), the car home's Library section, and the car
-    // search screen's ViewModel (its search runs on the shared `SearchSession`).
-    single { com.parachord.android.car.CarDrivingState(androidContext()) }
-    viewModelOf(::CarHomeLibraryViewModel)
-    viewModelOf(::CarSearchViewModel)
+    // The CAL media templates bridge: every template tap plays through it (the
+    // shared queues), and it registers the Media3 session token with the host.
+    single {
+        com.parachord.android.car.cal.CalPlaybackBridge(
+            playbackController = get(),
+            carBrowse = get(),
+            libraryRepository = get(),
+            metadataService = get(),
+            weeklyPlaylistsRepository = get(),
+            providerPlaylistResolver = get(),
+        )
+    }
     viewModelOf(::PlaylistSyncChannelsViewModel)
     single { com.parachord.android.deeplink.LockedLinkNotifier(androidContext()) }
     viewModelOf(::DeepLinkViewModel)

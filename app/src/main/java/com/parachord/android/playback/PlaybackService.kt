@@ -176,6 +176,15 @@ class PlaybackService : MediaLibraryService() {
     private var currentArtworkBitmap: Bitmap? = null
 
     companion object {
+        /**
+         * The service's session as a compat token — the CAL media templates host
+         * registers it so its `MediaPlaybackTemplate` and the car's media card track
+         * our playback. Set when the session is built; null when the service is down.
+         */
+        @Volatile
+        var sessionCompatToken: android.support.v4.media.session.MediaSessionCompat.Token? = null
+            private set
+
         private const val TAG = "PlaybackService"
         private const val NOTIFICATION_ID = 1337
         private const val CHANNEL_ID = "parachord_playback"
@@ -344,6 +353,7 @@ class PlaybackService : MediaLibraryService() {
 
         mediaSession = MediaLibrarySession.Builder(this, wrapper, LibraryCallback())
             .build()
+        sessionCompatToken = mediaSession?.sessionCompatToken
 
         // Unified notification provider — same look for ExoPlayer and external playback.
         setMediaNotificationProvider(UnifiedMediaNotificationProvider())

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -14,12 +15,24 @@
     <uses-permission
         android:name="android.permission.READ_EXTERNAL_STORAGE"
         android:maxSdkVersion="32" />
+    <!-- The CAL media templates permission (the drive UI as templates). -->
+    <uses-permission
+        android:name="androidx.car.app.MEDIA_TEMPLATES" />
+
+    <!-- The CAL automotive artifact's CarAppActivity wants minSdk 29; our minSdk
+         is 26, but the car templates only ever launch on AAOS cars (API 29+). -->
+    <uses-sdk tools:overrideLibrary="androidx.car.app.automotive" />
 
     <!-- The app runs on a car's own Android too (Android Automotive, e.g. a
-         Volvo EX90): on such a device MainActivity swaps its root to the car
-         UI. required="false" so phones install it unchanged. -->
+         Volvo EX90): on such a device the car's template host launches the CAL
+         media-templates drive UI. required="false" so phones install it unchanged
+         and older AAOS cars (Android 10–13, no templates host) fall back to the
+         system Media Center rendering our browse tree. -->
     <uses-feature
         android:name="android.hardware.type.automotive"
+        android:required="false" />
+    <uses-feature
+        android:name="android.software.car.templates_host.media"
         android:required="false" />
 
     <!--
@@ -52,6 +65,11 @@
         android:theme="@style/Theme.Parachord"
         android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config">
+
+        <!-- The CAL media templates host reads the min car API level from here. -->
+        <meta-data
+            android:name="androidx.car.app.minCarApiLevel"
+            android:value="8" />
 
         <!--
             Android Auto media app descriptor. Declares Parachord as a media
@@ -247,6 +265,53 @@
                 <action android:name="android.media.browse.MediaBrowserService" />
             </intent-filter>
         </service>
+
+        <!--
+            The AAOS drive UI as CAL media templates (Android 14+ cars with the
+            media templates host). The car's template host renders every screen
+            and enforces driver-distraction compliance; our Media3 session feeds
+            the playback state, the Assistant and the car's media card.
+        -->
+        <service
+            android:name=".car.cal.CalCarAppService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="androidx.car.app.CarAppService" />
+                <category android:name="androidx.car.app.category.MEDIA" />
+            </intent-filter>
+            <meta-data
+                android:name="androidx.car.app.minCarApiLevel"
+                android:value="8" />
+        </service>
+
+        <!--
+            The CAL metadata holder: the host reads the app's min car API level from
+            here (merged from the AAR; we add the minCarApiLevel metadata it reads).
+        -->
+        <service
+            android:name="androidx.car.app.CarAppMetadataHolderService"
+            android:exported="false"
+            tools:node="merge">
+            <meta-data
+                android:name="androidx.car.app.minCarApiLevel"
+                android:value="8" />
+        </service>
+
+        <!--
+            The CAL media templates host launches this activity on the car; it
+            only ever runs on AAOS with the templates host (API 29+, checked by
+            the uses-feature below).
+        -->
+        <activity
+            android:name="androidx.car.app.activity.CarAppActivity"
+            android:exported="true"
+            android:launchMode="singleTask"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
 
         <receiver
             android:name=".widget.MiniPlayerWidgetProvider"

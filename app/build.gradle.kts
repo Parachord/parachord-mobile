@@ -175,6 +175,14 @@ dependencies {
     // KMP shared module
     implementation(project(":shared"))
 
+    // Android for Cars App Library — the AAOS drive UI (media templates).
+    // 1.8.0-rc01: the MEDIA_TEMPLATES/CATEGORY_MEDIA_APP constants only exist from 1.8;
+    // there is no 1.8.0 stable yet. `app-automotive` (CarAppActivity) wants
+    // minSdk 29 — our minSdk is 26, but the car templates only ever launch on
+    // AAOS cars (API 29+); phones never touch those classes (manifest override).
+    implementation("androidx.car.app:app:1.8.0-rc01")
+    implementation("androidx.car.app:app-automotive:1.8.0-rc01")
+
     // AndroidX Core
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.webkit)

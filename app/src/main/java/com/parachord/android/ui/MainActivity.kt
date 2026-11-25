@@ -269,11 +269,7 @@ class MainActivity : ComponentActivity() {
 fun ParachordApp() {
     val mainViewModel: MainViewModel = koinViewModel()
     val themeMode by mainViewModel.themeMode.collectAsStateWithLifecycle()
-    // A car's screen is always dark: Android Auto's own template is, and the
-    // player surfaces already are (the player surface) — a light car home in
-    // day mode would read as broken next to them. The parked full UI shares the
-    // same display and follows.
-    val darkTheme = com.parachord.android.car.CarEnvironment.isAutomotive(LocalContext.current) || when (themeMode) {
+    val darkTheme = when (themeMode) {
         "dark" -> true
         "light" -> false
         else -> isSystemInDarkTheme()
@@ -301,14 +297,7 @@ fun ParachordApp() {
             com.parachord.android.ui.theme.LocalSourceColumnWidth provides sourceColumnWidth,
             com.parachord.android.ui.theme.LocalTrackRowCache provides trackRowCache,
         ) {
-            // On a car's own Android (Android Automotive) the app's root is the car UI
-            // (recommendations home, Now Playing, queue, search, a parked-only full app);
-            // a phone keeps the phone app unchanged.
-            if (com.parachord.android.car.CarEnvironment.isAutomotive(LocalContext.current)) {
-                com.parachord.android.ui.car.CarRoot(mainViewModel)
-            } else {
-                ParachordAppContent(mainViewModel)
-            }
+            ParachordAppContent(mainViewModel)
         }
     }
 }
