@@ -1,5 +1,6 @@
 package com.parachord.android.ui
 
+import com.parachord.android.ui.navigation.openArtist
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -396,7 +397,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         deepLinkViewModel.navEvents.collect { event ->
             when (event) {
                 is DeepLinkNavEvent.Artist ->
-                    navController.navigate(Routes.artist(event.name)) { launchSingleTop = true }
+                    navController.openArtist(event.name) { launchSingleTop = true }
                 is DeepLinkNavEvent.Album ->
                     navController.navigate(Routes.album(event.title, event.artist)) { launchSingleTop = true }
                 is DeepLinkNavEvent.Playlist ->

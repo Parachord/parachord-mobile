@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.shared.metadata.hasArtistPage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -160,6 +161,7 @@ fun TrackContextMenu(
                 inCollection = track.isInCollection,
                 canRemoveFromPlaylist = onRemoveFromPlaylist != null,
                 canEditMetadata = onEditMetadata != null,
+                canGoToArtist = hasArtistPage(track.artist),
                 canGoToAlbum = onGoToAlbum != null,
                 canShare = onShare != null,
             )
