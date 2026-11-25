@@ -41,10 +41,18 @@ fun mergeSearchResults(
     songs: Int = 14,
 ): List<MergedSearchItem> {
     val albums = buildList {
-        state.localAlbums.take(libraryAlbums).forEach { add(MergedSearchItem.LibraryAlbum(it)) }
-        state.remoteAlbums.take(remoteAlbums).forEach { album ->
-            if (state.localAlbums.none { it.title.equals(album.title, ignoreCase = true) && it.artist.equals(album.artist, ignoreCase = true) }) {
+        val seenAlbums = mutableSetOf<String>()
+        state.localAlbums.take(libraryAlbums).forEach { album ->
+            val key = "${album.title.lowercase().trim()}|${album.artist.lowercase().trim()}"
+            if (seenAlbums.add(key)) add(MergedSearchItem.LibraryAlbum(album))
+        }
+        var addedRemote = 0
+        for (album in state.remoteAlbums) {
+            if (addedRemote >= remoteAlbums) break
+            val key = "${album.title.lowercase().trim()}|${album.artist.lowercase().trim()}"
+            if (seenAlbums.add(key)) {
                 add(MergedSearchItem.RemoteAlbum(album))
+                addedRemote++
             }
         }
     }

@@ -81,7 +81,6 @@ import com.parachord.android.ui.components.hapticClickable
 import com.parachord.android.ui.components.rememberHapticClick
 import com.parachord.android.resolver.trackKey
 import com.parachord.android.playback.showsLoading
-import com.parachord.android.playback.queueSuspended
 import com.parachord.android.ui.components.ResolverSourceDropdown
 import com.parachord.android.ui.components.TrackContextInfo
 import com.parachord.android.ui.components.TrackContextMenuHost
@@ -200,7 +199,8 @@ fun NowPlayingScreen(
                 trackResolvers = trackResolvers,
                 trackResolverConfidences = trackResolverConfidences,
                 trackArtwork = trackArtwork,
-                queueSuspended = playbackState.queueSuspended,
+                queueSuspended = playbackState.spinoffMode ||
+                    playbackState.playbackContext?.type == LISTEN_ALONG_CONTEXT,
                 onNavigateToContext = { ctx ->
                     // Shared with iOS: where each context opens.
                     when (val dest = playbackContextDestination(ctx)) {

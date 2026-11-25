@@ -1,60 +1,104 @@
 package com.parachord.android.car.cal
 
+import android.content.Intent
 import androidx.car.app.CarContext
+import androidx.car.app.CarToast
 import androidx.car.app.Screen
+import androidx.car.app.model.Action
+import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Header
 import androidx.car.app.model.Row
 import androidx.car.app.model.RowSection
+import androidx.car.app.model.Section
 import androidx.car.app.model.SectionedItemTemplate
-import androidx.car.app.model.Action
-import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Tab
 import androidx.car.app.model.TabContents
 import androidx.car.app.model.TabTemplate
 import androidx.car.app.model.Template
+import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.parachord.android.R
 import com.parachord.android.data.repository.LibraryRepository
+import com.parachord.android.playback.PlaybackStateHolder
+import com.parachord.android.ui.ParachordActivity
+import com.parachord.shared.format.countOf
+import com.parachord.shared.model.Playlist
 import com.parachord.shared.recommendations.RecommendationPageBlock
 import com.parachord.shared.recommendations.recommendationPageLayout
+import com.parachord.shared.repository.HistoryMixesRepository
 import com.parachord.shared.repository.RecommendationsError
 import com.parachord.shared.repository.RecommendationsRepository
-import com.parachord.shared.car.CarBrowse
-import com.parachord.shared.model.Playlist
+import com.parachord.shared.repository.loadRecommendationsPage
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
 /**
- * The car home as a `TabTemplate`: Library (Collection Radio and the saved
- * playlists), For You (the shared recommendations page as sections), and a
- * Search tab that opens the host's search screen. The host renders the tabs and
- * enforces distraction compliance; every tap plays through the shared queues —
- * the same ones the phone Home and the Android Auto tree play.
+ * The car home as a `TabTemplate`: Library (Collection Radio, Loved Songs, and
+ * saved playlists), For You (the shared recommendations page as sections), Now
+ * Playing (pushes `MediaPlaybackTemplate`), and Search (`SearchTemplate`). The
+ * host renders the tabs and enforces distraction compliance; every tap plays
+ * through the shared queues — the same ones the phone Home and Android Auto
+ * play.
  */
 class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val libraryRepository: LibraryRepository by lazy { GlobalContext.get().get() }
     private val recommendationsRepository: RecommendationsRepository by lazy { GlobalContext.get().get() }
+    private val historyMixesRepository: HistoryMixesRepository by lazy { GlobalContext.get().get() }
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
     private val art: CalArt by lazy { GlobalContext.get().get() }
-    private val stateHolder: com.parachord.android.playback.PlaybackStateHolder by lazy { GlobalContext.get().get() }
+    private val stateHolder: PlaybackStateHolder by lazy { GlobalContext.get().get() }
 
     private var activeTabId = TAB_LIBRARY
     private var playlists: List<Playlist> = emptyList()
-    private var libraryLoaded = false
+    private var libraryJob: Job? = null
+    private var recommendationsJob: Job? = null
+    private var activeTabArtworkUrls: Set<String> = emptySet()
+    private val enrichedRecKeys = HashSet<String>()
+
+    init {
+        scope.launch {
+            recommendationsRepository.page.drop(1).collect {
+                if (activeTabId == TAB_FOR_YOU) invalidate()
+            }
+        }
+        scope.launch {
+            art.loadedUrls.collect { url ->
+                if (url in activeTabArtworkUrls) invalidate()
+            }
+        }
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_RESUME -> {
+                        // Initial load and refresh when returning from the full
+                        // app (new playlists or newly connected services).
+                        loadLibrary()
+                        loadRecommendations()
+                    }
+                    Lifecycle.Event.ON_DESTROY -> scope.cancel()
+                    else -> Unit
+                }
+            },
+        )
+    }
 
     override fun onGetTemplate(): Template {
-        if (!libraryLoaded) loadLibrary()
         val callback = object : TabTemplate.TabCallback {
             override fun onTabSelected(contentId: String) {
                 when (contentId) {
                     TAB_SEARCH -> {
                         screenManager.push(CalSearchScreen(carContext))
-                        invalidate()
                     }
                     TAB_NOW_PLAYING -> {
                         // Only once something has played: the host renders the
@@ -62,11 +106,16 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                         // playing it is an empty dark surface.
                         if (stateHolder.state.value.currentTrack != null) {
                             screenManager.push(CalNowPlayingScreen(carContext))
+                        } else {
+                            CarToast.makeText(carContext, "Nothing playing yet", CarToast.LENGTH_SHORT).show()
+                            invalidate()
                         }
-                        invalidate()
                     }
                     else -> {
                         activeTabId = contentId
+                        if (contentId == TAB_FOR_YOU) {
+                            loadRecommendations()
+                        }
                         invalidate()
                     }
                 }
@@ -76,22 +125,22 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             .setHeaderAction(Action.APP_ICON)
             .addTab(
                 Tab.Builder().setTitle("Library").setContentId(TAB_LIBRARY)
-                    .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, com.parachord.android.R.drawable.ic_launcher_foreground)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_launcher_foreground)).build())
                     .build(),
             )
             .addTab(
                 Tab.Builder().setTitle("For You").setContentId(TAB_FOR_YOU)
-                    .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, com.parachord.android.R.drawable.ic_auto_heart_outline)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_auto_heart_outline)).build())
                     .build(),
             )
             .addTab(
                 Tab.Builder().setTitle("Now Playing").setContentId(TAB_NOW_PLAYING)
-                    .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, android.R.drawable.ic_media_play)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, android.R.drawable.ic_media_play)).build())
                     .build(),
             )
             .addTab(
                 Tab.Builder().setTitle("Search").setContentId(TAB_SEARCH)
-                    .setIcon(CarIcon.Builder(androidx.core.graphics.drawable.IconCompat.createWithResource(carContext, android.R.drawable.ic_menu_search)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, android.R.drawable.ic_menu_search)).build())
                     .build(),
             )
             .setTabContents(
@@ -109,39 +158,66 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     // ── Library tab ──────────────────────────────────────────────────
 
     private fun libraryTemplate(): Template {
+        // Reserve 1 slot for the "Open Parachord" row in settingsSection().
+        val limit = (carListLimit(carContext) - 1).coerceAtLeast(1)
+        val shownUrls = HashSet<String>()
+        var remaining = limit
         val library = RowSection.Builder()
             .setTitle("Library")
-            .addItem(
-                Row.Builder()
-                    .setTitle("Collection Radio")
-                    .addText("Everything you have, shuffled")
-                    .setOnClickListener { playback.playCollectionRadio() }
-                    .build(),
-            )
             .apply {
-                playlists.forEach { playlist ->
-                    val artworkUrl = playlist.artworkUrl
-                    artworkUrl?.let { art.load(carContext, it) { invalidate() } }
+                if (remaining > 0) {
                     addItem(
                         Row.Builder()
-                            .setTitle(playlist.name)
-                            .addText("${playlist.trackCount} ${if (playlist.trackCount != 1) "tracks" else "track"}")
+                            .setTitle("Collection Radio")
+                            .addText("Everything you have, shuffled")
+                            .setOnClickListener { playback.playCollectionRadio() }
+                            .build(),
+                    )
+                    remaining--
+                }
+                if (remaining > 0) {
+                    addItem(
+                        Row.Builder()
+                            .setTitle("Loved Songs")
+                            .addText("Your collection")
+                            .setImage(
+                                CarIcon.Builder(
+                                    IconCompat.createWithResource(carContext, R.drawable.ic_auto_heart_filled),
+                                ).build(),
+                            )
+                            .setOnClickListener { playback.playLovedSongs() }
+                            .build(),
+                    )
+                    remaining--
+                }
+                playlists.take(remaining).forEach { playlist ->
+                    val artworkUrl = playlist.artworkUrl
+                    if (!artworkUrl.isNullOrBlank()) {
+                        shownUrls.add(artworkUrl)
+                        art.load(carContext, artworkUrl)
+                    }
+                    val safeTitle = playlist.name.ifBlank { "Untitled playlist" }
+                    addItem(
+                        Row.Builder()
+                            .setTitle(safeTitle)
+                            .addText(countOf(playlist.trackCount, "track"))
                             .setImageWhenReady(art.icon(artworkUrl))
-                            .setOnClickListener { playback.playPlaylist(playlist.id, playlist.name) }
+                            .setOnClickListener { playback.playPlaylist(playlist.id, safeTitle) }
                             .build(),
                     )
                 }
             }
             .setNoItemsMessage("No playlists yet")
             .build()
+        activeTabArtworkUrls = shownUrls
         return SectionedItemTemplate.Builder()
             .setHeader(Header.Builder().setTitle("Parachord").build())
-            .setSections(listOf<androidx.car.app.model.Section<*>>(library, settingsSection()))
+            .setSections(listOf<Section<*>>(library, settingsSection()))
             .build()
     }
 
     /** The parked-only way into the full app (settings, accounts, setup). */
-    private fun settingsSection(): androidx.car.app.model.Section<*> =
+    private fun settingsSection(): Section<*> =
         RowSection.Builder()
             .setTitle("Full app")
             .addItem(
@@ -150,7 +226,7 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                     .addText("Settings and setup — parked")
                     .setImage(
                         CarIcon.Builder(
-                            androidx.core.graphics.drawable.IconCompat.createWithResource(
+                            IconCompat.createWithResource(
                                 carContext,
                                 android.R.drawable.ic_menu_preferences,
                             ),
@@ -160,12 +236,10 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                         // From the application context, not the CarContext: the
                         // CarContext targets the host's virtual display (the
                         // SecurityException "with launchDisplayId=13"), while the
-                        // app context starts MainActivity on the car's own display.
+                        // app context starts ParachordActivity on the car's own display.
                         carContext.applicationContext.startActivity(
-                            android.content.Intent(
-                                carContext,
-                                com.parachord.android.ui.MainActivity::class.java,
-                            ).addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK),
+                            Intent(carContext, ParachordActivity::class.java)
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                         )
                     }
                     .build(),
@@ -176,27 +250,43 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
 
     private fun forYouTemplate(): Template {
         val state = recommendationsRepository.page.value
-        val sections = mutableListOf<androidx.car.app.model.Section<*>>()
-        recommendationPageLayout(state, null, emptySet()).forEach { block ->
+        val sections = mutableListOf<Section<*>>()
+        val shownUrls = HashSet<String>()
+        // Reserve 1 slot for settingsSection().
+        var remaining = (carListLimit(carContext) - 1).coerceAtLeast(1)
+        var enrichBudget = MAX_ENRICH_PER_PASS
+        for (block in recommendationPageLayout(state, null, emptySet())) {
+            if (remaining <= 0) break
             if (block is RecommendationPageBlock.Row) {
-                val items = block.view.items
+                val items = block.view.items.take(remaining)
                 if (items.isNotEmpty()) {
                     sections.add(
                         RowSection.Builder()
-                            .setTitle(block.title ?: "For You")
+                            .setTitle(block.title?.takeIf { it.isNotBlank() } ?: "For You")
                             .apply {
                                 items.forEach { item ->
+                                    val safeName = item.name.ifBlank { "Untitled" }
                                     val label = item.artist
                                         ?.takeIf { it.isNotBlank() }
-                                        ?.let { "${item.name} — $it" }
-                                        ?: item.name
-                                    item.imageUrl?.let { art.load(carContext, it) { invalidate() } }
+                                        ?.let { "$safeName — $it" }
+                                        ?: safeName
+                                    val img = item.imageUrl
+                                    if (!img.isNullOrBlank()) {
+                                        shownUrls.add(img)
+                                        art.load(carContext, img)
+                                    } else if (enrichBudget > 0) {
+                                        val recKey = "${item.type}:${item.name}:${item.artist.orEmpty()}"
+                                        if (enrichedRecKeys.add(recKey)) {
+                                            recommendationsRepository.cardShown(item)
+                                            enrichBudget--
+                                        }
+                                    }
                                     addItem(
                                         Row.Builder()
                                             .setTitle(label)
-                                            .setImageWhenReady(art.icon(item.imageUrl))
+                                            .setImageWhenReady(art.icon(img))
                                             .setOnClickListener {
-                                                playback.playRecommendation(block.row, item, items)
+                                                playback.playRecommendation(block.row, item, block.view.items)
                                             }
                                             .build(),
                                     )
@@ -205,16 +295,19 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                             .setNoItemsMessage("Nothing here yet")
                             .build(),
                     )
+                    remaining -= items.size
                 }
             }
         }
+        activeTabArtworkUrls = shownUrls
         if (sections.isEmpty()) {
             sections.add(
                 RowSection.Builder()
                     .setTitle("For You")
                     .setNoItemsMessage(
-                        when (state.error) {
-                            is RecommendationsError.NotConfigured ->
+                        when {
+                            state.loading -> "Loading recommendations…"
+                            state.error is RecommendationsError.NotConfigured ->
                                 "Connect a music service in Settings to get recommendations"
                             else -> "Nothing here yet — try again in a moment"
                         },
@@ -229,34 +322,35 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     }
 
     private fun loadLibrary() {
-        if (libraryLoaded) return
-        libraryLoaded = true
-        scope.launch {
+        if (libraryJob?.isActive == true) return
+        libraryJob = scope.launch {
             try {
                 playlists = libraryRepository.getAllPlaylists().first()
+            } catch (e: CancellationException) {
+                throw e
             } catch (_: Exception) {
                 playlists = emptyList()
             }
-            invalidate()
+            if (activeTabId == TAB_LIBRARY) invalidate()
         }
     }
 
-    // The Screen has no onDestroy override — cancel the scope when the lifecycle does.
-    init {
-        lifecycle.addObserver(object : androidx.lifecycle.LifecycleEventObserver {
-            override fun onStateChanged(source: androidx.lifecycle.LifecycleOwner, event: androidx.lifecycle.Lifecycle.Event) {
-                when (event) {
-                    androidx.lifecycle.Lifecycle.Event.ON_RESUME -> {
-                        // Refresh: a playlist made in the full app (the Settings
-                        // row) shows when the drive app comes back.
-                        libraryLoaded = false
-                        loadLibrary()
-                    }
-                    androidx.lifecycle.Lifecycle.Event.ON_DESTROY -> scope.cancel()
-                    else -> Unit
-                }
+    private fun loadRecommendations() {
+        if (recommendationsJob?.isActive == true) return
+        recommendationsJob = scope.launch {
+            try {
+                loadRecommendationsPage(
+                    force = false,
+                    background = scope,
+                    mixes = { historyMixesRepository.load(it) },
+                    page = { recommendationsRepository.load(it) },
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Repository surfaces its own error state on page.
             }
-        })
+        }
     }
 
     private companion object {
@@ -264,5 +358,6 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
         const val TAB_FOR_YOU = "for_you"
         const val TAB_NOW_PLAYING = "now_playing"
         const val TAB_SEARCH = "search"
+        const val MAX_ENRICH_PER_PASS = 12
     }
 }

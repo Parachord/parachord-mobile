@@ -2,27 +2,25 @@ package com.parachord.android.car.cal
 
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
+import androidx.car.app.model.Action
 import androidx.car.app.model.ItemList
 import androidx.car.app.model.Row
-import androidx.car.app.model.Action
 import androidx.car.app.model.SearchTemplate
 import androidx.car.app.model.Template
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.parachord.android.data.metadata.MetadataService
 import com.parachord.android.data.repository.LibraryRepository
-import com.parachord.android.resolver.TrackResolverCache
-import com.parachord.shared.metadata.toTrackEntity
-import com.parachord.shared.playback.CatalogQueues
-import com.parachord.shared.search.MergedSearchItem
 import com.parachord.shared.metadata.SearchArtwork
+import com.parachord.shared.search.MergedSearchItem
 import com.parachord.shared.search.SearchSession
-import com.parachord.shared.model.Album
 import com.parachord.shared.search.asSearchCatalog
 import com.parachord.shared.search.mergeSearchResults
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
-import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
@@ -42,14 +40,46 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
     private val repository: LibraryRepository by lazy { GlobalContext.get().get() }
     private val metadataService: MetadataService by lazy { GlobalContext.get().get() }
     private val searchArtwork: SearchArtwork by lazy { GlobalContext.get().get() }
-    private val trackResolverCache: TrackResolverCache by lazy { GlobalContext.get().get() }
     private val art: CalArt by lazy { GlobalContext.get().get() }
 
-    private val catalogQueues: CatalogQueues by lazy { CatalogQueues(metadataService) }
-    private var session: SearchSession? = null
+    private val session: SearchSession by lazy {
+        SearchSession(
+            scope = scope,
+            catalog = metadataService.asSearchCatalog(),
+            artwork = searchArtwork,
+            localTracks = { q -> repository.searchTracks(q) },
+            localAlbums = { q -> repository.searchAlbums(q) },
+            resolvedTrackArt = { _, _ -> null },
+            onRemoteTracksSettled = { _ -> },
+        )
+    }
+
     private var query = ""
     private var items: List<MergedSearchItem> = emptyList()
     private var artMap: Map<String, String> = emptyMap()
+    private var shownArtworkUrls: Set<String> = emptySet()
+
+    init {
+        scope.launch {
+            session.state.drop(1).collect { state ->
+                artMap = state.art
+                items = mergeSearchResults(state)
+                invalidate()
+            }
+        }
+        scope.launch {
+            art.loadedUrls.collect { url ->
+                if (url in shownArtworkUrls) invalidate()
+            }
+        }
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_DESTROY) {
+                    scope.cancel()
+                }
+            },
+        )
+    }
 
     /** A row's artwork: its own URL, else one the shared session looked up. */
     private fun artworkFor(item: MergedSearchItem): String? = when (item) {
@@ -66,40 +96,35 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
     }
 
     override fun onGetTemplate(): Template {
-        if (session == null) {
-            session = SearchSession(
-                scope = scope,
-                catalog = metadataService.asSearchCatalog(),
-                artwork = searchArtwork,
-                localTracks = { q -> repository.searchTracks(q) },
-                localAlbums = { q -> repository.searchAlbums(q) },
-                resolvedTrackArt = { _, _ -> null },
-                onRemoteTracksSettled = { _ -> },
-            )
-            observeResults()
-        }
+        // Touch lazy session so observation starts before first keystroke.
+        session
+        val limit = carListLimit(carContext)
+        val shownUrls = HashSet<String>()
         val itemList = ItemList.Builder().apply {
-            items.forEach { item ->
+            items.take(limit).forEach { item ->
                 val (title, line) = when (item) {
                     is MergedSearchItem.Song -> item.track.title to item.track.artist
                     is MergedSearchItem.RemoteSong -> item.result.title to item.result.artist
                     is MergedSearchItem.LibraryAlbum -> item.album.title to item.album.artist
                     is MergedSearchItem.RemoteAlbum -> item.album.title to item.album.artist
-                    is MergedSearchItem.Artist -> item.artist.name to ""
+                    is MergedSearchItem.Artist -> item.artist.name to "Artist"
                 }
                 val artUrl = artworkFor(item)
-                artUrl?.let { art.load(carContext, it) { invalidate() } }
+                if (!artUrl.isNullOrBlank()) {
+                    shownUrls.add(artUrl)
+                    art.load(carContext, artUrl)
+                }
                 addItem(
                     Row.Builder()
-                        .setTitle(title)
-                        .addText(line)
+                        .setTitle(title.ifBlank { "Untitled" })
+                        .apply { if (line.isNotBlank()) addText(line) }
                         .setImageWhenReady(art.icon(artUrl))
                         .setOnClickListener {
                             when (item) {
                                 is MergedSearchItem.Song ->
                                     playback.playSearchTrack(item.track, query)
                                 is MergedSearchItem.RemoteSong ->
-                                    playback.playSearchRemote(item.result, query)
+                                    playback.playSearchRemote(item.result, query, artUrl)
                                 is MergedSearchItem.LibraryAlbum ->
                                     playback.playSearchLibraryAlbum(item.album)
                                 is MergedSearchItem.RemoteAlbum ->
@@ -117,17 +142,19 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
                 )
             }
         }.build()
+        shownArtworkUrls = shownUrls
         return SearchTemplate.Builder(
             object : SearchTemplate.SearchCallback {
                 override fun onSearchTextChanged(searchText: String) {
                     query = searchText
-                    session?.query(searchText)
-                    invalidate()
+                    // Let session.state drive invalidate() so we don't reset IME
+                    // composition or trigger double invalidations per keystroke.
+                    session.query(searchText)
                 }
 
                 override fun onSearchSubmitted(searchText: String) {
                     query = searchText
-                    session?.query(searchText)
+                    session.query(searchText)
                     invalidate()
                 }
             },
@@ -138,15 +165,4 @@ class CalSearchScreen(carContext: CarContext) : Screen(carContext) {
             .setItemList(itemList)
             .build()
     }
-
-    private fun observeResults() {
-        scope.launch {
-            session!!.state.collect { state ->
-                artMap = state.art
-                items = mergeSearchResults(state)
-                invalidate()
-            }
-        }
-    }
-
 }

@@ -325,7 +325,11 @@ class OAuthManager constructor(
             .appendQueryParameter("state", state)
             .build()
 
-        launchCustomTab(uri)
+        if (!launchCustomTab(uri)) {
+            soundCloudLoopback.stop()
+            pendingFlows.remove(state)
+            _soundCloudSignInError.value = "Install a browser to sign in."
+        }
     }
 
     /** Launch Last.fm authentication flow in a Custom Tab. */
@@ -493,12 +497,12 @@ class OAuthManager constructor(
         }
     }
 
-    private fun launchCustomTab(uri: Uri) {
+    private fun launchCustomTab(uri: Uri): Boolean {
         val customTabsIntent = CustomTabsIntent.Builder().build()
         // Prefer the currently-resumed Activity so the Chrome Custom Tab runs
-        // in the same task as MainActivity. This lets Android pop Chrome off
+        // in the same task as ParachordActivity. This lets Android pop Chrome off
         // the back stack when our OAuthRedirectActivity returns focus to
-        // MainActivity after the OAuth callback — otherwise Chrome stays
+        // ParachordActivity after the OAuth callback — otherwise Chrome stays
         // alive in its own separate task. Fallback to application context
         // with NEW_TASK if no Activity is tracked (defensive; should always
         // have one since OAuth is initiated from the Settings screen).
@@ -510,8 +514,9 @@ class OAuthManager constructor(
             customTabsIntent.intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             launchContext = context
         }
-        try {
+        return try {
             customTabsIntent.launchUrl(launchContext, uri)
+            true
         } catch (e: android.content.ActivityNotFoundException) {
             // No Custom Tab provider — Android Automotive ships Chrome Beta or
             // the OEM's own link viewer, not the phone's Chrome. Fall back to
@@ -520,8 +525,10 @@ class OAuthManager constructor(
                 val view = Intent(Intent.ACTION_VIEW, uri)
                 if (activity == null) view.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 launchContext.startActivity(view)
+                true
             } catch (e2: Exception) {
                 Log.e(TAG, "No browser to open sign-in", e2)
+                false
             }
         }
     }

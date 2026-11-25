@@ -2,6 +2,7 @@ package com.parachord.android.ui.screens.nowplaying
 
 import com.parachord.android.ui.components.ResolveWhileVisible
 import kotlinx.coroutines.Job
+import com.parachord.shared.playback.LISTEN_ALONG_CONTEXT
 import androidx.compose.foundation.background
 import com.parachord.android.ui.components.hapticClickable
 import androidx.compose.foundation.layout.Arrangement
@@ -46,7 +47,7 @@ import com.parachord.android.ui.components.TrackRowSources
 import com.parachord.android.ui.theme.PlayerSurface
 import com.parachord.android.ui.theme.PlayerTextPrimary
 import com.parachord.android.ui.theme.PlayerTextSecondary
-import com.parachord.android.ui.theme.queueContextColor
+import com.parachord.android.ui.theme.PurpleDark
 
 /**
  * Queue sheet content displayed below the now-playing controls.
@@ -110,7 +111,11 @@ fun QueueSheet(
                     // "Spinoff from …", or a radio station's name.
                     val contextLabel = com.parachord.shared.playback.PlaybackMessages
                         .contextLabel(playbackContext.type, playbackContext.name)
-                    val contextColor = queueContextColor(playbackContext.type)
+                    val contextColor = when (playbackContext.type) {
+                        LISTEN_ALONG_CONTEXT -> Color(0xFF34D399) // Green, matching desktop
+                        "spinoff" -> Color(0xFFC084FC) // Purple, matching spinoff button
+                        else -> PurpleDark
+                    }
                     // Navigable context types link to their source page
                     val isNavigable = onNavigateToContext != null &&
                         com.parachord.shared.playback.playbackContextDestination(playbackContext) != null

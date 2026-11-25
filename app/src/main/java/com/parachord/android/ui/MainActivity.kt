@@ -87,7 +87,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+/**
+ * Concrete main Activity for the full Parachord UI. The manifest keeps the
+ * phone launcher `<activity-alias>` named `.ui.MainActivity` pointing here so
+ * existing phone home-screen shortcuts survive updates while `CarLauncherMode`
+ * can disable that alias on AAOS without disabling this Activity.
+ */
+class ParachordActivity : ComponentActivity() {
 
     private val oAuthManager: OAuthManager by inject()
     private val musicKitBridge: MusicKitWebBridge by inject()
@@ -303,7 +309,7 @@ fun ParachordApp() {
 }
 
 @Composable
-internal fun ParachordAppContent(mainViewModel: MainViewModel, startRoute: String? = null, topInsetConsumed: Boolean = false) {
+private fun ParachordAppContent(mainViewModel: MainViewModel) {
     val navController = rememberNavController()
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentDestination = navBackStackEntry?.destination
@@ -372,7 +378,7 @@ internal fun ParachordAppContent(mainViewModel: MainViewModel, startRoute: Strin
     // Wire the listen-along stopper for the protocol-play teardown (#120).
     // Process pending deep links from the Activity (intent handling).
     // The Activity stores the URI; the composable-scoped ViewModel processes it.
-    val activity = context as? MainActivity
+    val activity = context as? ParachordActivity
     LaunchedEffect(Unit) {
         activity?.pendingDeepLink?.collect { uri ->
             if (uri != null) {
@@ -561,14 +567,6 @@ internal fun ParachordAppContent(mainViewModel: MainViewModel, startRoute: Strin
         ) {
             Scaffold(
                 snackbarHost = { androidx.compose.material3.SnackbarHost(snackbarHostState) },
-                // The AAOS full UI shows its own bar above the app: the status
-                // band under it is already consumed, so the Scaffold must not pad
-                // for it again (Scaffold's insets don't observe consumeWindowInsets).
-                contentWindowInsets = if (topInsetConsumed) {
-                    androidx.compose.foundation.layout.WindowInsets(0.dp)
-                } else {
-                    androidx.compose.material3.ScaffoldDefaults.contentWindowInsets
-                },
                 bottomBar = {
                     if (showBottomBar) {
                         Column {
@@ -710,7 +708,6 @@ internal fun ParachordAppContent(mainViewModel: MainViewModel, startRoute: Strin
                     ) {
                     ParachordNavHost(
                         navController = navController,
-                        startRoute = startRoute ?: Routes.HOME,
                         onOpenDrawer = onOpenDrawer,
                         onOpenChat = onOpenChat,
                         onOpenImportPlaylist = { showImportPlaylistDialog = true },

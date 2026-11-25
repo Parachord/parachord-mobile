@@ -128,16 +128,6 @@ fun releaseTypeColor(type: String?): Color = tokenColor(DesignTokens.releaseType
 /** A service's colour: its plugin manifest's `color` (shared [ServiceColors]). */
 fun serviceColor(serviceId: String?): Color = tokenColor(ServiceColors.color(serviceId))
 
-/**
- * A queue's "Playing from" label colour: listen-along green, spinoff purple, else
- * the accent — the phone's `QueueSheet` and the AAOS car queue share it.
- */
-fun queueContextColor(type: String): Color = when (type) {
-    com.parachord.shared.playback.LISTEN_ALONG_CONTEXT -> Color(0xFF34D399) // Green, matching desktop
-    "spinoff" -> Color(0xFFC084FC) // Purple, matching the spinoff button
-    else -> PurpleDark
-}
-
 /** As [serviceColor], or null for a service with no colour at all. */
 fun serviceColorOrNull(serviceId: String?): Color? =
     ServiceColors.colorOrNull(serviceId)?.let { tokenColor(it) }

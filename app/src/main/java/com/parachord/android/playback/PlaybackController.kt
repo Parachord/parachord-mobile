@@ -2097,7 +2097,9 @@ class PlaybackController constructor(
                     val silenceUri = android.net.Uri.parse(
                         "android.resource://${context.packageName}/${com.parachord.android.R.raw.silence}"
                     )
-                    val artworkUri = routedTrack.artworkUrl?.let { android.net.Uri.parse(it) }
+                    val artworkUri = routedTrack.artworkUrl?.let {
+                        MediaArtworkProvider.uriFor(context.packageName, it)
+                    }
                     val silenceItem = MediaItem.Builder()
                         .setMediaId(routedTrack.id)
                         .setUri(silenceUri)

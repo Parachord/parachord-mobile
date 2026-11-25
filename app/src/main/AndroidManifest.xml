@@ -119,25 +119,8 @@
             android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|keyboard|uiMode"
             android:theme="@style/Theme.Parachord" />
 
-        <!--
-            The phone's launcher entry: an alias so the car can drop it at runtime
-            (CarLauncherMode) without disabling MainActivity itself — the CAL
-            drive app opens the full app from its Settings row while parked, and
-            that needs the activity to stay enabled. Phones never flip anything:
-            this alias is their only launcher icon.
-        -->
-        <activity-alias
-            android:name=".PhoneLauncher"
-            android:targetActivity=".ui.MainActivity"
-            android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity-alias>
-
         <activity
-            android:name=".ui.MainActivity"
+            android:name=".ui.ParachordActivity"
             android:exported="true"
             android:launchMode="singleTop"
             android:theme="@style/Theme.Parachord">
@@ -268,6 +251,26 @@
             </intent-filter>
         </activity>
 
+        <!--
+            The phone's launcher entry: kept under the original `.ui.MainActivity`
+            component name as an alias targeting `.ui.ParachordActivity` (declared
+            above per Android's activity-alias contract) so existing phone
+            home-screen shortcuts survive updates, while the car can drop the
+            launcher alias at runtime (CarLauncherMode) without disabling
+            ParachordActivity itself (the CAL drive app opens it from "Open
+            Parachord" while parked). Phones never flip anything: this alias is
+            their only launcher icon.
+        -->
+        <activity-alias
+            android:name=".ui.MainActivity"
+            android:targetActivity=".ui.ParachordActivity"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+
         <service
             android:name=".playback.PlaybackService"
             android:exported="true"
@@ -302,22 +305,6 @@
                 <action android:name="androidx.car.app.CarAppService" />
                 <category android:name="androidx.car.app.category.MEDIA" />
             </intent-filter>
-            <meta-data
-                android:name="androidx.car.app.minCarApiLevel"
-                android:value="8" />
-        </service>
-
-        <!--
-            The CAL metadata holder: the host reads the app's min car API level from
-            here (merged from the AAR; we add the minCarApiLevel metadata it reads).
-        -->
-        <service
-            android:name="androidx.car.app.CarAppMetadataHolderService"
-            android:exported="false"
-            tools:node="merge">
-            <meta-data
-                android:name="androidx.car.app.minCarApiLevel"
-                android:value="8" />
         </service>
 
         <!--
@@ -333,6 +320,15 @@
             android:exported="true"
             android:launchMode="singleTask"
             android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+            <!--
+                Required by AAOS CarPackageManager so the CAL drive UI stays
+                accessible while driving (the templates host enforces distraction
+                compliance by construction; ParachordActivity omits this so the
+                full app stays parked-only).
+            -->
+            <meta-data
+                android:name="distractionOptimized"
+                android:value="true" />
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
@@ -375,6 +371,16 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/file_paths" />
         </provider>
+
+        <!-- Read-only artwork provider serving content://<applicationId>.artwork/<key>
+             URIs for session metadata and browse items. AAOS's car-media-common
+             (both the CAL Templates Host's MediaPlaybackTemplate and CarLauncher's
+             home media card) ignores raw bitmaps and refuses remote https:// URIs,
+             decoding only local content:// URIs via ContentResolver. -->
+        <provider
+            android:name=".playback.MediaArtworkProvider"
+            android:authorities="${applicationId}.artwork"
+            android:exported="true" />
 
     </application>
 

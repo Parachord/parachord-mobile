@@ -1,51 +1,66 @@
 package com.parachord.android.car.cal
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.util.LruCache
+import androidx.car.app.CarContext
+import androidx.car.app.constraints.ConstraintManager
 import androidx.car.app.model.CarIcon
 import androidx.core.graphics.drawable.IconCompat
 import coil.imageLoader
 import coil.request.ImageRequest
 import coil.request.SuccessResult
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
  * Cover art for the CAL rows: loads artwork URLs through the app's Coil
  * `ImageLoader` (the same cache the phone UI rides on) and hands them back as
- * [CarIcon]s. The host renders row images itself; a bitmap read in our process
- * crosses the bridge fine, while a `file:///` URL wouldn't (the host's uid
- * can't read our storage), so everything goes through here as bitmaps.
+ * bounded [CarIcon]s (`128px` bitmaps so a template stays well under the 1 MB
+ * Binder transaction limit).
  *
- * Rows render from whatever is already cached and invalidate the screen when a
- * load lands; a failed URL is retried at most once a minute so a flaky network
- * can't loop a screen's invalidations.
+ * Rows render from whatever is already cached and screens observe [loadedUrls]
+ * inside their own lifecycle-cancelled scope to invalidate when a relevant URL
+ * lands (no dropped concurrent callbacks, no callbacks firing on destroyed
+ * screens). A failed URL is retried at most once a minute so a flaky network
+ * can't loop invalidations.
  */
 class CalArt {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val icons = ConcurrentHashMap<String, CarIcon>()
+    private val cacheLock = Any()
+    private val icons = LruCache<String, CarIcon>(MAX_CACHED_ICONS)
     private val loading = ConcurrentHashMap.newKeySet<String>()
     private val failedAt = ConcurrentHashMap<String, Long>()
-    private val mainHandler = android.os.Handler(android.os.Looper.getMainLooper())
+
+    private val _loadedUrls = MutableSharedFlow<String>(extraBufferCapacity = 64)
+    /** Emits each artwork URL as its [CarIcon] enters the cache. */
+    val loadedUrls: SharedFlow<String> = _loadedUrls.asSharedFlow()
 
     /** The cached icon for [url], or null while it loads or if it never loaded. */
     fun icon(url: String?): CarIcon? {
         if (url.isNullOrBlank()) return null
-        return icons[url]
+        return synchronized(cacheLock) { icons.get(url) }
     }
 
     /**
-     * Starts a load for [url] if needed and reports through [onLoaded] (posted
-     * to the main thread) whenever a new icon lands — callers invalidate their
-     * template so the next `onGetTemplate` picks it up.
+     * Starts a load for [url] if it isn't cached, in-flight, or in its failure
+     * backoff window. Callers observe [loadedUrls] within their own lifecycle
+     * scope to trigger `invalidate()`.
      */
-    fun load(context: Context, url: String?, onLoaded: () -> Unit) {
-        if (url.isNullOrBlank() || icons.containsKey(url)) return
+    fun load(context: Context, url: String?) {
+        if (url.isNullOrBlank()) return
+        if (synchronized(cacheLock) { icons.get(url) != null }) return
         val now = System.currentTimeMillis()
         failedAt[url]?.let { lastFail ->
             if (now - lastFail < RETRY_MS) return
@@ -53,15 +68,35 @@ class CalArt {
         }
         if (!loading.add(url)) return
         scope.launch {
-            val icon = fetch(context.applicationContext, url)
-            loading.remove(url)
+            val icon = try {
+                fetch(context.applicationContext, url)
+            } finally {
+                loading.remove(url)
+            }
             if (icon != null) {
-                icons[url] = icon
-                mainHandler.post(onLoaded)
+                synchronized(cacheLock) { icons.put(url, icon) }
+                _loadedUrls.tryEmit(url)
             } else {
-                failedAt[url] = System.currentTimeMillis()
+                recordFailure(url, System.currentTimeMillis())
             }
         }
+    }
+
+    internal fun recordFailure(url: String, nowMs: Long) {
+        if (failedAt.size >= MAX_FAILED_ENTRIES) {
+            failedAt.entries.removeIf { nowMs - it.value >= RETRY_MS }
+            if (failedAt.size >= MAX_FAILED_ENTRIES) failedAt.clear()
+        }
+        failedAt[url] = nowMs
+    }
+
+    internal fun putForTest(url: String, icon: CarIcon) {
+        synchronized(cacheLock) { icons.put(url, icon) }
+    }
+
+    internal fun isInFailureBackoff(url: String, nowMs: Long = System.currentTimeMillis()): Boolean {
+        val ts = failedAt[url] ?: return false
+        return nowMs - ts < RETRY_MS
     }
 
     private suspend fun fetch(context: Context, url: String): CarIcon? = withContext(Dispatchers.IO) {
@@ -73,11 +108,13 @@ class CalArt {
                 .build()
             val result = context.imageLoader.execute(request)
             val drawable = (result as? SuccessResult)?.drawable ?: return@withContext null
-            val bitmap = android.graphics.Bitmap.createBitmap(SIZE_PX, SIZE_PX, android.graphics.Bitmap.Config.ARGB_8888)
-            val canvas = android.graphics.Canvas(bitmap)
+            val bitmap = Bitmap.createBitmap(SIZE_PX, SIZE_PX, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
             drawable.setBounds(0, 0, SIZE_PX, SIZE_PX)
             drawable.draw(canvas)
             CarIcon.Builder(IconCompat.createWithBitmap(bitmap)).build()
+        } catch (e: CancellationException) {
+            throw e
         } catch (_: Exception) {
             null
         }
@@ -85,9 +122,11 @@ class CalArt {
 
     fun shutdown() = scope.cancel()
 
-    private companion object {
+    internal companion object {
         const val RETRY_MS = 60_000L
-        const val SIZE_PX = 384
+        const val SIZE_PX = 128
+        const val MAX_CACHED_ICONS = 64
+        const val MAX_FAILED_ENTRIES = 256
     }
 }
 
@@ -99,3 +138,15 @@ class CalArt {
 fun androidx.car.app.model.Row.Builder.setImageWhenReady(
     icon: CarIcon?,
 ): androidx.car.app.model.Row.Builder = if (icon != null) setImage(icon) else this
+
+/**
+ * Maximum number of list items the host allows in a single template, capped at
+ * [maxCap] so Binder template transactions stay well below the 1 MB IPC limit.
+ */
+internal fun carListLimit(carContext: CarContext, maxCap: Int = 50, fallback: Int = 25): Int = try {
+    carContext.getCarService(ConstraintManager::class.java)
+        .getContentLimit(ConstraintManager.CONTENT_LIMIT_TYPE_LIST)
+        .coerceIn(1, maxCap)
+} catch (_: Exception) {
+    fallback.coerceAtMost(maxCap)
+}

@@ -2,11 +2,24 @@ package com.parachord.android.car.cal
 
 import android.content.Intent
 import androidx.car.app.CarAppService
+import androidx.car.app.CarToast
 import androidx.car.app.Screen
 import androidx.car.app.ScreenManager
 import androidx.car.app.Session
+import androidx.car.app.media.MediaPlaybackManager
 import androidx.car.app.validation.HostValidator
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.parachord.android.BuildConfig
+import com.parachord.android.playback.PlaybackService
 import com.parachord.android.playback.PlaybackStateHolder
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.filterNotNull
+import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
 /**
@@ -20,16 +33,23 @@ import org.koin.core.context.GlobalContext
  */
 class CalCarAppService : CarAppService() {
 
-    override fun createHostValidator(): HostValidator = HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+    override fun createHostValidator(): HostValidator =
+        if (BuildConfig.DEBUG) {
+            HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
+        } else {
+            HostValidator.Builder(applicationContext)
+                .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
+                .build()
+        }
 
     override fun onCreateSession(): Session = CalMediaSession()
 }
 
 /**
- * The one [Session] for the car's template UI: it returns the home [Screen]
- * (tabs: Library, For You, Search) and links our Media3 session to the host,
- * so the host's `MediaPlaybackTemplate`, the media card on the car's home and
- * its widgets stay in sync with our playback state.
+ * The [Session] for the car's template UI: it returns the home [Screen]
+ * (tabs: Library, For You, Now Playing, Search), links our Media3 session to
+ * the host on every session creation and service restart, and surfaces bridge
+ * error messages via `CarToast`.
  *
  * Tapping the car's media card opens Now Playing — but only once something has
  * actually played: the host renders `MediaPlaybackTemplate` from the session,
@@ -38,12 +58,56 @@ class CalCarAppService : CarAppService() {
  */
 class CalMediaSession : Session() {
 
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private val bridge: CalPlaybackBridge by lazy { GlobalContext.get().get() }
     private val stateHolder: PlaybackStateHolder by lazy { GlobalContext.get().get() }
 
+    init {
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                when (event) {
+                    Lifecycle.Event.ON_CREATE -> startSessionObservers()
+                    Lifecycle.Event.ON_DESTROY -> scope.cancel()
+                    else -> Unit
+                }
+            },
+        )
+    }
+
+    private fun startSessionObservers() {
+        // Scope token registration to this Session's lifecycle and react to
+        // PlaybackService restarts so MediaPlaybackTemplate always has a live
+        // token for this CarContext.
+        scope.launch {
+            try {
+                bridge.ensureConnected()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep observing sessionCompatTokenFlow in case the service starts later.
+            }
+            PlaybackService.sessionCompatTokenFlow
+                .filterNotNull()
+                .collect { token ->
+                    try {
+                        carContext.getCarService(MediaPlaybackManager::class.java)
+                            .registerMediaPlaybackToken(token)
+                    } catch (e: Exception) {
+                        com.parachord.shared.platform.Log.w("CalUI", "registerMediaPlaybackToken failed: ${e.message}")
+                    }
+                }
+        }
+        scope.launch {
+            bridge.messages.collect { message ->
+                CarToast.makeText(carContext, message, CarToast.LENGTH_SHORT).show()
+            }
+        }
+    }
+
     override fun onCreateScreen(intent: Intent): Screen {
-        bridge.register(carContext)
         return if (intent.action == ACTION_SHOW_MEDIA_PLAYBACK && hasSomethingToPlay()) {
+            // Seed Home beneath Now Playing so Action.BACK always lands on Home.
+            carContext.getCarService(ScreenManager::class.java).push(CalHomeScreen(carContext))
             CalNowPlayingScreen(carContext)
         } else {
             CalHomeScreen(carContext)
@@ -66,7 +130,7 @@ class CalMediaSession : Session() {
     private fun hasSomethingToPlay(): Boolean =
         stateHolder.state.value.currentTrack != null
 
-    private companion object {
+    internal companion object {
         const val ACTION_SHOW_MEDIA_PLAYBACK = "androidx.car.app.media.action.SHOW_MEDIA_PLAYBACK"
     }
 }

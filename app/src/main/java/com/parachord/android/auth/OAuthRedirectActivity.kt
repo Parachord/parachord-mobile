@@ -4,7 +4,7 @@ import android.app.Activity
 import android.content.Intent
 import android.os.Bundle
 import com.parachord.shared.platform.Log
-import com.parachord.android.ui.MainActivity
+import com.parachord.android.ui.ParachordActivity
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -63,7 +63,7 @@ class OAuthRedirectActivity : Activity() {
         // Custom Tab task drops behind us. We explicitly start MainActivity
         // with SINGLE_TOP + CLEAR_TOP so the existing instance stays and
         // Android routes the focus transition through our task, not Chrome's.
-        val bringToFront = Intent(this, MainActivity::class.java).apply {
+        val bringToFront = Intent(this, ParachordActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or
                 Intent.FLAG_ACTIVITY_CLEAR_TOP or
                 Intent.FLAG_ACTIVITY_SINGLE_TOP

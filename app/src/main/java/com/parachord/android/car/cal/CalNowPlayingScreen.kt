@@ -2,11 +2,14 @@ package com.parachord.android.car.cal
 
 import androidx.car.app.CarContext
 import androidx.car.app.Screen
+import androidx.car.app.media.model.MediaPlaybackTemplate
 import androidx.car.app.model.Action
 import androidx.car.app.model.CarIcon
 import androidx.car.app.model.Header
 import androidx.car.app.model.Template
-import androidx.car.app.media.model.MediaPlaybackTemplate
+import androidx.core.graphics.drawable.IconCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import com.parachord.android.R
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.shared.car.CarNowPlayingButton
@@ -17,19 +20,18 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
 /**
  * The car's Now Playing as a `MediaPlaybackTemplate`: the host renders the
- * playback controls and metadata from our registered Media3 session — no
- * playback UI of ours to build, and the host keeps it distraction-compliant by
- * construction. The header carries the extra Now Playing controls the host's
- * playback view has no room for: Shuffle, Spinoff (the shared
- * `carNowPlayingButtons` rule — the fork in a disc while it runs, hidden when
- * nothing similar exists, and a tap while the pool builds does nothing), and
- * the Queue button.
+ * playback controls (including the Heart/Love custom action published by
+ * `PlaybackService`'s Media3 session) and metadata from our registered session.
+ * The header carries the extra Now Playing controls the host's playback bar has
+ * no room for: Spinoff (the shared `carNowPlayingButtons` rule), Shuffle (the
+ * shared `shuffleAllowed` rule), and Queue.
  */
 class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
 
@@ -37,16 +39,12 @@ class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
     private val stateHolder: PlaybackStateHolder by lazy { GlobalContext.get().get() }
 
-    /** Follows the button state: a shuffle/spinoff change re-renders the header. */
-    private var observed = false
-
-    private fun observeState() {
-        if (observed) return
-        observed = true
+    init {
         scope.launch {
             stateHolder.state
                 .map { state ->
                     listOf(
+                        state.currentTrack != null,
                         state.shuffleEnabled,
                         state.spinoffMode,
                         state.spinoffAvailable,
@@ -55,18 +53,35 @@ class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
                     )
                 }
                 .distinctUntilChanged()
-                .collect { invalidate() }
+                .drop(1)
+                .collect {
+                    if (stateHolder.state.value.currentTrack == null) {
+                        // Playback stopped and cleared — remove this screen
+                        // specifically (even if CalQueueScreen is above it) so
+                        // the user is never stranded on an empty dark surface.
+                        screenManager.remove(this@CalNowPlayingScreen)
+                    } else {
+                        invalidate()
+                    }
+                }
         }
+        lifecycle.addObserver(
+            LifecycleEventObserver { _, event ->
+                if (event == Lifecycle.Event.ON_DESTROY) {
+                    scope.cancel()
+                }
+            },
+        )
     }
 
     override fun onGetTemplate(): Template {
-        observeState()
         val state = stateHolder.state.value
         val header = Header.Builder()
             .setTitle("Now Playing")
-        // Spinoff: the shared rule that decides the Android Auto buttons — while
-        // the pool builds it already reads as "end", and when nothing similar
-        // exists the button is hidden entirely.
+            .setStartHeaderAction(Action.BACK)
+        // Heart/Love is already rendered on the playback bar from our Media3
+        // session's custom action, so only Spinoff is read from the shared rule
+        // for the header (passing loved = false ignores the heart slot).
         val spinoffButton = carNowPlayingButtons(
             loved = false,
             spinoffMode = state.spinoffMode,
@@ -79,7 +94,7 @@ class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
                 Action.Builder()
                     .setIcon(
                         CarIcon.Builder(
-                            androidx.core.graphics.drawable.IconCompat.createWithResource(
+                            IconCompat.createWithResource(
                                 carContext,
                                 if (active) R.drawable.ic_auto_spinoff_active else R.drawable.ic_auto_spinoff,
                             ),
@@ -97,7 +112,7 @@ class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
             Action.Builder()
                 .setIcon(
                     CarIcon.Builder(
-                        androidx.core.graphics.drawable.IconCompat.createWithResource(
+                        IconCompat.createWithResource(
                             carContext,
                             if (state.shuffleEnabled) R.drawable.ic_auto_shuffle_active else R.drawable.ic_auto_shuffle,
                         ),
@@ -119,18 +134,5 @@ class CalNowPlayingScreen(carContext: CarContext) : Screen(carContext) {
         return MediaPlaybackTemplate.Builder()
             .setHeader(header.build())
             .build()
-    }
-
-    init {
-        lifecycle.addObserver(object : androidx.lifecycle.LifecycleEventObserver {
-            override fun onStateChanged(
-                source: androidx.lifecycle.LifecycleOwner,
-                event: androidx.lifecycle.Lifecycle.Event,
-            ) {
-                if (event == androidx.lifecycle.Lifecycle.Event.ON_DESTROY) {
-                    scope.cancel()
-                }
-            }
-        })
     }
 }

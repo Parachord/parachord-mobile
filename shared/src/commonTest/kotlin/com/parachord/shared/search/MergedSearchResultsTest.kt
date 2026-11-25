@@ -23,7 +23,7 @@ class MergedSearchResultsTest {
     }
 
     @Test
-    fun `round-robin puts an album first, then a song, then an artist`() {
+    fun `round-robin puts an album first then a song then an artist`() {
         val state = SearchState(
             query = "q",
             localTracks = listOf(track("Song", "Band")),
@@ -38,7 +38,7 @@ class MergedSearchResultsTest {
     }
 
     @Test
-    fun `the same song shows once, the library copy wins`() {
+    fun `the same song shows once — the library copy wins`() {
         val state = SearchState(
             query = "q",
             localTracks = listOf(track("Title", "Artist")),
@@ -54,11 +54,17 @@ class MergedSearchResultsTest {
         val state = SearchState(
             query = "q",
             localAlbums = listOf(Album(id = "a", title = "The Album", artist = "The Band")),
-            remoteAlbums = listOf(AlbumSearchResult(title = "the album", artist = "the band")),
+            remoteAlbums = listOf(
+                AlbumSearchResult(title = " the album ", artist = "the band"),
+                AlbumSearchResult(title = "Other", artist = "The Band"),
+                AlbumSearchResult(title = "other", artist = "the band"),
+            ),
         )
-        val merged = mergeSearchResults(state)
-        assertEquals(1, merged.size)
+        val merged = mergeSearchResults(state, remoteAlbums = 1)
+        assertEquals(2, merged.size)
         assertTrue(merged[0] is MergedSearchItem.LibraryAlbum)
+        assertTrue(merged[1] is MergedSearchItem.RemoteAlbum)
+        assertEquals("Other", (merged[1] as MergedSearchItem.RemoteAlbum).album.title)
     }
 
     @Test

@@ -36,9 +36,3 @@ iosApp/Parachord.xcodeproj/project.xcworkspace/xcshareddata/IDEWorkspaceChecks.p
 # $(LASTFM_API_KEY) / $(LASTFM_SHARED_SECRET); real values live here only.
 # Committed Config.xcconfig optionally #includes this; copy from the .example.
 iosApp/Parachord/Secrets.xcconfig
-
-# Local debug-only trust for an intercepting network (Zscaler): the debug
-# source set's network security config and the proxy root CA it references are
-# not committed (a corporate CA belongs to the machine, not the repo).
-app/src/debug/res/xml/network_security_config.xml
-app/src/debug/res/raw/*.pem
