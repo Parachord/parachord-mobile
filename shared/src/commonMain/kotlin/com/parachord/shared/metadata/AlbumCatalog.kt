@@ -167,6 +167,10 @@ object AlbumCatalog {
         return (if (wantTitle == gotTitle) 2 else 1) + exactTitle + (if (wantArtist == gotArtist) 2 else 1)
     }
 
+    /** Whether [name] by [artist] is the album asked for, by [albumMatchScore]'s rules. */
+    fun isSameAlbum(targetArtist: String, targetTitle: String, artist: String?, name: String?): Boolean =
+        albumMatchScore(targetArtist, targetTitle, name, artist) > 0
+
     /** Same album by artist and title, edition suffixes aside. */
     fun sameAlbumIdentity(artistA: String?, titleA: String?, artistB: String?, titleB: String?): Boolean {
         val tA = normalizeAlbumTitle(titleA)

@@ -166,6 +166,7 @@ class SettingsStore(
         // dedup migration, and bumping it here would skip migrations that haven't
         // run yet on a fresh-from-old install.
         const val TRACK_DEDUP_V1_DONE = "track_dedup_v1_done"
+        const val WRONG_SONG_PURGE_DONE = "wrong_song_sources_purge"
         const val TRACK_SOURCES_STORED_ID_PURGE_DONE = "track_sources_stored_id_purge_566"
         const val ENABLED_SYNC_PROVIDERS = "enabled_sync_providers"
         // N-way multimaster playlist sync (per-user opt-in, default OFF). Gates
@@ -667,6 +668,15 @@ class SettingsStore(
 
     /** One-shot drop of saved track sources a failed resolve left (#566). */
     @Throws(Throwable::class)
+    /** Whether the sources and covers of wrong songs were dropped once (`ResolverRetry.holdsWrongSong`). */
+    suspend fun isWrongSongPurgeDone(): Boolean {
+        ensureMigrated(); return kv.getBoolean(WRONG_SONG_PURGE_DONE, default = false)
+    }
+
+    suspend fun setWrongSongPurgeDone() {
+        ensureMigrated(); kv.setBoolean(WRONG_SONG_PURGE_DONE, true)
+    }
+
     suspend fun isTrackSourcesStoredIdPurgeDone(): Boolean {
         ensureMigrated(); return kv.getBoolean(TRACK_SOURCES_STORED_ID_PURGE_DONE, default = false)
     }

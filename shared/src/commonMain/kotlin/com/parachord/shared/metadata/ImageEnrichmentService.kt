@@ -5,6 +5,9 @@ import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
 import com.parachord.shared.db.dao.PlaylistTrackDao
 import com.parachord.shared.db.dao.TrackDao
+import com.parachord.shared.resolver.ResolverScoring
+import com.parachord.shared.resolver.scoreConfidence
+import com.parachord.shared.resolver.selectBestMatch
 import io.ktor.client.HttpClient
 import io.ktor.client.request.head
 import io.ktor.http.isSuccess
@@ -221,14 +224,13 @@ class ImageEnrichmentService(
                         "$albumTitle $artistName",
                         limit = 5,
                     )
-                    val albumCandidates = listOfNotNull(
-                        searchResults.firstOrNull {
-                            it.title.equals(albumTitle, ignoreCase = true) &&
-                                it.artist.equals(artistName, ignoreCase = true)
-                        }?.artworkUrl,
-                        searchResults.firstOrNull()?.artworkUrl,
-                    ).distinct()
-                    albumCandidates.firstOrNull { usableArt(it, exclude) }?.let { return@async it }
+                    // Only this album's cover: a search's first result can be
+                    // any album sharing a word.
+                    searchResults
+                        .filter { AlbumCatalog.isSameAlbum(artistName, albumTitle, it.artist, it.title) }
+                        .sortedByDescending { it.title.equals(albumTitle, ignoreCase = true) && it.artist.equals(artistName, ignoreCase = true) }
+                        .mapNotNull { it.artworkUrl }.distinct()
+                        .firstOrNull { usableArt(it, exclude) }?.let { return@async it }
 
                     // Last resort: track-level search. Some obscure
                     // singles (e.g. one-off bandcamp drops) aren't
@@ -244,13 +246,11 @@ class ImageEnrichmentService(
                         "$artistName $albumTitle",
                         limit = 5,
                     )
-                    listOfNotNull(
-                        trackResults.firstOrNull {
-                            it.album?.equals(albumTitle, ignoreCase = true) == true &&
-                                it.artist.equals(artistName, ignoreCase = true)
-                        }?.artworkUrl,
-                        trackResults.firstOrNull()?.artworkUrl,
-                    ).distinct().firstOrNull { usableArt(it, exclude) }
+                    // A track off this album, else the single it's named after.
+                    (
+                        trackResults.filter { AlbumCatalog.isSameAlbum(artistName, albumTitle, it.artist, it.album) }
+                            .mapNotNull { it.artworkUrl } + matchedTrackArt(trackResults, albumTitle, artistName)
+                        ).distinct().firstOrNull { usableArt(it, exclude) }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {
@@ -263,6 +263,20 @@ class ImageEnrichmentService(
             d
         }
         return deferred.await()
+    }
+
+    /**
+     * The covers of the search [results] that are this track, best match first:
+     * never the first result whatever it is, which put another artist's sleeve
+     * on local files no service has ("Apples & Rain" by Tundra 212 under
+     * Azealia Banks' "212"). Empty leaves the placeholder.
+     */
+    private fun matchedTrackArt(results: List<TrackSearchResult>, title: String, artist: String): List<String> {
+        val best = selectBestMatch(results, title, artist, { it.title }, { it.artist }) ?: return emptyList()
+        val others = results.filter {
+            scoreConfidence(title, artist, it.title, it.artist) >= ResolverScoring.MIN_CONFIDENCE_THRESHOLD
+        }
+        return (listOf(best) + others).mapNotNull { it.artworkUrl }.distinct()
     }
 
     /**
@@ -314,13 +328,7 @@ class ImageEnrichmentService(
                     // Fall back to track search
                     if (artworkUrl == null) {
                         val results = metadataService.searchTracks("$artistName $trackTitle", limit = 5)
-                        artworkUrl = listOfNotNull(
-                            results.firstOrNull {
-                                it.title.equals(trackTitle, ignoreCase = true) &&
-                                    it.artist.equals(artistName, ignoreCase = true)
-                            }?.artworkUrl,
-                            results.firstOrNull()?.artworkUrl,
-                        ).distinct().firstOrNull { usableArt(it, null) }
+                        artworkUrl = matchedTrackArt(results, trackTitle, artistName).firstOrNull { usableArt(it, null) }
                     }
 
                     if (artworkUrl != null) {
@@ -426,10 +434,7 @@ class ImageEnrichmentService(
                                                     "${track.trackArtist} ${track.trackTitle}",
                                                     limit = 5,
                                                 )
-                                                results.firstOrNull {
-                                                    it.title.equals(track.trackTitle, ignoreCase = true) &&
-                                                        it.artist.equals(track.trackArtist, ignoreCase = true)
-                                                }?.artworkUrl ?: results.firstOrNull()?.artworkUrl
+                                                matchedTrackArt(results, track.trackTitle, track.trackArtist).firstOrNull()
                                             } catch (_: Exception) {
                                                 null
                                             }
