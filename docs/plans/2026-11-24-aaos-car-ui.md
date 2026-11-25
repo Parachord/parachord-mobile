@@ -67,6 +67,14 @@ The playback view's header carries the extra Now Playing controls (the header is
 
 The screen re-renders when the button state changes (an observer on `PlaybackStateHolder.state`, distinct by shuffle/spinoff/context-type, like the queue screen's).
 
+## Round 5 — the session artwork, actually delivered
+
+Round 3 embedded the artwork bytes into the session metadata, but nothing rendered: the fetch never ran. The bytes were fed by the *notification's* artwork path — `createNotification` (which runs on notification updates only) and the state observer (which returns early unless external playback holds the foreground). During external playback with the app visible, neither fires, so `sessionArtworkData` stayed null and the media card and the playback view kept the flat placeholder.
+
+The fix: a dedicated observer that fetches whenever the playing track's effective artwork URL changes — `combine(stateHolder.state, trackResolverCache.trackArtwork)` → `effectiveArtwork`, the same function the timeline's current item uses, so the timeline's attach (which matches the fetched URL against the item's) always matches by construction. `collectLatest` cancels superseded fetches; a URL change mid-track (the resolved source's art landing) refetches and re-attaches. The bitmap is re-encoded as a 256px JPEG at 85 (~15–25 KB — PNG at 100 was needless binder risk). `fetchArtworkBitmap` also learned `content://` and `file://` (the ContentResolver — a `URLConnection` throws on them), so scanned local files' albumart reaches the car too.
+
+Verified live on the emulator (instrumented build): `fetched bitmap=true bytes=22986 → attach bytes=22986` for the CAA cover, then a URL change to Amazon's CDN mid-track refetched and re-attached (12828 bytes), and `dumpsys media_session`'s metadata grew from 12 keys to 13 (the compat album-art bitmap). The notification-path writers were restored to plain notification-field assignments — they no longer touch the session flow.
+
 ## Known limitations (v1)
 
 - Not tested on a device (the EX90): the drive-mode gate on the full app (AAOS blocks non-`distractionOptimized` activities while moving — the emulator is a user build, no VHAL injection), real audio playback, and the actual media card tap while playing.

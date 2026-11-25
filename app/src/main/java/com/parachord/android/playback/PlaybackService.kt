@@ -176,33 +176,15 @@ class PlaybackService : MediaLibraryService() {
     private var currentArtworkBitmap: Bitmap? = null
 
     /**
-     * The playing track's artwork as encoded bytes (url → PNG), published into
+     * The playing track's artwork as encoded bytes (url → JPEG), published into
      * the session's [androidx.media3.common.MediaMetadata] so the car's
      * home-screen media card — and the CAL host's `MediaPlaybackTemplate` —
-     * show the album art. A URI alone doesn't cross: the system renderers read
-     * the compat bitmap, which only `artworkData` becomes.
+     * show the album art. A URI alone doesn't cross: those renderers read the
+     * session's compat bitmap, which only `artworkData` becomes. Written by
+     * the artwork observer below ([queueSnapshotJob]'s combine re-emits when it
+     * changes, so the timeline's current item picks the bytes up).
      */
     private val sessionArtworkData = kotlinx.coroutines.flow.MutableStateFlow<Pair<String?, ByteArray?>>(null to null)
-
-    /** Sets the current artwork everywhere it's needed: the notification fields and the session metadata flow. */
-    private fun setCurrentArtwork(url: String?, bitmap: Bitmap?) {
-        currentArtworkUrl = url
-        currentArtworkBitmap = bitmap
-        serviceScope.launch {
-            val bytes = bitmap?.let { bmp ->
-                kotlinx.coroutines.withContext(Dispatchers.IO) {
-                    try {
-                        val out = java.io.ByteArrayOutputStream()
-                        bmp.compress(Bitmap.CompressFormat.PNG, 100, out)
-                        out.toByteArray()
-                    } catch (_: Exception) {
-                        null
-                    }
-                }
-            }
-            sessionArtworkData.value = url to bytes
-        }
-    }
 
     companion object {
         /**
@@ -467,6 +449,43 @@ class PlaybackService : MediaLibraryService() {
                 .collect { state ->
                     mediaButtonsState = state
                     mediaSession?.setCustomLayout(customLayoutFor(state))
+                }
+        }
+
+        // The playing track's artwork for the session's metadata (the car's
+        // home-screen media card and the CAL playback view read the compat
+        // bitmap, which only artworkData becomes). The notification's own
+        // fetch is unreliable for this — it runs on notification updates only,
+        // and during external playback with the app visible the state observer
+        // returns early — so this fetches whenever the effective artwork URL
+        // changes: the same URL the timeline's current item carries, so the
+        // timeline's attach always matches.
+        serviceScope.launch {
+            combine(stateHolder.state, trackResolverCache.trackArtwork) { state, art ->
+                state.effectiveArtwork(art)
+            }
+                .distinctUntilChanged()
+                .collectLatest { url ->
+                    if (url == null) {
+                        sessionArtworkData.value = null to null
+                        return@collectLatest
+                    }
+                    val bitmap = fetchArtworkBitmap(url)
+                    val bytes = withContext(Dispatchers.IO) {
+                        bitmap?.let { bmp ->
+                            try {
+                                val out = java.io.ByteArrayOutputStream()
+                                // JPEG, not PNG: a 256px cover at 85 is a few
+                                // tens of KB — safely inside the binder limit the
+                                // metadata bundle crosses.
+                                bmp.compress(Bitmap.CompressFormat.JPEG, 85, out)
+                                out.toByteArray()
+                            } catch (_: Exception) {
+                                null
+                            }
+                        }
+                    }
+                    sessionArtworkData.value = url to bytes
                 }
         }
 
@@ -1223,8 +1242,10 @@ class PlaybackService : MediaLibraryService() {
 
                 // Load artwork if URL changed
                 if (artworkUrl != currentArtworkUrl) {
-                    val bitmap = if (artworkUrl != null) fetchArtworkBitmap(artworkUrl) else null
-                    setCurrentArtwork(artworkUrl, bitmap)
+                    currentArtworkUrl = artworkUrl
+                    currentArtworkBitmap = if (artworkUrl != null) {
+                        fetchArtworkBitmap(artworkUrl)
+                    } else null
                 }
 
                 val nm = getSystemService(NotificationManager::class.java)
@@ -1412,14 +1433,15 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun loadArtworkAndUpdateNotification(title: String, artist: String, artworkUrl: String?) {
+        currentArtworkUrl = artworkUrl
         if (artworkUrl == null) {
-            setCurrentArtwork(null, null)
+            currentArtworkBitmap = null
             return
         }
         serviceScope.launch {
             val bitmap = fetchArtworkBitmap(artworkUrl)
             if (currentArtworkUrl == artworkUrl) {
-                setCurrentArtwork(artworkUrl, bitmap)
+                currentArtworkBitmap = bitmap
                 if (isExternalForeground) {
                     val nm = getSystemService(NotificationManager::class.java)
                     nm?.notify(
@@ -1548,6 +1570,13 @@ class PlaybackService : MediaLibraryService() {
 
     private suspend fun fetchArtworkBitmap(url: String): Bitmap? = withContext(Dispatchers.IO) {
         try {
+            if (url.startsWith("content://") || url.startsWith("file://")) {
+                // Local art (a scanned file's albumart URI, a stored mosaic) —
+                // a URLConnection can't read these; the ContentResolver can.
+                return@withContext contentResolver.openInputStream(android.net.Uri.parse(url))?.use { stream ->
+                    BitmapFactory.decodeStream(stream)
+                }
+            }
             val connection = URL(url).openConnection()
             connection.connectTimeout = 5_000
             connection.readTimeout = 5_000
@@ -1613,7 +1642,7 @@ class PlaybackService : MediaLibraryService() {
                 serviceScope.launch {
                     val bitmap = fetchArtworkBitmap(artworkUrl)
                     if (currentArtworkUrl == artworkUrl) {
-                        setCurrentArtwork(artworkUrl, bitmap)
+                        currentArtworkBitmap = bitmap
                         val updated = buildNotification(title, artist, isPlaying, bitmap)
                         repostMediaNotification(isExternalForeground) {
                             onNotificationChangedCallback.onNotificationChanged(
