@@ -113,6 +113,14 @@ func pcRouteDestination(_ route: PCRoute) -> some View {
     }
 }
 
+/// A route opened from outside Home's stack (a link, Now Playing, the sidebar).
+/// Each opening is its own value, so it always replaces what's there: the same
+/// page's own pushes would otherwise stay on top of it.
+private struct HomeOpenedRoute: Hashable {
+    let route: PCRoute
+    let opening: Int
+}
+
 struct HomeScreen: View {
     /// One-shot route injected by the sidebar (consumed into `path`). The tab's
     /// nav stack lives in HomeScreen's OWN @State so re-tapping Home (which
@@ -130,7 +138,9 @@ struct HomeScreen: View {
     /// (desktop's `setCollectionSort({ tracks: 'recent' })`, Android's link sort).
     var onOpenRecentLoves: () -> Void = {}
 
-    @State private var path: [PCRoute] = []
+    @State private var path = NavigationPath()
+    /// Routes opened from outside so far (`HomeOpenedRoute`).
+    @State private var routesOpened = 0
     @State private var home = HomeModel()
     @State private var reauth = SpotifyReauthModel()
     @State private var amReauth = AppleMusicReauthModel()
@@ -143,6 +153,8 @@ struct HomeScreen: View {
     @Environment(\.pcLayoutWidth) private var layoutWidth
 
     private var session: IosHomeSession { home.session }
+
+    private func push(_ route: PCRoute) { path.append(route) }
 
     var body: some View {
         NavigationStack(path: $path) {
@@ -171,6 +183,10 @@ struct HomeScreen: View {
             .background(PC.bgPrimary)
             .toolbar(.hidden, for: .navigationBar)
             .navigationDestination(for: PCRoute.self) { pcRouteDestination($0) }
+            // The id: an opened route takes the place of the page that was
+            // there, and without it SwiftUI keeps that page's state, so an
+            // album opened over another album went on showing the first one.
+            .navigationDestination(for: HomeOpenedRoute.self) { pcRouteDestination($0.route).id($0) }
             // A fresh entry or a return from a pushed page: the loads, under their throttles.
             .onAppear {
                 session.onVisible()
@@ -178,7 +194,11 @@ struct HomeScreen: View {
             }
         }
         .onChange(of: pendingRoute, initial: true) { _, route in
-            if let route { path = [route]; pendingRoute = nil }
+            if let route {
+                routesOpened += 1
+                path = NavigationPath([HomeOpenedRoute(route: route, opening: routesOpened)])
+                pendingRoute = nil
+            }
         }
         // The view's creation (a tab switch or a re-tap recreates it), not a
         // return from a pushed page or from Settings presented over Home: a new
@@ -258,7 +278,7 @@ struct HomeScreen: View {
             if page.showPlaylists {
                 HomePlaylistsRow(
                     page: page,
-                    onOpen: { path.append(.savedPlaylist(id: $0.id)) },
+                    onOpen: { push(.savedPlaylist(id: $0.id)) },
                     onPlay: { card in
                         let id = card.id
                         home.play(coordinator: coordinator) { try await $0.playlistQueue(id: id) }
@@ -272,13 +292,13 @@ struct HomeScreen: View {
                     page: page,
                     onSelectSource: { session.setAlbumSource(id: $0) },
                     onShown: { session.albumShown(key: $0.key) },
-                    onOpen: { path.append(.album(title: $0.item.name, artist: $0.item.artist ?? "")) },
-                    onOpenArtist: { path.append(.artist($0.item.artist ?? "")) },
+                    onOpen: { push(.album(title: $0.item.name, artist: $0.item.artist ?? "")) },
+                    onOpenArtist: { push(.artist($0.item.artist ?? "")) },
                     onPlay: { album in
                         let key = album.key
                         home.play(coordinator: coordinator) { try await $0.albumQueue(key: key) }
                     },
-                    onSeeAll: { path.append(.recommendations) }
+                    onSeeAll: { push(.recommendations) }
                 )
                 .padding(.top, 24)
             }
@@ -286,14 +306,14 @@ struct HomeScreen: View {
                 HomeHalvesLayout(halves: page.halves) { half, cardWidth in
                     HomeHalfView(
                         half: half,
-                        onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
-                        onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                        onSeeAll: { push(half.kind == IosHomePageKt.HALF_KIND_FRESH ? .fresh : half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
+                        onOpen: { push(.album(title: $0.title, artist: $0.artist)) },
                         onPlay: { card in
                             let key = card.key
                             home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
                         },
                         onShown: { session.halfCardShown(key: $0.key) },
-                        onOpenArtist: { path.append(.artist($0.artist)) },
+                        onOpenArtist: { push(.artist($0.artist)) },
                         onRetry: { session.retryCharts() },
                         cardWidth: cardWidth
                     )
@@ -304,13 +324,13 @@ struct HomeScreen: View {
                 VStack(alignment: .leading, spacing: 0) {
                     PCSectionHeader(
                         title: HomeCopy.shared.CONCERTS_TITLE, subtitle: HomeCopy.shared.CONCERTS_SUBTITLE,
-                        page: DesignTokens.Page.concerts, onSeeAll: { path.append(.concerts) }, gutter: homeGutter)
+                        page: DesignTokens.Page.concerts, onSeeAll: { push(.concerts) }, gutter: homeGutter)
                     // One column on a phone, two when wide, so a card isn't a 1,000-wide strip.
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12),
                                              count: PCLayout.isWide(layoutWidth) ? 2 : 1),
                               spacing: 12) {
                         ForEach(page.concerts, id: \.id) { c in
-                            HomeConcertCard(concert: c, onOpenTour: { path.append(.artistOnTour($0)) })
+                            HomeConcertCard(concert: c, onOpenTour: { push(.artistOnTour($0)) })
                         }
                     }
                     .padding(.horizontal, homeGutter)
@@ -341,7 +361,7 @@ struct HomeScreen: View {
             onOpenPluginsTab: { openSettingsTab(SettingsTab.shared.PLUGINS) },
             onSyncLibrary: { openSettingsTab(GettingStartedLayoutKt.SYNC_LIBRARY_SETTINGS_TAB) },
             onImport: { openImport() },
-            onOpenPlaylist: { path.append(.savedPlaylist(id: $0)) },
+            onOpenPlaylist: { push(.savedPlaylist(id: $0)) },
             onCollectionRadio: { home.play(coordinator: coordinator) { try await $0.collectionRadio() } },
             onSearch: { onSelectTab(.search, nil) }
         )
@@ -352,14 +372,14 @@ struct HomeScreen: View {
                 HomeHalvesLayout(halves: gs.explore, stackSpacing: 16) { half, cardWidth in
                     HomeHalfView(
                         half: half,
-                        onSeeAll: { path.append(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
-                        onOpen: { path.append(.album(title: $0.title, artist: $0.artist)) },
+                        onSeeAll: { push(half.kind == IosHomePageKt.HALF_KIND_CRITICAL ? .critical : .pop) },
+                        onOpen: { push(.album(title: $0.title, artist: $0.artist)) },
                         onPlay: { card in
                             let key = card.key
                             home.play(coordinator: coordinator) { try await $0.halfAlbumQueue(key: key) }
                         },
                         onShown: { session.halfCardShown(key: $0.key) },
-                        onOpenArtist: { path.append(.artist($0.artist)) },
+                        onOpenArtist: { push(.artist($0.artist)) },
                         onRetry: { session.retryCharts() },
                         cardWidth: cardWidth
                     )
@@ -374,7 +394,7 @@ struct HomeScreen: View {
         if card.isLoves {
             onOpenRecentLoves()
         } else if let url = card.url, !url.isEmpty {
-            path.append(.servicePlaylist(url: url, name: card.title, source: card.source ?? "", image: card.imageUrl))
+            push(.servicePlaylist(url: url, name: card.title, source: card.source ?? "", image: card.imageUrl))
         }
     }
 
@@ -382,12 +402,12 @@ struct HomeScreen: View {
     private func openTile(_ tile: IosJumpTile) {
         switch tile.kind {
         case IosHomePageKt.JUMP_KIND_PLAYLIST:
-            path.append(.savedPlaylist(id: tile.targetId))
+            push(.savedPlaylist(id: tile.targetId))
         case IosHomePageKt.JUMP_KIND_ALBUM:
-            path.append(.album(title: tile.targetName, artist: tile.targetArtist ?? ""))
+            push(.album(title: tile.targetName, artist: tile.targetArtist ?? ""))
         case IosHomePageKt.JUMP_KIND_MIX:
             guard let url = tile.targetUrl, !url.isEmpty else { return }
-            path.append(.servicePlaylist(url: url, name: tile.targetName, source: tile.targetArtist ?? "", image: tile.imageUrl))
+            push(.servicePlaylist(url: url, name: tile.targetName, source: tile.targetArtist ?? "", image: tile.imageUrl))
         case IosHomePageKt.JUMP_KIND_LOVES:
             onOpenRecentLoves()
         default:
