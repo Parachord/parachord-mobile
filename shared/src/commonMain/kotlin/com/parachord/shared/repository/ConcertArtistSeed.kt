@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.shared.api.LastFmClient
 import com.parachord.shared.api.ListenBrainzClient
 import com.parachord.shared.db.dao.AlbumDao
@@ -46,7 +47,7 @@ object ConcertArtistSeed {
         history: List<String>,
     ): List<ConcertArtist> {
         val seen = mutableSetOf<String>()
-        fun firstTime(name: String): Boolean = name.isNotBlank() && seen.add(name.trim().lowercase())
+        fun firstTime(name: String): Boolean = hasArtistPage(name) && seen.add(name.trim().lowercase())
 
         val collectionArtists = collection.filter { firstTime(it.name) }
             .map { ConcertArtist(it.name, "collection", it.imageUrl) }

@@ -263,7 +263,7 @@ struct PCNowPlaying: View {
                         Text(track?.artist ?? "—").font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accentSoft)
                     }
                     .buttonStyle(.plain)
-                    .disabled((track?.artist ?? "").isEmpty)
+                    .disabled(!pcHasArtistPage(track?.artist))
                     // Teal on-tour dot (#201) — tapping opens the On Tour tab.
                     if isOnTour, let a = track?.artist, !a.isEmpty {
                         Circle().fill(PC.onTour).frame(width: 8, height: 8)
@@ -415,7 +415,7 @@ struct PCNowPlaying: View {
                 Button { coordinator.playNext(t) } label: { Label("Play Next", systemImage: "text.line.first.and.arrowtriangle.forward") }
                 Button { coordinator.addToQueue(t) } label: { Label("Add to Queue", systemImage: "text.append") }
                 PCAddToPlaylistMenu(track: t)
-                if !t.artist.isEmpty {
+                if pcHasArtistPage(t.artist) {
                     Button { onArtist(t.artist) } label: { Label("Go to Artist", systemImage: "music.mic") }
                 }
                 if let album = t.album, !album.isEmpty {

@@ -23,6 +23,11 @@ extension Collection {
 
 /// Hashable album reference for `navigationDestination(item:)` (context-menu
 /// "Go to Album").
+/// Whether an artist has a page: not "Various Artists" (#840, shared rule).
+func pcHasArtistPage(_ name: String?, mbid: String? = nil) -> Bool {
+    ArtistPageKt.hasArtistPage(name: name, mbid: mbid)
+}
+
 struct PCAlbumRef: Hashable { let title: String; let artist: String }
 
 /// An artist to open, with its MusicBrainz id when the opener has one (#478):
@@ -635,7 +640,7 @@ struct AlbumScreen: View {
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .confirmationDialog(model.title, isPresented: $showAlbumMenu, titleVisibility: .visible) {
             Button("Queue Album") { model.entities.forEach { coordinator.addToQueue($0) } }
-            Button("Go to Artist") { navArtist = model.artist }
+            if pcHasArtistPage(model.artist) { Button("Go to Artist") { navArtist = model.artist } }
             Button(model.inCollection ? "Remove from Collection" : "Add to Collection") { model.toggleCollection() }
             Button("Share") { ShareCoordinator.shared.shareAlbum(title: model.title, artist: model.artist, releaseGroupMbid: nil) }
         }
@@ -661,10 +666,14 @@ struct AlbumScreen: View {
             .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.title).font(.system(size: 21, weight: .semibold)).foregroundStyle(PC.fg1)
-                Button { navArtist = model.artist } label: {
-                    Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accent)
+                if pcHasArtistPage(model.artist) {
+                    Button { navArtist = model.artist } label: {
+                        Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accent)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.fg2)
                 }
-                .buttonStyle(.plain)
                 HStack(spacing: 10) {
                     if let rt = model.detail?.releaseType {
                         Text(rt.uppercased()).font(.system(size: 11, weight: .bold))
@@ -984,6 +993,20 @@ struct ArtistScreen: View {
     }
 
     var body: some View {
+        // Links hide or refuse Various Artists; this is for any that don't (#840).
+        if pcHasArtistPage(model.name) {
+            page
+        } else {
+            VStack(spacing: 0) {
+                PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() })
+                PCEmptyState(message: ArtistPageKt.noArtistPageMessage(name: model.name))
+                Spacer()
+            }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var page: some View {
         ScrollView {
             VStack(spacing: 0) {
                 hero

@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.shared.metadata.albumArtistForTrack
 import com.parachord.shared.playback.ContextDestination
 import com.parachord.shared.playback.playbackContextDestination
@@ -489,7 +490,7 @@ fun NowPlayingScreen(
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = if (displayArtist.isNotBlank()) {
+                            modifier = if (hasArtistPage(displayArtist)) {
                                 Modifier.hapticClickable { onNavigateToArtist(displayArtist) }
                             } else Modifier,
                         )

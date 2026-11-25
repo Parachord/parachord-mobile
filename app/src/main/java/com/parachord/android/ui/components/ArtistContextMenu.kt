@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.shared.metadata.hasArtistPage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -111,7 +112,7 @@ fun ArtistContextMenu(
                     onClick = { onQueueTopSongs(); onDismiss() },
                 )
             }
-            if (onGoToArtist != null) {
+            if (onGoToArtist != null && hasArtistPage(artistName)) {
                 ContextMenuItem(
                     icon = Icons.Filled.Person,
                     label = "Go to Artist",
@@ -121,11 +122,14 @@ fun ArtistContextMenu(
 
             HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
 
-            ContextMenuItem(
-                icon = if (isInCollection) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
-                label = if (isInCollection) "Remove from Collection" else "Add to Collection",
-                onClick = { onToggleCollection(); onDismiss() },
-            )
+            // Various Artists can't be added (#840); one added before can be removed.
+            if (isInCollection || hasArtistPage(artistName)) {
+                ContextMenuItem(
+                    icon = if (isInCollection) Icons.Filled.Favorite else Icons.Filled.FavoriteBorder,
+                    label = if (isInCollection) "Remove from Collection" else "Add to Collection",
+                    onClick = { onToggleCollection(); onDismiss() },
+                )
+            }
 
             if (onShare != null) {
                 HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))

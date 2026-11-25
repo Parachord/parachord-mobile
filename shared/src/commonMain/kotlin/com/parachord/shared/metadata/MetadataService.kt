@@ -369,6 +369,7 @@ class MetadataService constructor(
      * later providers fill in gaps left by earlier ones.
      */
     suspend fun getArtistInfo(artistName: String, mbid: String? = null): ArtistInfo? {
+        if (!hasArtistPage(artistName, mbid)) return null
         val known = useArtistMbid(artistName, mbid)
         // Keyed by the id too when there is one, so a namesake's cached bio isn't served.
         val key = if (known != null) "$artistName\u0000$known" else artistName
@@ -471,7 +472,7 @@ class MetadataService constructor(
 
     private suspend fun lookupArtistImage(artistName: String, exclude: String?): String? {
         val key = artistName.lowercase().trim()
-        if (key.isEmpty()) return null
+        if (!hasArtistPage(artistName)) return null
         // Persistent cache hit (shared, both platforms) — skip the network cascade.
         // [exclude] is an image URL that stopped loading ([BrokenArtRetry]): drop
         // it from the cache and look again, skipping it.
@@ -541,6 +542,7 @@ class MetadataService constructor(
 
     /** Get an artist's top tracks from all available providers, merged and deduplicated. */
     suspend fun getArtistTopTracks(artistName: String, limit: Int = 10): List<TrackSearchResult> = coroutineScope {
+        if (!hasArtistPage(artistName)) return@coroutineScope emptyList()
         val results = availableProviders()
             .map { provider -> async {
                 try { provider.getArtistTopTracks(artistName, limit) } catch (_: Exception) { emptyList() }
@@ -577,6 +579,10 @@ class MetadataService constructor(
         limit: Int = 50,
         mbid: String? = null,
     ): Flow<List<AlbumSearchResult>> = flow {
+        if (!hasArtistPage(artistName, mbid)) {
+            emit(emptyList())
+            return@flow
+        }
         val known = useArtistMbid(artistName, mbid)
         val active = availableProviders()
         val cacheKey = if (known == null) cacheKey(active, artistName, limit.toString())

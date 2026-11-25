@@ -127,6 +127,7 @@ struct ContentView: View {
                     // Tapping the artist closes Now Playing and pushes the artist
                     // page onto the Home tab's stack.
                     onArtist: { name in
+                        guard canOpenArtist(name) else { return }
                         withAnimation(.spring(response: 0.42, dampingFraction: 0.82)) { showNowPlaying = false }
                         tab = .home
                         homePendingRoute = .artist(name)
@@ -521,6 +522,7 @@ struct ContentView: View {
                                  context: PlaybackContext(type: "playlist", name: r.name, id: nil))
             dlAck("Playing \(r.name)")
         case "navArtist":
+            guard canOpenArtist(r.name) else { return }
             tab = .home
             homePendingRoute = .artist(r.name)
             dlAck("Opening \(r.name)")
@@ -600,7 +602,7 @@ struct ContentView: View {
             }
         // ── Navigation ──
         case "navHome": tab = .home; homePendingRoute = nil
-        case "navArtist": if let n = cmd.name { tab = .home; homePendingRoute = .artist(n) }
+        case "navArtist": if let n = cmd.name, canOpenArtist(n) { tab = .home; homePendingRoute = .artist(n) }
         case "navAlbum": if let a = cmd.artist, let t = cmd.title { tab = .home; homePendingRoute = .album(title: t, artist: a) }
         case "navLibrary": tab = .collection; collectionPendingTab = libraryTab(cmd.tab)
         case "navHistory": tab = .home; homePendingRoute = .history(tab: cmd.tab, period: cmd.period)
@@ -664,6 +666,13 @@ struct ContentView: View {
     }
 
     /// Show a transient ack banner (#228). Auto-dismisses after ~2.6s.
+    /// False, saying so, for an artist with no page (#840).
+    private func canOpenArtist(_ name: String) -> Bool {
+        if pcHasArtistPage(name) { return true }
+        if !name.isEmpty { dlAck(ArtistPageKt.noArtistPageMessage(name: name)) }
+        return false
+    }
+
     private func dlAck(_ message: String) {
         withAnimation(.easeInOut(duration: 0.25)) { dlToast = message }
         let shown = message

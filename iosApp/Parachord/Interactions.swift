@@ -29,7 +29,7 @@ extension View {
                 // Local files only: streaming tracks resolve by title and artist,
                 // so editing those would break resolution.
                 canEditMetadata: track.resolver == "localfiles",
-                canGoToArtist: onGoToArtist != nil,
+                canGoToArtist: onGoToArtist != nil && pcHasArtistPage(track.artist),
                 canGoToAlbum: onGoToAlbum != nil,
                 canShare: true)
             ForEach(Array(items.enumerated()), id: \.offset) { _, item in
@@ -276,7 +276,7 @@ private struct PCAlbumMenuItems: View {
         if let onGoToAlbum {
             Button { onGoToAlbum() } label: { Label("Go to Album", systemImage: "square.stack") }
         }
-        if let onGoToArtist {
+        if let onGoToArtist, pcHasArtistPage(artist) {
             Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
         }
         Divider()
@@ -314,7 +314,7 @@ private struct PCArtistMenuItems: View {
     var body: some View {
         Button { play(queue: false) } label: { Label("Play Top Songs", systemImage: "play.fill") }
         Button { play(queue: true) } label: { Label("Queue Top Songs", systemImage: "text.append") }
-        if let onGoToArtist {
+        if let onGoToArtist, pcHasArtistPage(name) {
             Button { onGoToArtist() } label: { Label("Go to Artist", systemImage: "music.mic") }
         }
         Divider()
@@ -354,11 +354,18 @@ struct PCCollectionToggleButton: View {
     @State private var sub: Cancellable?
     private let container = IosContainer.companion.shared
 
+    /// Various Artists can't be added (#840); one added before can be removed.
+    private var canToggle: Bool {
+        if case .artist(let name, _) = target { return inCollection || pcHasArtistPage(name) }
+        return true
+    }
+
     var body: some View {
         Button(role: inCollection ? .destructive : nil) { toggle() } label: {
             Label(inCollection ? "Remove from Collection" : "Add to Collection",
                   systemImage: inCollection ? "heart.slash" : "heart")
         }
+        .disabled(!canToggle)
         .task { startWatch() }
         .onDisappear { sub?.cancel(); sub = nil }
     }

@@ -41,6 +41,8 @@ class SearchArtistList(private val query: String) {
 
     private fun current(): List<ArtistInfo> =
         SearchRanking.rankArtists(query, musicBrainz + namedByResults(query, tracks, albums, musicBrainz))
+            // "Various Artists" isn't an artist (#840).
+            .filter { hasArtistPage(it.name, it.mbid) }
 
     companion object {
         /** Metadata providers whose rows aren't a service's catalog (desktop searches only the services). */
