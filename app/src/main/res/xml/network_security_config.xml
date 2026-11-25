@@ -19,4 +19,18 @@
             <certificates src="system" />
         </trust-anchors>
     </base-config>
+
+    <!--
+        Debug builds (the debug variant is debuggable) additionally trust
+        user-installed CAs — testing on a device behind an intercepting network
+        (a corporate proxy such as Zscaler) installs the proxy's root as a user
+        certificate and the app, its WebViews and its plugin sync all work.
+        Release builds are not debuggable, so this never applies to them.
+    -->
+    <debug-overrides>
+        <trust-anchors>
+            <certificates src="system" />
+            <certificates src="user" />
+        </trust-anchors>
+    </debug-overrides>
 </network-security-config>
