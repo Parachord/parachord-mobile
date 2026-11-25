@@ -44,6 +44,70 @@ class AlbumCatalogTest {
         assertTrue(score("Simon & Garfunkel", "Bookends", album("Bookends", "Simon and Garfunkel")) > 0)
     }
 
+    // ── joint credits (#843, desktop parachord#1595) ──
+
+    private fun same(a: String, b: String) = AlbumCatalog.creditMatches(a, b)
+
+    @Test fun twoJointCreditsWithDifferentSeparatorsAreTheSameAct() {
+        assertTrue(same("Ozzy Osbourne, Black Sabbath", "Ozzy Osbourne & Black Sabbath"))
+        assertTrue(same("Ozzy Osbourne & Black Sabbath", "Ozzy Osbourne, Black Sabbath"))
+        assertTrue(same("Erykah Badu and The Alchemist", "Erykah Badu, The Alchemist"))
+        // MusicBrainz's own hyphen (U+2010)
+        assertTrue(same("Jay-Z, Kanye West", "Jay\u2010Z & Kanye West"))
+        assertTrue(score("Ozzy Osbourne, Black Sabbath", "Back To The Beginning (Live)", album("Back to the Beginning", "Ozzy Osbourne & Black Sabbath")) > 0)
+    }
+
+    @Test fun aDifferentActIsStillADifferentAct() {
+        assertFalse(same("Ozzy Osbourne, Black Sabbath", "Lounge Brigade"))
+        assertFalse(same("Lounge Brigade", "Ozzy Osbourne & Black Sabbath"))
+        assertFalse(same("", "Anyone"))
+        assertFalse(AlbumCatalog.creditMatches(null, null))
+    }
+
+    @Test fun bothSidesJointNeedTheSameNames_notOneSharedMember() {
+        assertFalse(same("A & B", "A & C"))
+        assertFalse(same("A & A", "A & B"))
+        assertTrue(same("A & B", "B, A"))
+        // one side a single name: one artist of the joint credit is enough
+        assertTrue(same("A", "A & B"))
+        assertTrue(same("Ozzy Osbourne", "Ozzy Osbourne & Black Sabbath"))
+        assertTrue(same("Ozzy Osbourne & Black Sabbath", "Black Sabbath"))
+        assertTrue(same("Earth", "Earth, Wind & Fire"))
+    }
+
+    @Test fun anActWhoseNameCarriesASeparatorIsCreditedWithAGuest() {
+        assertTrue(same("Tyler, The Creator", "Tyler, The Creator & Kali Uchis"))
+        assertTrue(same("AC/DC", "AC/DC & X"))
+        assertTrue(same("Earth, Wind & Fire", "Earth, Wind & Fire feat. Someone"))
+        assertFalse(same("Red", "Red Hot Chili Peppers"))
+        assertFalse(same("Tyler, The Creator", "Tyler, The Creator & Someone Else & Third"))
+    }
+
+    @Test fun aSymbolOnlyNameIsComparedAsWritten() {
+        assertTrue(same("!!!", "!!!"))
+        assertFalse(same("!!!", "†††"))
+        assertFalse(same("!!!", "Anyone"))
+    }
+
+    @Test fun aTitleWithNoLettersOrDigitsIsComparedAsWritten() {
+        assertEquals("÷", AlbumCatalog.normalizeAlbumTitle("÷ (Deluxe)"))
+        assertEquals(AlbumCatalog.normalizeAlbumTitle("+"), AlbumCatalog.normalizeAlbumTitle("+ (Deluxe Version)"))
+        assertFalse(AlbumCatalog.normalizeAlbumTitle("÷") == AlbumCatalog.normalizeAlbumTitle("×"))
+        assertEquals("", AlbumCatalog.normalizeAlbumTitle(" "))
+        assertTrue(score("Ed Sheeran", "÷", album("÷ (Deluxe)", "Ed Sheeran")) > 0)
+        assertEquals(0, score("Ed Sheeran", "÷", album("×", "Ed Sheeran")))
+        assertEquals("u", AlbumCatalog.pickCatalogAlbum(listOf(album("÷ (Deluxe)", "Ed Sheeran")), "Ed Sheeran", "÷")?.url)
+        assertFalse(AlbumCatalog.sameAlbumIdentity("Ed Sheeran", "÷", "Ed Sheeran", "×"))
+    }
+
+    @Test fun creditedArtistsAreTheNamesAsWritten() {
+        assertEquals(listOf("Jay-Z", "Kanye West"), AlbumCatalog.creditedArtists("Jay-Z, Kanye West"))
+        assertEquals(listOf("Erykah Badu", "The Alchemist"), AlbumCatalog.creditedArtists("Erykah Badu and The Alchemist"))
+        assertEquals(listOf("Solo"), AlbumCatalog.creditedArtists("Solo"))
+        assertEquals(listOf("A"), AlbumCatalog.creditedArtists("A, a"))
+        assertEquals(emptyList(), AlbumCatalog.creditedArtists(null))
+    }
+
     @Test fun nonLatinTitlesMatchOnTheirOwnLetters() {
         assertTrue(score("ХЛЕБ", "Пушка", album("Пушка", "ХЛЕБ")) > 0)
         assertEquals(0, score("ХЛЕБ", "Пушка", album("Яйца", "ХЛЕБ")))

@@ -56,6 +56,7 @@ object AlbumCatalog {
         RegexOption.IGNORE_CASE,
     )
     private val FORMAT_SUFFIX = Regex("\\s+-\\s+(?:single|ep|lp)\\s*$", RegexOption.IGNORE_CASE)
+    private val WHITESPACE = Regex("\\s+")
     private val LEADING_THE = Regex("^the\\s+")
     private val ARTIST_SEPARATORS = Regex(
         "\\s*(?:,|&|\\band\\b|\\bfeat\\.?|\\bft\\.?|\\bfeaturing|\\bwith|\\bx\\b|/)\\s*",
@@ -64,9 +65,17 @@ object AlbumCatalog {
 
     private fun stripMarks(s: String?): String = nfkd(s.orEmpty()).replace(MARKS, "").lowercase()
 
-    fun normalizeAlbumTitle(title: String?): String =
-        stripMarks(title).replace(EDITION, " ").replace(FORMAT_SUFFIX, "")
-            .replace("&", "and").replace(NOT_LETTER_OR_NUMBER, "")
+    /**
+     * A title for comparing: edition words, format suffix, case, accents and
+     * punctuation aside. A title with no letters or digits ("÷", "+") is
+     * compared as written instead, or it couldn't match itself (#843, desktop
+     * parachord#1595).
+     */
+    fun normalizeAlbumTitle(title: String?): String {
+        val s = stripMarks(title).replace(EDITION, " ").replace(FORMAT_SUFFIX, "")
+        return s.replace("&", "and").replace(NOT_LETTER_OR_NUMBER, "")
+            .ifEmpty { s.trim().replace(WHITESPACE, " ") }
+    }
 
     fun normalizeArtistName(name: String?): String =
         stripMarks(name).replace(LEADING_THE, "").replace("&", "and").replace(NOT_LETTER_OR_NUMBER, "")
@@ -74,6 +83,12 @@ object AlbumCatalog {
     /** The credited artists of a joined credit ("A, B & C", "A feat. B"). */
     private fun splitArtists(name: String?): List<String> =
         name.orEmpty().split(ARTIST_SEPARATORS).map(::normalizeArtistName).filter { it.isNotEmpty() }
+
+    /** [splitArtists] as written, each name once: what a search asks for. One name when the credit isn't joint. */
+    fun creditedArtists(name: String?): List<String> =
+        name.orEmpty().split(ARTIST_SEPARATORS).map { it.trim() }
+            .filter { normalizeArtistName(it).isNotEmpty() }
+            .distinctBy(::normalizeArtistName)
 
     /** Containment counts only when the shorter side is most of the longer one,
      *  so "Red" never matches "Red Hot Chili Peppers". */
@@ -84,9 +99,55 @@ object AlbumCatalog {
         return long.contains(short) && short.length >= long.length * ratio
     }
 
+    /** A name as written, for the boundary checks: case and accents folded, punctuation and spacing kept. */
+    private fun looseName(name: String?): String = stripMarks(name).trim().replace(WHITESPACE, " ")
+
+    /** What can sit between two names in a credit. Not a hyphen: "Blink-182" isn't "Blink" with a guest. */
+    private fun isCreditSeparator(ch: Char): Boolean = ch.isWhitespace() || ch in ",;&/+:|"
+
+    /**
+     * One credit is the other plus a guest: the whole shorter name, at a name
+     * boundary, and most of the longer one ("Tyler, The Creator" in "Tyler, The
+     * Creator & Kali Uchis"). An act whose own name carries a separator isn't
+     * a joint credit to split, so this catches it.
+     */
+    private fun creditContains(one: String, other: String): Boolean {
+        if (one.isEmpty() || other.isEmpty() || one == other) return false
+        val (short, long) = if (one.length <= other.length) one to other else other to one
+        if (short.length >= long.length || short.length < long.length * 0.5) return false
+        return (long.startsWith(short) && isCreditSeparator(long[short.length])) ||
+            (long.endsWith(short) && isCreditSeparator(long[long.length - short.length - 1]))
+    }
+
+    /**
+     * Whether two artist credits name the same act (#843, desktop
+     * parachord#1595). Every source joins a credit its own way (MusicBrainz
+     * "A & B", Amazon and Spotify "A, B"), so the whole strings aren't enough.
+     * - One side a single name: one artist of the other's joint credit matches.
+     * - Both joint: the same names in any order. "A & B" isn't "A & C": sharing
+     *   a member isn't being the same act.
+     * - A credit that is the other plus a guest matches ([creditContains]).
+     * - A name with no letters or digits ("!!!") is compared as written.
+     */
+    fun creditMatches(want: String?, got: String?): Boolean {
+        val wantWritten = looseName(want)
+        val gotWritten = looseName(got)
+        if (wantWritten.isEmpty() || gotWritten.isEmpty()) return false
+        if (wantWritten == gotWritten) return true
+        val w = normalizeArtistName(want)
+        val g = normalizeArtistName(got)
+        if (w.isEmpty() || g.isEmpty()) return false
+        if (closeEnough(w, g, 0.6)) return true
+        if (creditContains(wantWritten, gotWritten)) return true
+        val wantNames = splitArtists(want)
+        val gotNames = splitArtists(got)
+        if (wantNames.size <= 1 || gotNames.size <= 1) return g in wantNames || w in gotNames
+        return wantNames.toSet() == gotNames.toSet()
+    }
+
     /**
      * Whether a catalog album is the one asked for: the title matches (edition
-     * suffixes aside) and so does the artist (one of a joint credit is enough).
+     * suffixes aside) and so does the artist ([creditMatches]).
      * 0 = no match; otherwise higher is closer.
      */
     fun albumMatchScore(targetArtist: String, targetTitle: String, album: Album): Int {
@@ -95,10 +156,7 @@ object AlbumCatalog {
         if (!closeEnough(wantTitle, gotTitle, 0.6)) return 0
         val wantArtist = normalizeArtistName(targetArtist)
         val gotArtist = normalizeArtistName(album.artist)
-        val artistOk = closeEnough(wantArtist, gotArtist, 0.6) ||
-            wantArtist in splitArtists(album.artist) ||
-            gotArtist in splitArtists(targetArtist)
-        if (!artistOk) return 0
+        if (!creditMatches(targetArtist, album.artist)) return 0
         // The same title before edition suffixes were stripped beats an edition:
         // "Dulling the Horns" over "Dulling the Horns (Deluxe)".
         fun bare(s: String?) = stripMarks(s).replace(NOT_LETTER_OR_NUMBER, "")
