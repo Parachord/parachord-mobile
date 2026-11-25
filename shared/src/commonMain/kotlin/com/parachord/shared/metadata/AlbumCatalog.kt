@@ -150,17 +150,20 @@ object AlbumCatalog {
      * suffixes aside) and so does the artist ([creditMatches]).
      * 0 = no match; otherwise higher is closer.
      */
-    fun albumMatchScore(targetArtist: String, targetTitle: String, album: Album): Int {
+    fun albumMatchScore(targetArtist: String, targetTitle: String, album: Album): Int =
+        albumMatchScore(targetArtist, targetTitle, album.name, album.artist)
+
+    private fun albumMatchScore(targetArtist: String, targetTitle: String, name: String?, artist: String?): Int {
         val wantTitle = normalizeAlbumTitle(targetTitle)
-        val gotTitle = normalizeAlbumTitle(album.name)
+        val gotTitle = normalizeAlbumTitle(name)
         if (!closeEnough(wantTitle, gotTitle, 0.6)) return 0
         val wantArtist = normalizeArtistName(targetArtist)
-        val gotArtist = normalizeArtistName(album.artist)
-        if (!creditMatches(targetArtist, album.artist)) return 0
+        val gotArtist = normalizeArtistName(artist)
+        if (!creditMatches(targetArtist, artist)) return 0
         // The same title before edition suffixes were stripped beats an edition:
         // "Dulling the Horns" over "Dulling the Horns (Deluxe)".
         fun bare(s: String?) = stripMarks(s).replace(NOT_LETTER_OR_NUMBER, "")
-        val exactTitle = if (bare(targetTitle) == bare(album.name)) 1 else 0
+        val exactTitle = if (bare(targetTitle) == bare(name)) 1 else 0
         return (if (wantTitle == gotTitle) 2 else 1) + exactTitle + (if (wantArtist == gotArtist) 2 else 1)
     }
 
@@ -173,11 +176,21 @@ object AlbumCatalog {
     }
 
     /** The best match among one resolver's results, or null. */
-    fun pickCatalogAlbum(albums: List<Album>?, targetArtist: String, targetTitle: String): Album? {
-        var best: Album? = null
+    fun pickCatalogAlbum(albums: List<Album>?, targetArtist: String, targetTitle: String): Album? =
+        pickAlbum(albums.orEmpty(), targetArtist, targetTitle, { it.name }, { it.artist })
+
+    /** [pickCatalogAlbum] over a service's own search hits. The first of equals wins. */
+    fun <T> pickAlbum(
+        albums: List<T>,
+        targetArtist: String,
+        targetTitle: String,
+        nameOf: (T) -> String?,
+        artistOf: (T) -> String?,
+    ): T? {
+        var best: T? = null
         var bestScore = 0
-        for (album in albums.orEmpty()) {
-            val score = albumMatchScore(targetArtist, targetTitle, album)
+        for (album in albums) {
+            val score = albumMatchScore(targetArtist, targetTitle, nameOf(album), artistOf(album))
             if (score > bestScore) {
                 best = album
                 bestScore = score

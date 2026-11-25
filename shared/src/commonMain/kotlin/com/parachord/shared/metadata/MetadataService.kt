@@ -634,6 +634,10 @@ class MetadataService constructor(
         }
     }
 
+    /** [cacheKey] for a track list. The marker leaves behind lists saved while Spotify's unchecked first hit could be another album. */
+    private fun albumTracksKey(active: List<MetadataProvider>, artistName: String, albumTitle: String): String =
+        cacheKey(active, artistName, albumTitle, "checked")
+
     /** Cache key: the request plus which providers answered it, so enabling a
      *  provider (e.g. connecting Spotify) isn't hidden behind an older answer. */
     private fun cacheKey(active: List<MetadataProvider>, vararg parts: String): String =
@@ -653,7 +657,7 @@ class MetadataService constructor(
 
     suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? = coroutineScope {
         val active = availableProviders()
-        val cacheKey = cacheKey(active, artistName, albumTitle)
+        val cacheKey = albumTracksKey(active, artistName, albumTitle)
         // MusicBrainz's type for an album it knows wins: Spotify's album_type
         // calls every EP a "single", and filled the badge whenever MusicBrainz
         // had no type or didn't answer.
@@ -733,7 +737,7 @@ class MetadataService constructor(
         var merged: AlbumDetail? = null
         var anyFailed = false
         val active = availableProviders()
-        val cacheKey = cacheKey(active, artistName, albumTitle)
+        val cacheKey = albumTracksKey(active, artistName, albumTitle)
         val knownType = knownReleaseType(albumTitle, artistName)
         fun typed(d: AlbumDetail): AlbumDetail = if (knownType != null) d.copy(releaseType = knownType) else d
         // A cached tracklist is the whole answer: show it, no provider calls.
@@ -764,7 +768,7 @@ class MetadataService constructor(
 
     private suspend fun cachedAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         val cache = albumTracksCache ?: return null
-        return cache.get(cacheKey(availableProviders(), artistName, albumTitle))
+        return cache.get(albumTracksKey(availableProviders(), artistName, albumTitle))
     }
 
     /**
