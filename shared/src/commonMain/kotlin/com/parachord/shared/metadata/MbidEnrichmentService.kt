@@ -238,14 +238,16 @@ class MbidEnrichmentService(
         if (cached != null) {
             // A cached entry is a prior ANSWER (hits and misses only; unreachable
             // is never cached), so a cached miss is a genuine NotFound.
-            return cached.recordingMbid?.let { RecordingMbidLookup.Found(it) }
+            return cached.recordingMbid?.let { RecordingMbidLookup.Found(it, cached.releaseMbid, cached.artistMbid) }
                 ?: RecordingMbidLookup.NotFound
         }
 
         val outcome = lookup(artistName, recordingName, album)
         if (outcome is MbidLookupOutcome.Hit) {
             putCache(key, outcome.result)
-            outcome.result.recordingMbid?.let { return RecordingMbidLookup.Found(it) }
+            outcome.result.recordingMbid?.let {
+                return RecordingMbidLookup.Found(it, outcome.result.releaseMbid, outcome.result.artistMbid)
+            }
         }
 
         // Fallback: the chain is unavailable (an outage) or has no confident
@@ -496,7 +498,15 @@ class MbidEnrichmentService(
  * caller that keeps a negative cache can tell "no match" from "nobody answered".
  */
 sealed class RecordingMbidLookup {
-    data class Found(val mbid: String) : RecordingMbidLookup()
+    /**
+     * [mbid] is the recording; [releaseMbid] and [artistMbid] come with it when
+     * the mapper or acr-lookup answered (an ISRC answer carries only the recording).
+     */
+    data class Found(
+        val mbid: String,
+        val releaseMbid: String? = null,
+        val artistMbid: String? = null,
+    ) : RecordingMbidLookup()
     /** A service answered: genuinely no match. Safe to count as a miss. */
     data object NotFound : RecordingMbidLookup()
     /** Nothing answered. NOT a miss — don't cache it, don't count it against the track. */

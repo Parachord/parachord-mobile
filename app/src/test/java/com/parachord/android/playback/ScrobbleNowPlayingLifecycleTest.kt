@@ -52,6 +52,7 @@ class ScrobbleNowPlayingLifecycleTest {
         mbidEnrichment = mockk<MbidEnrichmentService> {
             coEvery { getCanonicalNames(any(), any()) } returns null
             coEvery { getRecordingMbid(any(), any(), any()) } returns null
+            coEvery { lookupRecordingMbid(any(), any(), any(), any()) } returns com.parachord.shared.metadata.RecordingMbidLookup.NotFound
         },
     )
 

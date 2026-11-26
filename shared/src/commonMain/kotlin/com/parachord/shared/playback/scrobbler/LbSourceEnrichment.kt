@@ -37,6 +37,26 @@ private val MBID_PATTERN =
 
 private fun String?.asMbid(): String? = this?.takeIf { MBID_PATTERN.matches(it) }
 
+/**
+ * [track] with the MBID identity a scrobble-time lookup ([found]) answered,
+ * filling only what's missing (#853, desktop `_ensureMbidIdentity`): an id
+ * already on the track always wins, and a value that isn't an MBID is never
+ * taken. The release and artist are taken only with their recording: when the
+ * track already has another recording, the lookup (by names) found a
+ * different one, and its release isn't this recording's. Desktop fills them
+ * whatever the recording.
+ */
+fun withLookedUpMbids(track: Track, found: com.parachord.shared.metadata.RecordingMbidLookup.Found): Track {
+    val recording = found.mbid.asMbid() ?: return track
+    val own = track.recordingMbid.asMbid()
+    if (own != null && !own.equals(recording, ignoreCase = true)) return track
+    return track.copy(
+        recordingMbid = own ?: recording,
+        releaseMbid = track.releaseMbid.asMbid() ?: found.releaseMbid.asMbid(),
+        artistMbid = track.artistMbid.asMbid() ?: found.artistMbid.asMbid(),
+    )
+}
+
 private fun String?.isHttpUrl(): Boolean =
     this != null && (startsWith("http://", ignoreCase = true) || startsWith("https://", ignoreCase = true))
 
