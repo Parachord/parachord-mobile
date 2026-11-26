@@ -29,6 +29,9 @@ class TrackResolverCacheClearResolverTest {
 
     private fun cache(): TrackResolverCache {
         val settings = mockk<SettingsStore>(relaxed = true)
+        // The #850 clean-up isn't what these test; its first run made the load
+        // outlast awaitLoaded's 3 s on a slow CI runner.
+        io.mockk.coEvery { settings.isWrongSongPurgeDone() } returns true
         every { settings.getResolverOrderFlow() } returns flowOf(emptyList())
         return TrackResolverCache(
             resolverManager = resolverManager,
