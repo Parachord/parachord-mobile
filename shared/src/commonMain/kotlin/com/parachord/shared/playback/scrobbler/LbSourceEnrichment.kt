@@ -43,8 +43,8 @@ private fun String?.asMbid(): String? = this?.takeIf { MBID_PATTERN.matches(it) 
  * already on the track always wins, and a value that isn't an MBID is never
  * taken. The release and artist are taken only with their recording: when the
  * track already has another recording, the lookup (by names) found a
- * different one, and its release isn't this recording's. Desktop fills them
- * whatever the recording.
+ * different one, and its release isn't this recording's (desktop's rule too,
+ * parachord#1670).
  */
 fun withLookedUpMbids(track: Track, found: com.parachord.shared.metadata.RecordingMbidLookup.Found): Track {
     val recording = found.mbid.asMbid() ?: return track
