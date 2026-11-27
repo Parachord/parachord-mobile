@@ -41,7 +41,8 @@ class PlaylistImportManager(
                 PlaylistEntity(
                     id = playlistId,
                     name = parsed.title,
-                    artworkUrl = parsed.tracks.firstOrNull()?.artworkUrl,
+                    // Its own cover, or none and the mosaic is built: never a track's (#852).
+                    artworkUrl = com.parachord.shared.playlist.XspfParser.playlistImage(content),
                     trackCount = parsed.tracks.size,
                 ),
                 parsed.tracks,

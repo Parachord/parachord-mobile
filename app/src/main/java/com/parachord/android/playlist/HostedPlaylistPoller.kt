@@ -158,6 +158,20 @@ class HostedPlaylistPoller constructor(
         // service's cache-by-URL check forces a fresh build, then
         // regenerate. `enrichPlaylistArt` rewrites the mosaic file at
         // `playlist_mosaics/{id}.jpg` and stores the new file:// URL.
+        // The document's cover, or the playlist's own it already had, stays (#852).
+        val cover = com.parachord.shared.metadata.PlaylistCovers.coverAfterHostedUpdate(
+            playlist.artworkUrl,
+            com.parachord.shared.playlist.XspfParser.playlistImage(content),
+            trackRows.map { it.trackArtworkUrl },
+        )
+        if (cover != null) {
+            val old = playlist.artworkUrl
+            if (cover != old) {
+                if (old == null) playlistDao.updateArtworkById(playlist.id, cover)
+                else playlistDao.replaceArtworkById(playlist.id, expected = old, artworkUrl = cover)
+            }
+            return@withContext true
+        }
         playlistDao.clearArtworkById(playlist.id)
         try {
             // Pass the first 8 chars of the content hash as the cache-bust

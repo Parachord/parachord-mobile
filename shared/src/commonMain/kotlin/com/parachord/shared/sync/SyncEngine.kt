@@ -2766,6 +2766,7 @@ class SyncEngine constructor(
                         updated++
                     }
                     else -> {
+                        refreshSourceCover(localPlaylist, remote.entity.artworkUrl)
                         syncSourceDao.insert(existingSource.copy(syncedAt = currentTimeMillis()))
                         unchanged++
                     }
@@ -3227,6 +3228,7 @@ class SyncEngine constructor(
                         updated++
                     }
                     else -> {
+                        if (ownPullSource) refreshSourceCover(localPlaylist, remote.entity.artworkUrl)
                         syncSourceDao.insert(existingSource.copy(syncedAt = currentTimeMillis()))
                         unchanged++
                     }
@@ -4732,10 +4734,22 @@ class SyncEngine constructor(
      *  - the remote URL when there's no existing artwork
      *  - the existing remote URL when both are remote (no-op churn)
      */
-    private fun preserveLocalMosaic(existing: String?, remote: String?): String? {
-        // `file:/…` (Android) or `file:///…` (iOS).
-        if (com.parachord.shared.metadata.PlaylistMosaicPaths.isLocalFile(existing)) return existing
-        return remote ?: existing
+    private fun preserveLocalMosaic(existing: String?, remote: String?): String? =
+        com.parachord.shared.metadata.PlaylistCovers.coverAfterPull(existing, remote)
+
+    /**
+     * The source's cover when it changed while the tracks didn't (#852): the
+     * unchanged-snapshot branches skip the pull, so a new cover, or a cover
+     * kept as a mosaic before #852, never landed. Desktop's sync doesn't skip
+     * a playlist whose reported cover differs either.
+     */
+    private suspend fun refreshSourceCover(local: Playlist, remoteArt: String?) {
+        val next = preserveLocalMosaic(local.artworkUrl, remoteArt)
+        if (next == local.artworkUrl) return
+        val existing = local.artworkUrl
+        // Only over the art seen here, so a cover set meanwhile is kept.
+        if (existing == null) next?.let { playlistDao.updateArtworkById(local.id, it) }
+        else playlistDao.replaceArtworkById(local.id, expected = existing, artworkUrl = next)
     }
 
     /**

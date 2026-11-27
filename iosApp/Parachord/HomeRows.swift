@@ -152,7 +152,8 @@ struct HomePlaylistsRow: View {
                             onPlay: { onPlay(card) },
                             width: cardWidth
                         ) { side in
-                            pcCover(card.imageUrl, seed: card.name, size: side, radius: 0)
+                            pcCover(card.imageUrl, seed: card.name, size: side, radius: 0,
+                                    fallback: IosContainer.companion.shared.playlistMosaicFallbackUrl(playlistId: card.id))
                         }
                         .contextMenu { menu(card) }
                     }

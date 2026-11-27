@@ -2556,6 +2556,17 @@ class IosContainer private constructor() {
      * readers that may run before the launch repair, such as a cover drawn
      * at startup or CarPlay.
      */
+    /**
+     * The mosaic of [playlistId]'s tracks kept beside a cover of its own, for
+     * when that cover fails to load (#852), as a `file://` URL; null when
+     * there's none (`ImageEnrichmentService.refreshFallbackMosaic`).
+     */
+    fun playlistMosaicFallbackUrl(playlistId: String): String? {
+        val dir = mosaicComposer.mosaicDir() ?: return null
+        val path = "$dir/${com.parachord.shared.metadata.PlaylistCovers.mosaicFileName(playlistId)}"
+        return if (mosaicComposer.fileExists(path)) "file://$path" else null
+    }
+
     fun playlistArtworkUrl(stored: String): String =
         com.parachord.shared.metadata.PlaylistMosaicPaths.resolveForRead(
             stored, mosaicComposer.mosaicDir(), mosaicComposer::fileExists,

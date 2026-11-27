@@ -138,6 +138,31 @@ class MosaicContainerMoveTest {
 
     // ── The mosaic follows its tracks ──────────────────────────────────────
 
+    /** #852: a playlist's own cover wins; its mosaic is kept beside it on disk. */
+    @Test
+    fun `a playlist's own cover is kept and its mosaic is built beside it`() = runBlocking {
+        val s = Setup(onDisk = emptySet(), currentDir = newDir)
+        s.insert("spotify-own", "https://i.scdn.co/image/own", twoCovers)
+        s.service.regenerateAllPlaylistMosaics()
+        assertEquals("https://i.scdn.co/image/own", s.art("spotify-own"))
+        assertEquals(listOf("spotify-own"), s.composed)
+        // The file is there now: the next launch composes nothing.
+        s.service.regenerateAllPlaylistMosaics()
+        assertEquals(1, s.composed.size)
+        // A track change rebuilds the mosaic, never the cover.
+        s.service.refreshPlaylistMosaic("spotify-own")
+        assertEquals(2, s.composed.size)
+        assertEquals("https://i.scdn.co/image/own", s.art("spotify-own"))
+    }
+
+    @Test
+    fun `a track's cover standing in for the playlist's is replaced by the mosaic`() = runBlocking {
+        val s = Setup(onDisk = emptySet(), currentDir = newDir)
+        s.insert("imported-xspf-1", twoCovers[0], twoCovers)
+        s.service.regenerateAllPlaylistMosaics()
+        assertEquals("file://$newDir/imported-xspf-1.jpg?v=$sig", s.art("imported-xspf-1"))
+    }
+
     @Test
     fun `a mosaic built before covers were fingerprinted is rebuilt once`() = runBlocking {
         val s = Setup(onDisk = setOf("$newDir/a.jpg"), currentDir = newDir)
