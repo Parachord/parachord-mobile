@@ -81,6 +81,21 @@ class WrongCoverLookupTest {
     }
 
     @Test
+    fun `a close title is another album's cover`() = runBlocking {
+        val sequel = AlbumSearchResult(title = "Greatest Hits II", artist = "Queen", artworkUrl = "https://example.com/ii.jpg")
+        val sequelTrack = TrackSearchResult(title = "Under Pressure", artist = "Queen", album = "Greatest Hits II", artworkUrl = "https://example.com/ii.jpg", provider = "fake")
+        assertNull(Setup(Search(listOf(sequelTrack), listOf(sequel))).service.lookupAlbumArt("Greatest Hits", "Queen"))
+    }
+
+    @Test
+    fun `the title track on another album isn't the album's cover, a single with no album is`() = runBlocking {
+        val onHits = TrackSearchResult(title = "Thriller", artist = "Michael Jackson", album = "Greatest Hits", artworkUrl = "https://example.com/hits.jpg", provider = "fake")
+        assertNull(Setup(Search(listOf(onHits))).service.lookupAlbumArt("Thriller", "Michael Jackson"))
+        val single = TrackSearchResult(title = "Honey", artist = "Robyn", album = null, artworkUrl = "https://example.com/honey.jpg", provider = "bandcamp")
+        assertEquals("https://example.com/honey.jpg", Setup(Search(listOf(onHits, single))).service.lookupAlbumArt("Honey", "Robyn"))
+    }
+
+    @Test
     fun `only local files' looked-up covers are cleared`() = runBlocking {
         val s = Setup(Search(emptyList()))
         s.trackDao.insert(Track(id = "a", title = "A", artist = "X", resolver = "localfiles", artworkUrl = sleeve))
