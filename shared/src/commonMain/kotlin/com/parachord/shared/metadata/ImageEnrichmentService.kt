@@ -224,12 +224,10 @@ class ImageEnrichmentService(
                         "$albumTitle $artistName",
                         limit = 5,
                     )
-                    // Only this album's cover: a search's first result can be
-                    // any album sharing a word.
-                    searchResults
-                        .filter { AlbumCatalog.isSameAlbum(artistName, albumTitle, it.artist, it.title) }
-                        .sortedByDescending { it.title.equals(albumTitle, ignoreCase = true) && it.artist.equals(artistName, ignoreCase = true) }
-                        .mapNotNull { it.artworkUrl }.distinct()
+                    // Only this album's cover ([AlbumCover]): a search's first
+                    // result can be any album sharing a word, and a close title
+                    // ("Greatest Hits II") is another album's sleeve.
+                    AlbumCover.albumCovers(searchResults, artistName, albumTitle)
                         .firstOrNull { usableArt(it, exclude) }?.let { return@async it }
 
                     // Last resort: track-level search. Some obscure
@@ -246,11 +244,11 @@ class ImageEnrichmentService(
                         "$artistName $albumTitle",
                         limit = 5,
                     )
-                    // A track off this album, else the single it's named after.
-                    (
-                        trackResults.filter { AlbumCatalog.isSameAlbum(artistName, albumTitle, it.artist, it.album) }
-                            .mapNotNull { it.artworkUrl } + matchedTrackArt(trackResults, albumTitle, artistName)
-                        ).distinct().firstOrNull { usableArt(it, exclude) }
+                    // A track off this album, or the single it is: a track
+                    // named like the album stands in only when it names no
+                    // album ("Thriller" on "Greatest Hits" isn't Thriller's).
+                    AlbumCover.trackCovers(trackResults, artistName, albumTitle)
+                        .firstOrNull { usableArt(it, exclude) }
                 } catch (e: kotlinx.coroutines.CancellationException) {
                     throw e
                 } catch (_: Exception) {

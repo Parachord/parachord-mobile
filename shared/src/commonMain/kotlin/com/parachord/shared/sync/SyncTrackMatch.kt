@@ -63,14 +63,9 @@ object SyncTrackMatch {
      * An album that isn't one: nothing, "Single", "Unknown Album", or the name
      * of the row's own source (a plugin with no album naming its service).
      */
-    fun isPlaceholderAlbum(track: Track): Boolean {
-        val name = track.album?.trim()?.lowercase().orEmpty()
-        if (name.isEmpty() || name == "single") return true
-        if (albumKey(track.album) == UNKNOWN_ALBUM) return true
-        val compact = name.filter { it in 'a'..'z' || it in '0'..'9' }
-        if (compact.isEmpty() || compact != name.filter { it.isLetterOrDigit() }) return false
-        return track.resolver?.lowercase() == compact
-    }
+    fun isPlaceholderAlbum(track: Track): Boolean =
+        albumKey(track.album) == UNKNOWN_ALBUM ||
+            com.parachord.shared.metadata.AlbumCover.isPlaceholderAlbum(track.album, listOf(track.resolver))
 
     /** An album without the store's suffix: Apple Music's "X - Single" / "X - EP" is Spotify's "X". */
     fun albumKey(album: String?): String =
