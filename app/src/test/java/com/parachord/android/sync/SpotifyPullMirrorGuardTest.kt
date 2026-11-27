@@ -120,6 +120,52 @@ class SpotifyPullMirrorGuardTest {
         assertEquals("listenbrainz", sourceDao.selectForLocal(id)?.providerId)
     }
 
+    /** #852: the source's own cover comes back over a mosaic, and stock art gives the mosaic back. */
+    @Test
+    fun `a Spotify playlist's own cover replaces the mosaic made from it`() = runBlocking {
+        var image = "https://i.scdn.co/image/own"
+        val mock = MockEngine { req ->
+            val path = req.url.encodedPath
+            val body = when {
+                req.method != HttpMethod.Get -> """{"snapshot_id":"s"}"""
+                path == "/v1/me" -> """{"id":"me","display_name":"Me"}"""
+                path == "/v1/me/playlists" ->
+                    """{"items":[{"id":"sp1","name":"Mine","owner":{"id":"me"},"collaborative":false,""" +
+                        """"images":[{"url":"$image","width":640,"height":640}],""" +
+                        """"snapshot_id":"snap-1","tracks":{"total":1}}],"total":1,"offset":0,"limit":50}"""
+                path.startsWith("/v1/playlists/sp1/tracks") ->
+                    """{"items":[{"added_at":"2026-01-01T00:00:00Z","track":{"id":"t1","name":"Song",""" +
+                        """"artists":[{"id":"a1","name":"Artist"}],"album":{"id":"al1","name":"Al","images":[]},""" +
+                        """"duration_ms":1000,"uri":"spotify:track:t1"}}],"total":1,"offset":0,"limit":100}"""
+                else -> """{"items":[],"total":0,"offset":0,"limit":100}"""
+            }
+            respond(body, HttpStatusCode.OK, headersOf(HttpHeaders.ContentType, "application/json"))
+        }
+        val spotify = SpotifySyncProvider(SpotifyClient(HttpClient(mock) { install(ContentNegotiation) { json(json) } }, auth))
+        val driver = JdbcSqliteDriver(JdbcSqliteDriver.IN_MEMORY).also { ParachordDb.Schema.create(it) }
+        val db = ParachordDb(driver)
+        val playlistDao = PlaylistDao(db)
+        val engine = SyncEngine(
+            db = db, driver = driver, trackDao = TrackDao(db, driver), albumDao = AlbumDao(db), artistDao = ArtistDao(db),
+            playlistDao = playlistDao, playlistTrackDao = PlaylistTrackDao(db), syncSourceDao = SyncSourceDao(db),
+            syncPlaylistLinkDao = SyncPlaylistLinkDao(db), syncPlaylistSourceDao = SyncPlaylistSourceDao(db),
+            syncPlaylistBaselineDao = SyncPlaylistBaselineDao(db), syncPlaylistNwayDao = SyncPlaylistNwayDao(db),
+            trackProviderIdCacheDao = TrackProviderIdCacheDao(db), settingsStore = Settings(),
+            providers = listOf(spotify), tombstones = TrackTombstoneService(InMemoryTombstoneStore()),
+        )
+        engine.syncAll()
+        val row = playlistDao.getAllSync().single { it.name == "Mine" }
+        // The mosaic that used to be built over the cover; the snapshot is unchanged.
+        playlistDao.replaceArtworkById(row.id, expected = image, artworkUrl = "file:/data/playlist_mosaics/${row.id}.jpg?v=1")
+        engine.syncAll()
+        assertEquals(image, playlistDao.getById(row.id)?.artworkUrl)
+
+        // The cover removed on Spotify: its generated stock art, and the mosaic comes back.
+        image = "https://mosaic.scdn.co/640/stock"
+        engine.syncAll()
+        assertEquals(null, playlistDao.getById(row.id)?.artworkUrl)
+    }
+
     private class Settings : SyncSettingsProvider {
         override suspend fun getSyncSettings() = SyncSettings(
             enabled = true,

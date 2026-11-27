@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.components.playlistMosaicFallback
 import com.parachord.shared.playlist.PlaylistOrigin
 import com.parachord.android.ui.components.ParachordBadge
 import com.parachord.android.ui.theme.serviceColor
@@ -314,6 +315,7 @@ fun PlaylistDetailScreen(
                                 size = 160.dp,
                                 cornerRadius = 8.dp,
                                 elevation = 4.dp,
+                                fallbackUrl = playlist?.id?.let { playlistMosaicFallback(it) },
                             )
                         } else {
                             PlaylistMosaic(

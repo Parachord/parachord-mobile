@@ -98,7 +98,7 @@ func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: Str
 /// then looked up again (`BrokenArtRetry`, desktop parachord#1101) instead of
 /// leaving the placeholder up for as long as the dead URL stays stored.
 func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, resolving: Bool = false,
-             artist: String? = nil, album: String? = nil) -> some View {
+             artist: String? = nil, album: String? = nil, fallback: String? = nil) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
     // While the track is still resolving (no art yet) show the shimmer skeleton
@@ -108,7 +108,8 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, reso
     let url = url.map { $0.hasPrefix("file://") ? IosContainer.companion.shared.playlistArtworkUrl(stored: $0) : $0 }
     let content = ZStack {
         if let url, let u = URL(string: url) {
-            PCCachedImage(url: u, retryArtist: artist, retryAlbum: album) { img in
+            PCCachedImage(url: u, retryArtist: artist, retryAlbum: album,
+                          fallback: fallback.flatMap { URL(string: $0) }) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 if resolving { PCSkeletonBox(radius: radius) } else { PCArtwork(name: seed, radius: radius) }
@@ -220,6 +221,8 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     private let givenUrl: URL?
     private let retryArtist: String?
     private let retryAlbum: String?
+    /// Shown when `givenUrl` fails to load: a playlist's mosaic behind its own cover (#852).
+    private let fallback: URL?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
     @State private var loaded: UIImage?
@@ -234,12 +237,13 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     /// `retryArtist` + `retryAlbum`: when the cover fails to load, ask
     /// `BrokenArtRetry` for a working one (once per album per session; it also
     /// patches every stored copy of the dead URL).
-    init(url: URL?, retryArtist: String? = nil, retryAlbum: String? = nil,
+    init(url: URL?, retryArtist: String? = nil, retryAlbum: String? = nil, fallback: URL? = nil,
          @ViewBuilder content: @escaping (Image) -> Content,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.givenUrl = url
         self.retryArtist = retryArtist
         self.retryAlbum = retryAlbum
+        self.fallback = fallback
         self.content = content
         self.placeholder = placeholder
         // Seed SYNCHRONOUSLY from the cache (memory, then disk) at construction.
@@ -301,6 +305,10 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
             data = (try? await URLSession.shared.data(from: url))?.0
         }
         guard let data, let ui = UIImage(data: data) else {
+            if replacement == nil, let fallback, fallback != url {
+                replacement = fallback   // re-runs `load` via `.task(id:)`
+                return
+            }
             failed = true
             await retryDeadCover(url)
             return

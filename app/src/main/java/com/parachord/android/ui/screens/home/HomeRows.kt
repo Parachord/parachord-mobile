@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.home
 
+import com.parachord.android.ui.components.playlistMosaicFallback
 import com.parachord.android.ui.components.ReasonBadge
 import com.parachord.android.ui.components.ReasonMark
 import androidx.compose.foundation.background
@@ -217,6 +218,7 @@ private fun PlaylistCard(
             elevation = 0.dp,
             placeholderName = playlist.name,
             contentDescription = null,
+            fallbackUrl = playlistMosaicFallback(playlist.id),
         )
     }
 }

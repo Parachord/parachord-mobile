@@ -508,10 +508,11 @@ class ImageEnrichmentService(
      * [refreshPlaylistMosaic] for the rule. Run at app start (Android
      * `ParachordApplication.onCreate`, iOS `ParachordApp`).
      *
-     * Mosaic = "the sum of what's actually IN the playlist". Even when a
-     * playlist is synced from a remote provider, we want the mosaic, not the
-     * provider's auto-generated stock cover (Spotify's `mosaic.scdn.co/...`,
-     * Apple Music's `AM.PDCXS11.jpg`).
+     * Mosaic = "the sum of what's actually IN the playlist". A playlist's own
+     * cover ([PlaylistCovers.isOwnCover]) wins over it, and the mosaic file is
+     * kept beside it as the fallback when the cover fails to load (#852).
+     * Stock provider art (Spotify's `mosaic.scdn.co/...`, Apple Music's
+     * `AM.PDCXS11.jpg`) isn't a cover of its own and is replaced.
      *
      * Cheap when nothing changed: the check reads the database only, and a
      * mosaic is rebuilt (network + composite) only when it is missing,
@@ -542,19 +543,24 @@ class ImageEnrichmentService(
      *    current covers ([PlaylistMosaicPaths.covers]): rebuild it. This is
      *    how a mosaic follows track adds, removes, reorders and new covers.
      *  - Single-cover art equal to the playlist's only cover: keep.
+     *  - The playlist's own cover ([PlaylistCovers.isOwnCover]): keep, and
+     *    keep its fallback mosaic file current ([refreshFallbackMosaic]).
      * A rebuild is stored only while the row still holds the art seen here.
      * Returns whether a rebuild ran.
      */
     suspend fun refreshPlaylistMosaic(playlistId: String): Boolean {
         val playlist = playlistDao.getById(playlistId) ?: return false
-        return refresh(playlistId, playlist.artworkUrl)
+        return refresh(playlistId, playlist.artworkUrl, tracksChanged = true)
     }
 
-    private suspend fun refresh(playlistId: String, storedArt: String?): Boolean {
+    private suspend fun refresh(playlistId: String, storedArt: String?, tracksChanged: Boolean = false): Boolean {
         var art = storedArt?.takeIf { it.isNotBlank() }
-        val covers = PlaylistMosaicPaths.covers(
-            playlistTrackDao.getByPlaylistIdSync(playlistId).map { it.trackArtworkUrl },
-        )
+        val trackCovers = playlistTrackDao.getByPlaylistIdSync(playlistId).map { it.trackArtworkUrl }
+        val covers = PlaylistMosaicPaths.covers(trackCovers)
+        if (PlaylistCovers.isOwnCover(art, trackCovers)) {
+            refreshFallbackMosaic(playlistId, covers, tracksChanged)
+            return false
+        }
         val exists = fileExists
         if (art != null && PlaylistMosaicPaths.isLocalFile(art) && exists != null) {
             when (val r = PlaylistMosaicPaths.repair(art, mosaicDir?.invoke(), exists)) {
@@ -579,6 +585,32 @@ class ImageEnrichmentService(
         }
         if (upToDate) return false
         return rebuild(playlistId, art, covers)
+    }
+
+    /**
+     * The mosaic file beside a playlist's own cover, which the cover views
+     * show when the cover fails to load (Android `playlistMosaicFallback`, iOS
+     * `IosContainer.playlistMosaicFallbackUrl`). Composed when the tracks
+     * change or the file is missing, never stored on the row. Fewer than two
+     * covers make no mosaic, and the placeholder is the fallback.
+     */
+    private suspend fun refreshFallbackMosaic(playlistId: String, covers: List<String>, tracksChanged: Boolean) {
+        if (covers.size < 2) return
+        val dir = mosaicDir?.invoke()
+        val exists = fileExists
+        if (!tracksChanged && dir != null && exists != null &&
+            exists("$dir/${PlaylistCovers.mosaicFileName(playlistId)}")
+        ) return
+        regenPermits.withPermit {
+            val padded = when (covers.size) {
+                2 -> listOf(covers[0], covers[1], covers[1], covers[0])
+                3 -> covers + listOf(covers[0])
+                else -> covers.take(4)
+            }
+            try { composeMosaic(playlistId, padded) } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
+            }
+        }
     }
 
     private suspend fun rebuild(playlistId: String, replacing: String?, covers: List<String>): Boolean {

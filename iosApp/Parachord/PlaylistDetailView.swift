@@ -609,7 +609,8 @@ struct PlaylistsScreen: View {
 
     private func row(_ p: Playlist) -> some View {
         HStack(spacing: 12) {
-            pcCover(p.artworkUrl, seed: p.name, size: 52, radius: 8)
+            pcCover(p.artworkUrl, seed: p.name, size: 52, radius: 8,
+                    fallback: IosContainer.companion.shared.playlistMosaicFallbackUrl(playlistId: p.id))
             VStack(alignment: .leading, spacing: 2) {
                 Text(p.name).font(.system(size: 15, weight: .medium)).foregroundStyle(PC.fg1).lineLimit(1)
                 Text(subtitle(p)).font(.system(size: 13)).foregroundStyle(PC.fg2).lineLimit(1)
@@ -1055,7 +1056,8 @@ struct SavedPlaylistDetailView: View {
 
     private var header: some View {
         VStack(spacing: 12) {
-            pcCover(model.playlist?.artworkUrl, seed: model.name, size: 160, radius: 10)
+            pcCover(model.playlist?.artworkUrl, seed: model.name, size: 160, radius: 10,
+                    fallback: model.playlist.flatMap { IosContainer.companion.shared.playlistMosaicFallbackUrl(playlistId: $0.id) })
                 .shadow(color: .black.opacity(0.12), radius: 10, y: 5)
             Text(model.name).font(.system(size: 18, weight: .semibold)).foregroundStyle(PC.fg1)
                 .multilineTextAlignment(.center)
