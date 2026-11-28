@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    The Android Automotive bundle (`bundleAutomotiveRelease`), for Play's
+    "Android Automotive OS only" track. Merged over src/main's manifest; the
+    phone bundle never sees it. Google's rules for that track:
+    - android.hardware.type.automotive must be required or unset (main marks
+      it optional so phones install the same code);
+    - an Android Automotive media app declares `com.android.automotive`, and
+      not Android Auto's `com.google.android.gms.car.application`;
+    - no hardware a car may lack may be required (screen orientation, Wi-Fi,
+      camera).
+    See developer.android.com/training/cars/distribute and
+    /training/cars/media/automotive-os.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
+
+    <uses-feature
+        android:name="android.hardware.type.automotive"
+        android:required="true"
+        tools:replace="android:required" />
+
+    <uses-feature android:name="android.hardware.screen.portrait" android:required="false" />
+    <uses-feature android:name="android.hardware.screen.landscape" android:required="false" />
+    <uses-feature android:name="android.hardware.wifi" android:required="false" />
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
+
+    <application>
+        <meta-data
+            android:name="com.android.automotive"
+            android:resource="@xml/automotive_app_desc" />
+
+        <meta-data
+            android:name="com.google.android.gms.car.application"
+            tools:node="remove" />
+    </application>
+</manifest>

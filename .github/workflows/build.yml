@@ -61,7 +61,11 @@ jobs:
           echo "CI_KEYSTORE_PASSWORD=${{ secrets.CI_KEYSTORE_PASSWORD }}" >> $GITHUB_ENV
 
       - name: Build release APK and AAB
-        run: ./gradlew assembleRelease bundleRelease
+        # bundleAutomotiveRelease: the car-only bundle for Play's Android
+        # Automotive OS track (app/src/automotiveRelease). It's attached to the
+        # GitHub Release and uploaded to that track by hand; publishBundle
+        # below leaves it out (playConfigs in app/build.gradle.kts).
+        run: ./gradlew assembleRelease bundleRelease bundleAutomotiveRelease
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
@@ -77,6 +81,13 @@ jobs:
           path: app/build/outputs/bundle/release/*.aab
           retention-days: 14
 
+      - name: Upload Automotive AAB artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: parachord-automotive-aab
+          path: app/build/outputs/bundle/automotiveRelease/*.aab
+          retention-days: 14
+
       # ── Tag-triggered GitHub Release (mirrors desktop's pattern) ────
       # When pushed tag matches v* we publish the signed APK + AAB to a
       # GitHub Release so external testers can download a persistent
@@ -89,6 +100,7 @@ jobs:
           TAG="${GITHUB_REF##refs/tags/}"
           cp app/build/outputs/apk/release/*.apk "release-artifacts/parachord-${TAG}.apk"
           cp app/build/outputs/bundle/release/*.aab "release-artifacts/parachord-${TAG}.aab"
+          cp app/build/outputs/bundle/automotiveRelease/*.aab "release-artifacts/parachord-${TAG}-automotive.aab"
           ls -la release-artifacts
 
       - name: Publish GitHub Release
