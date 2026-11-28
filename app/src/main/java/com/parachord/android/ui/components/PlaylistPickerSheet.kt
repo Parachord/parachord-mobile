@@ -201,6 +201,7 @@ fun PlaylistPickerSheet(
                             size = 40.dp,
                             cornerRadius = 4.dp,
                             elevation = 0.dp,
+                            fallbackUrl = playlistMosaicFallback(playlist.id),
                         )
                         Spacer(modifier = Modifier.width(12.dp))
                         Column(modifier = Modifier.weight(1f)) {

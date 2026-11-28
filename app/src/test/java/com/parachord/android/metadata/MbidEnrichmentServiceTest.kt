@@ -236,7 +236,20 @@ class MbidEnrichmentServiceTest {
 
         val r = h.service.lookupRecordingMbid("Radiohead", "Creep", album = "Pablo Honey")
 
-        assertEquals(RecordingMbidLookup.Found("70595637-9310-45f2-a266-58f8de4874a7"), r)
+        assertEquals("70595637-9310-45f2-a266-58f8de4874a7", (r as RecordingMbidLookup.Found).mbid)
+    }
+
+    @Test
+    fun aMapperHitCarriesItsReleaseAndArtist_cachedOrNot() = runTest {
+        val h = harness()
+        coEvery { h.client.resolveRecordingMbid("Radiohead", "Creep", null) } returns hit("70595637-9310-45f2-a266-58f8de4874a7")
+        val expected = RecordingMbidLookup.Found(
+            "70595637-9310-45f2-a266-58f8de4874a7",
+            releaseMbid = "22222222-2222-2222-2222-222222222222",
+            artistMbid = "11111111-1111-1111-1111-111111111111",
+        )
+        assertEquals(expected, h.service.lookupRecordingMbid("Radiohead", "Creep"))
+        assertEquals(expected, h.service.lookupRecordingMbid("Radiohead", "Creep"))
     }
 
     @Test

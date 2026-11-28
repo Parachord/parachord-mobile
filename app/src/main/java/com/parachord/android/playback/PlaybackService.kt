@@ -1305,7 +1305,15 @@ class PlaybackService : MediaLibraryService() {
     private val foregroundKeeper = object : Player.Listener {
         override fun onPlaybackStateChanged(playbackState: Int) {
             if (playbackState == Player.STATE_ENDED) keepForegroundAcrossLocalTrackEnd()
+            if (playbackState == Player.STATE_BUFFERING || playbackState == Player.STATE_READY) {
+                playbackController.onLocalPlayerTookItem()
+            }
+            // Its length is known now; the track's metadata went out before
+            // that, and the car kept 0:00.
+            if (playbackState == Player.STATE_READY) forwardingPlayer?.publishMetadataRefresh()
         }
+
+        override fun onPlayerError(error: PlaybackException) = playbackController.onLocalPlayerTookItem()
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
             if (isPlaying) handForegroundBackIfExoPlayerPlaysTrack()
@@ -1934,7 +1942,14 @@ class PlaybackService : MediaLibraryService() {
                     else -> Player.STATE_READY
                 }
             }
-            return super.getPlaybackState()
+            val local = super.getPlaybackState()
+            // Only what this getter's readers see (the platform session: Android
+            // Auto, the lock screen, headsets). Media3 controllers, Parachord's
+            // own among them, get the player's ENDED and IDLE as events, and
+            // the queue advances on them.
+            if (local != Player.STATE_ENDED && local != Player.STATE_IDLE) return local
+            if (playerErrorOverride != null || super.getPlayerError() != null) return local
+            return sessionStateBetweenTracks(local, playbackController.isBetweenTracks(ended = local == Player.STATE_ENDED))
         }
 
         override fun getCurrentPosition(): Long {

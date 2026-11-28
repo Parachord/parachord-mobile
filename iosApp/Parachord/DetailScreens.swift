@@ -23,6 +23,11 @@ extension Collection {
 
 /// Hashable album reference for `navigationDestination(item:)` (context-menu
 /// "Go to Album").
+/// Whether an artist has a page: not "Various Artists" (#840, shared rule).
+func pcHasArtistPage(_ name: String?, mbid: String? = nil) -> Bool {
+    ArtistPageKt.hasArtistPage(name: name, mbid: mbid)
+}
+
 struct PCAlbumRef: Hashable { let title: String; let artist: String }
 
 /// An artist to open, with its MusicBrainz id when the opener has one (#478):
@@ -41,14 +46,17 @@ extension AlbumSearchResult {
 
 // Non-private so the shared context menus (Interactions.swift) can build queue
 // entities from search/album/top-track results. (#204)
-func pcTrack(from t: TrackSearchResult) -> Track {
+/// [albumArtist]: the album's artist when [t] is from that album's list; kept
+/// on the track only when the track's own artist isn't it (a compilation, #839).
+func pcTrack(from t: TrackSearchResult, albumArtist: String? = nil) -> Track {
     Track(
         id: "\(t.title)|\(t.artist)", title: t.title, artist: t.artist,
         album: t.album, albumId: nil, duration: t.duration, artworkUrl: t.artworkUrl,
         sourceType: nil, sourceUrl: nil, addedAt: 0,
         resolver: nil, spotifyUri: nil, soundcloudId: nil,
         spotifyId: t.spotifyId, appleMusicId: nil, isrc: nil, recordingMbid: t.mbid,
-        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
+        artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true,
+        albumArtist: AlbumArtistForTrackKt.trackAlbumArtist(trackArtist: t.artist, albumArtist: albumArtist)
     )
 }
 
@@ -90,7 +98,7 @@ func pcTrackArt(_ artworkUrl: String?, artist: String, title: String, album: Str
 /// then looked up again (`BrokenArtRetry`, desktop parachord#1101) instead of
 /// leaving the placeholder up for as long as the dead URL stays stored.
 func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, resolving: Bool = false,
-             artist: String? = nil, album: String? = nil) -> some View {
+             artist: String? = nil, album: String? = nil, fallback: String? = nil) -> some View {
     let shape = RoundedRectangle(cornerRadius: radius, style: .continuous)
     // Cover content: real art fill-cropped, gradient placeholder on miss/load.
     // While the track is still resolving (no art yet) show the shimmer skeleton
@@ -100,7 +108,8 @@ func pcCover(_ url: String?, seed: String, size: CGFloat?, radius: CGFloat, reso
     let url = url.map { $0.hasPrefix("file://") ? IosContainer.companion.shared.playlistArtworkUrl(stored: $0) : $0 }
     let content = ZStack {
         if let url, let u = URL(string: url) {
-            PCCachedImage(url: u, retryArtist: artist, retryAlbum: album) { img in
+            PCCachedImage(url: u, retryArtist: artist, retryAlbum: album,
+                          fallback: fallback.flatMap { URL(string: $0) }) { img in
                 img.resizable().scaledToFill()
             } placeholder: {
                 if resolving { PCSkeletonBox(radius: radius) } else { PCArtwork(name: seed, radius: radius) }
@@ -212,6 +221,8 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     private let givenUrl: URL?
     private let retryArtist: String?
     private let retryAlbum: String?
+    /// Shown when `givenUrl` fails to load: a playlist's mosaic behind its own cover (#852).
+    private let fallback: URL?
     private let content: (Image) -> Content
     private let placeholder: () -> Placeholder
     @State private var loaded: UIImage?
@@ -226,12 +237,13 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
     /// `retryArtist` + `retryAlbum`: when the cover fails to load, ask
     /// `BrokenArtRetry` for a working one (once per album per session; it also
     /// patches every stored copy of the dead URL).
-    init(url: URL?, retryArtist: String? = nil, retryAlbum: String? = nil,
+    init(url: URL?, retryArtist: String? = nil, retryAlbum: String? = nil, fallback: URL? = nil,
          @ViewBuilder content: @escaping (Image) -> Content,
          @ViewBuilder placeholder: @escaping () -> Placeholder) {
         self.givenUrl = url
         self.retryArtist = retryArtist
         self.retryAlbum = retryAlbum
+        self.fallback = fallback
         self.content = content
         self.placeholder = placeholder
         // Seed SYNCHRONOUSLY from the cache (memory, then disk) at construction.
@@ -293,6 +305,10 @@ struct PCCachedImage<Content: View, Placeholder: View>: View {
             data = (try? await URLSession.shared.data(from: url))?.0
         }
         guard let data, let ui = UIImage(data: data) else {
+            if replacement == nil, let fallback, fallback != url {
+                replacement = fallback   // re-runs `load` via `.task(id:)`
+                return
+            }
             failed = true
             await retryDeadCover(url)
             return
@@ -543,7 +559,7 @@ final class AlbumDetailModel {
                 guard let self, let d = v as? AlbumDetail else { return }
                 self.detail = d
                 if self.coverUrl == nil, let art = d.artworkUrl, !art.isEmpty { self.coverUrl = art }
-                self.entities = d.tracks.map { pcTrack(from: $0) }
+                self.entities = d.tracks.map { pcTrack(from: $0, albumArtist: d.artist) }
                 if !d.tracks.isEmpty { self.isLoading = false; self.loaded = true }
                 // Only the providers' list is reused on reopen; a catalog
                 // list must not hide MusicBrainz's when it comes back.
@@ -558,7 +574,7 @@ final class AlbumDetailModel {
 
     private func refresh() async {
         if let d = try? await container.getAlbumDetail(albumTitle: title, artistName: artist) {
-            detail = d; entities = d.tracks.map { pcTrack(from: $0) }
+            detail = d; entities = d.tracks.map { pcTrack(from: $0, albumArtist: d.artist) }
             AlbumDetailCache.shared.put(cacheKey, .init(detail: d, entities: entities, ts: Date()))
         }
     }
@@ -632,7 +648,7 @@ struct AlbumScreen: View {
         .navigationDestination(item: $navArtist) { ArtistScreen(artistName: $0) }
         .confirmationDialog(model.title, isPresented: $showAlbumMenu, titleVisibility: .visible) {
             Button("Queue Album") { model.entities.forEach { coordinator.addToQueue($0) } }
-            Button("Go to Artist") { navArtist = model.artist }
+            if pcHasArtistPage(model.artist) { Button("Go to Artist") { navArtist = model.artist } }
             Button(model.inCollection ? "Remove from Collection" : "Add to Collection") { model.toggleCollection() }
             Button("Share") { ShareCoordinator.shared.shareAlbum(title: model.title, artist: model.artist, releaseGroupMbid: nil) }
         }
@@ -658,10 +674,14 @@ struct AlbumScreen: View {
             .shadow(color: .black.opacity(0.18), radius: 9, y: 6)
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.title).font(.system(size: 21, weight: .semibold)).foregroundStyle(PC.fg1)
-                Button { navArtist = model.artist } label: {
-                    Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accent)
+                if pcHasArtistPage(model.artist) {
+                    Button { navArtist = model.artist } label: {
+                        Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.accent)
+                    }
+                    .buttonStyle(.plain)
+                } else {
+                    Text(model.artist).font(.system(size: 16, weight: .medium)).foregroundStyle(PC.fg2)
                 }
-                .buttonStyle(.plain)
                 HStack(spacing: 10) {
                     if let rt = model.detail?.releaseType {
                         Text(rt.uppercased()).font(.system(size: 11, weight: .bold))
@@ -981,6 +1001,20 @@ struct ArtistScreen: View {
     }
 
     var body: some View {
+        // Links hide or refuse Various Artists; this is for any that don't (#840).
+        if pcHasArtistPage(model.name) {
+            page
+        } else {
+            VStack(spacing: 0) {
+                PCTopBar(title: model.name, leading: .back, onLeading: { dismiss() })
+                PCEmptyState(message: ArtistPageKt.noArtistPageMessage(name: model.name))
+                Spacer()
+            }
+            .toolbar(.hidden, for: .navigationBar)
+        }
+    }
+
+    private var page: some View {
         ScrollView {
             VStack(spacing: 0) {
                 hero

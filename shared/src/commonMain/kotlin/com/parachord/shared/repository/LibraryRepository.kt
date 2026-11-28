@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.shared.db.dao.AlbumDao
 import com.parachord.shared.db.dao.ArtistDao
 import com.parachord.shared.db.dao.PlaylistDao
@@ -104,6 +105,9 @@ class LibraryRepository(
     fun searchTracks(query: String): Flow<List<Track>> = trackDao.search(query)
     suspend fun getLocalFiles(): List<Track> = trackDao.getLocalFiles()
     fun searchAlbums(query: String): Flow<List<Album>> = albumDao.search(query)
+
+    /** See [TrackDao.clearLookedUpLocalArtwork]. */
+    suspend fun clearLookedUpLocalArtwork() = trackDao.clearLookedUpLocalArtwork()
 
     fun getAlbumTracks(albumId: String): Flow<List<Track>> = trackDao.getByAlbumId(albumId)
 
@@ -210,6 +214,8 @@ class LibraryRepository(
 
     /** User-intent artist add, as [addAlbumToCollection] (desktop's `addArtistToCollection`). */
     suspend fun addArtistToCollection(artist: Artist) {
+        // "Various Artists" isn't an artist (#840); one added before stays, so it can be removed.
+        if (!hasArtistPage(artist.name)) return
         if (artistDao.getById(artist.id) != null || artistDao.getByName(artist.name).first() != null) return
         artistDao.insert(artist.copy(addedAt = currentTimeMillis()))
     }

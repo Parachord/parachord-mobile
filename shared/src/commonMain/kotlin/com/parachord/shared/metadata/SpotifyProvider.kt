@@ -141,9 +141,14 @@ class SpotifyProvider(
             val response = api.search(
                 query = "album:$albumTitle artist:$artistName",
                 type = "album",
-                limit = 1,
+                limit = ALBUM_SEARCH_HITS,
             )
-            val album = response.albums?.items?.firstOrNull() ?: return@withAuthOrThrow null
+            // The hit that is this album, or none. Spotify's first hit can be
+            // another one ("Music Inspired by the Trainspotting Movies" for
+            // "Trainspotting"), and the merge takes the longest list.
+            val album = AlbumCatalog.pickAlbum(
+                response.albums?.items.orEmpty(), artistName, albumTitle, { it.name }, { it.artistName },
+            ) ?: return@withAuthOrThrow null
             val albumId = album.id ?: return@withAuthOrThrow null
             val albumName = album.name ?: return@withAuthOrThrow null
             val tracksResponse = api.getAlbumTracks(albumId = albumId)
@@ -189,5 +194,10 @@ class SpotifyProvider(
         } catch (_: Exception) {
             null
         }
+    }
+
+    private companion object {
+        /** Hits an album search asks for; the album is picked among them. */
+        const val ALBUM_SEARCH_HITS = 10
     }
 }

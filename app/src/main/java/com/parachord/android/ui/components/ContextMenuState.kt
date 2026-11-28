@@ -126,7 +126,7 @@ fun TrackContextMenuHost(
                 onNavigateToArtist(track.artist)
             },
             onGoToAlbum = if (track.album != null && onNavigateToAlbum != null) {
-                { onNavigateToAlbum(track.album, track.artist) }
+                { onNavigateToAlbum(track.album, com.parachord.shared.metadata.albumArtistForTrack(entity, track.album)) }
             } else null,
             onToggleCollection = {
                 onToggleCollection?.invoke(entity, track.isInCollection)

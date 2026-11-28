@@ -20,6 +20,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Minimal playback snapshot the scrobble threshold logic needs. Decouples the
@@ -76,9 +77,19 @@ class ScrobbleManager(
      * platforms back it with an in-memory cache (and iOS bridges a Swift closure).
      */
     private val resolvedSourcesFor: (Track) -> List<ResolvedSource> = { emptyList() },
+    /** How long the scrobble-time MBID lookup may hold a listen ([MBID_LOOKUP_BUDGET_MS]). */
+    private val mbidLookupBudgetMs: Long = MBID_LOOKUP_BUDGET_MS,
 ) {
     companion object {
         private const val TAG = "ScrobbleManager"
+
+        /**
+         * The scrobble-time MBID lookup runs before any scrobbler is asked, so
+         * a mapper that never answers held every scrobble (and the now-playing
+         * ping) for the HTTP client's 60 s. After this the listen goes out with
+         * the identity already on the track (desktop parachord#1669).
+         */
+        const val MBID_LOOKUP_BUDGET_MS = 5_000L
     }
 
     // The observe loop below is a long-lived fire-and-forget launch running the
@@ -223,13 +234,18 @@ class ScrobbleManager(
         // recording-keyed and skip. getRecordingMbid hits the cache when already
         // enriched (cheap on Android) and returns null for genuinely unmappable
         // tracks (correctly leaving them un-submitted).
-        if (dbTrack.recordingMbid.isNullOrBlank()) {
-            val mbid = try {
-                mbidEnrichment.getRecordingMbid(dbTrack.artist, dbTrack.title, dbTrack.isrc)
-            } catch (_: Exception) {
+        // The release and artist too (#853): ListenBrainz pins the listen to
+        // its release only with release_mbid, which desktop sends.
+        if (dbTrack.recordingMbid.isNullOrBlank() || dbTrack.releaseMbid.isNullOrBlank()) {
+            val found = try {
+                withTimeoutOrNull(mbidLookupBudgetMs) {
+                    mbidEnrichment.lookupRecordingMbid(dbTrack.artist, dbTrack.title, dbTrack.isrc)
+                } as? com.parachord.shared.metadata.RecordingMbidLookup.Found
+            } catch (e: Exception) {
+                if (e is kotlinx.coroutines.CancellationException) throw e
                 null
             }
-            if (!mbid.isNullOrBlank()) dbTrack = dbTrack.copy(recordingMbid = mbid)
+            if (found != null) dbTrack = withLookedUpMbids(dbTrack, found)
         }
         val canonical = mbidEnrichment.getCanonicalNames(dbTrack.artist, dbTrack.title)
         return if (canonical != null) {

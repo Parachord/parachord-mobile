@@ -369,6 +369,7 @@ class MetadataService constructor(
      * later providers fill in gaps left by earlier ones.
      */
     suspend fun getArtistInfo(artistName: String, mbid: String? = null): ArtistInfo? {
+        if (!hasArtistPage(artistName, mbid)) return null
         val known = useArtistMbid(artistName, mbid)
         // Keyed by the id too when there is one, so a namesake's cached bio isn't served.
         val key = if (known != null) "$artistName\u0000$known" else artistName
@@ -471,7 +472,7 @@ class MetadataService constructor(
 
     private suspend fun lookupArtistImage(artistName: String, exclude: String?): String? {
         val key = artistName.lowercase().trim()
-        if (key.isEmpty()) return null
+        if (!hasArtistPage(artistName)) return null
         // Persistent cache hit (shared, both platforms) — skip the network cascade.
         // [exclude] is an image URL that stopped loading ([BrokenArtRetry]): drop
         // it from the cache and look again, skipping it.
@@ -541,6 +542,7 @@ class MetadataService constructor(
 
     /** Get an artist's top tracks from all available providers, merged and deduplicated. */
     suspend fun getArtistTopTracks(artistName: String, limit: Int = 10): List<TrackSearchResult> = coroutineScope {
+        if (!hasArtistPage(artistName)) return@coroutineScope emptyList()
         val results = availableProviders()
             .map { provider -> async {
                 try { provider.getArtistTopTracks(artistName, limit) } catch (_: Exception) { emptyList() }
@@ -577,6 +579,10 @@ class MetadataService constructor(
         limit: Int = 50,
         mbid: String? = null,
     ): Flow<List<AlbumSearchResult>> = flow {
+        if (!hasArtistPage(artistName, mbid)) {
+            emit(emptyList())
+            return@flow
+        }
         val known = useArtistMbid(artistName, mbid)
         val active = availableProviders()
         val cacheKey = if (known == null) cacheKey(active, artistName, limit.toString())
@@ -628,6 +634,10 @@ class MetadataService constructor(
         }
     }
 
+    /** [cacheKey] for a track list. The marker leaves behind lists saved while Spotify's unchecked first hit could be another album. */
+    private fun albumTracksKey(active: List<MetadataProvider>, artistName: String, albumTitle: String): String =
+        cacheKey(active, artistName, albumTitle, "checked")
+
     /** Cache key: the request plus which providers answered it, so enabling a
      *  provider (e.g. connecting Spotify) isn't hidden behind an older answer. */
     private fun cacheKey(active: List<MetadataProvider>, vararg parts: String): String =
@@ -647,7 +657,7 @@ class MetadataService constructor(
 
     suspend fun getAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? = coroutineScope {
         val active = availableProviders()
-        val cacheKey = cacheKey(active, artistName, albumTitle)
+        val cacheKey = albumTracksKey(active, artistName, albumTitle)
         // MusicBrainz's type for an album it knows wins: Spotify's album_type
         // calls every EP a "single", and filled the badge whenever MusicBrainz
         // had no type or didn't answer.
@@ -727,7 +737,7 @@ class MetadataService constructor(
         var merged: AlbumDetail? = null
         var anyFailed = false
         val active = availableProviders()
-        val cacheKey = cacheKey(active, artistName, albumTitle)
+        val cacheKey = albumTracksKey(active, artistName, albumTitle)
         val knownType = knownReleaseType(albumTitle, artistName)
         fun typed(d: AlbumDetail): AlbumDetail = if (knownType != null) d.copy(releaseType = knownType) else d
         // A cached tracklist is the whole answer: show it, no provider calls.
@@ -758,7 +768,7 @@ class MetadataService constructor(
 
     private suspend fun cachedAlbumTracks(albumTitle: String, artistName: String): AlbumDetail? {
         val cache = albumTracksCache ?: return null
-        return cache.get(cacheKey(availableProviders(), artistName, albumTitle))
+        return cache.get(albumTracksKey(availableProviders(), artistName, albumTitle))
     }
 
     /**

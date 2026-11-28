@@ -88,4 +88,18 @@ class XspfCoreTest {
         assertEquals("Imported Playlist", pl.title)
         assertTrue(pl.tracks.isEmpty())
     }
+
+    @Test fun thePlaylistsImageIsItsCoverAndATracksIsNot() {
+        val doc = """<?xml version="1.0"?><playlist><title>KCRW</title><image>https://example.com/kcrw.png</image>
+            <trackList><track><title>A</title><creator>B</creator><image>https://img/track.jpg</image></track></trackList></playlist>"""
+        assertEquals("https://example.com/kcrw.png", XspfParser.parse(doc).imageUrl)
+        val onlyTrack = """<playlist><title>X</title><trackList><track><title>A</title><creator>B</creator><image>https://img/track.jpg</image></track></trackList></playlist>"""
+        assertEquals(null, XspfParser.parse(onlyTrack).imageUrl)
+    }
+
+    @Test fun anImageThatIsntAPublicHttpsAddressIsDropped() {
+        for (url in listOf("http://example.com/c.png", "https://192.168.1.2/c.png", "file:///etc/passwd", "data:image/png;base64,AA")) {
+            assertEquals(null, XspfParser.playlistImage("<playlist><title>X</title><image>$url</image></playlist>"), url)
+        }
+    }
 }

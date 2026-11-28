@@ -116,6 +116,21 @@ class TrackResolverCache constructor(
                     }
                     settingsStore.setTrackSourcesStoredIdPurgeDone()
                 }
+                // Once: another song's source or cover on a track (and the
+                // cover on local files' rows), which play or show again for
+                // as long as they're kept.
+                if (p != null && !settingsStore.isWrongSongPurgeDone()) {
+                    val wrong = saved.filter { (key, sources) ->
+                        ResolverRetry.holdsWrongSong(key.substringBeforeLast('|'), key.substringAfterLast('|'), sources)
+                    }.keys
+                    if (wrong.isNotEmpty()) {
+                        p.remove(wrong)
+                        saved = saved - wrong
+                        Log.d(TAG, "Dropped ${wrong.size} saved track sources holding another song or its cover")
+                    }
+                    libraryRepository.clearLookedUpLocalArtwork()
+                    settingsStore.setWrongSongPurgeDone()
+                }
                 // Anything resolved while loading wins over the saved copy.
                 if (saved.isNotEmpty()) _trackSources.update { saved + it }
                 Log.d(TAG, "Loaded ${saved.size} saved track sources")

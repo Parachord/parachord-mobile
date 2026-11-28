@@ -154,6 +154,7 @@ class ProtocolPlayHandler constructor(
                 title = t.title,
                 artist = t.artist,
                 album = t.album,
+                albumArtist = t.albumArtist,
                 artworkUrl = resolved.albumArt,
             )
         }
@@ -242,6 +243,7 @@ class ProtocolPlayHandler constructor(
             title = title,
             artist = artist,
             album = album,
+            albumArtist = albumArtist,
             artworkUrl = fallbackArt,
             // spotifyId carried as a HINT (e.g. Spotify editorial embed, #286) so
             // resolveWithHints verifies it → a Spotify source without a search.

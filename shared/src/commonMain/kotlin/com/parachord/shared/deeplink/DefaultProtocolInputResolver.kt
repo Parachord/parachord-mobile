@@ -152,7 +152,10 @@ class DefaultProtocolInputResolver(
             ResolvedProtocolPlay(
                 displayName = detail.title,
                 tracks = detail.tracks.map { t ->
-                    ProtocolTrack(artist = t.artist, title = t.title, album = t.album ?: detail.title, mbid = t.mbid)
+                    ProtocolTrack(
+                        artist = t.artist, title = t.title, album = t.album ?: detail.title, mbid = t.mbid,
+                        albumArtist = com.parachord.shared.metadata.trackAlbumArtist(t.artist, detail.artist),
+                    )
                 },
                 albumArt = detail.artworkUrl,
             )

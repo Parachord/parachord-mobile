@@ -3,6 +3,7 @@ package com.parachord.shared.playback
 import com.parachord.shared.metadata.AlbumDetail
 import com.parachord.shared.metadata.MetadataService
 import com.parachord.shared.metadata.TrackSearchResult
+import com.parachord.shared.metadata.trackAlbumArtist
 import com.parachord.shared.model.Track
 
 /** Tracks to play or queue, and where they came from. */
@@ -43,7 +44,10 @@ class CatalogQueues(private val metadataService: MetadataService) {
 
         /** [detail]'s tracks as a queue; null when it has none. [title] and [artist] are what was asked for. */
         fun albumQueue(detail: AlbumDetail, title: String, artist: String): CatalogQueue? {
-            val tracks = detail.tracks.map { catalogTrack(it, album = it.album ?: title, artworkUrl = detail.artworkUrl) }
+            val tracks = detail.tracks.map {
+                catalogTrack(it, album = it.album ?: title, artworkUrl = detail.artworkUrl)
+                    .copy(albumArtist = trackAlbumArtist(it.artist, detail.artist))
+            }
             return tracks.takeIf { it.isNotEmpty() }?.let { CatalogQueue(it, albumContext(title, artist)) }
         }
 

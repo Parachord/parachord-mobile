@@ -1,5 +1,7 @@
 package com.parachord.android.ui.screens.nowplaying
 
+import com.parachord.shared.metadata.hasArtistPage
+import com.parachord.shared.metadata.albumArtistForTrack
 import com.parachord.shared.playback.ContextDestination
 import com.parachord.shared.playback.playbackContextDestination
 import com.parachord.android.ui.theme.FillAccent
@@ -205,7 +207,7 @@ fun NowPlayingScreen(
                     // Shared with iOS: where each context opens.
                     when (val dest = playbackContextDestination(ctx)) {
                         is ContextDestination.Album -> {
-                            val artist = dest.artist ?: track?.artist ?: return@QueueSheet
+                            val artist = dest.artist ?: track?.let { albumArtistForTrack(it, dest.title) } ?: return@QueueSheet
                             onNavigateToAlbum(dest.title, artist)
                         }
                         is ContextDestination.Artist -> onNavigateToArtist(dest.name)
@@ -345,7 +347,7 @@ fun NowPlayingScreen(
                     onSingleTap = track?.album?.takeIf { track.artist.isNotBlank() }?.let { album ->
                         {
                             singleTapHaptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
-                            onNavigateToAlbum(album, track.artist)
+                            onNavigateToAlbum(album, albumArtistForTrack(track, album))
                         }
                     },
                     onDoubleTapLove = {
@@ -488,7 +490,7 @@ fun NowPlayingScreen(
                             textAlign = TextAlign.Center,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis,
-                            modifier = if (displayArtist.isNotBlank()) {
+                            modifier = if (hasArtistPage(displayArtist)) {
                                 Modifier.hapticClickable { onNavigateToArtist(displayArtist) }
                             } else Modifier,
                         )
@@ -518,7 +520,11 @@ fun NowPlayingScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = if (hasAlbum) {
                             Modifier.hapticClickable {
-                                onNavigateToAlbum(displayAlbum!!, displayArtist)
+                                // The track's own album goes by the album's artist; a
+                                // stream's other album by the artist it names.
+                                val albumArtist = track?.let { albumArtistForTrack(it, displayAlbum) }
+                                    ?.takeIf { it != track.artist } ?: displayArtist
+                                onNavigateToAlbum(displayAlbum!!, albumArtist)
                             }
                         } else Modifier,
                     )

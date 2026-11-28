@@ -1,5 +1,8 @@
 package com.parachord.android.ui
 
+import com.parachord.android.ui.navigation.isShowing
+import com.parachord.android.ui.navigation.openArtist
+import com.parachord.android.ui.navigation.openPage
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -402,19 +405,19 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
         deepLinkViewModel.navEvents.collect { event ->
             when (event) {
                 is DeepLinkNavEvent.Artist ->
-                    navController.navigate(Routes.artist(event.name)) { launchSingleTop = true }
+                    navController.openArtist(event.name) { launchSingleTop = navController.isShowing(Routes.artist(event.name)) }
                 is DeepLinkNavEvent.Album ->
-                    navController.navigate(Routes.album(event.title, event.artist)) { launchSingleTop = true }
+                    navController.openPage(Routes.album(event.title, event.artist))
                 is DeepLinkNavEvent.Playlist ->
-                    navController.navigate(Routes.playlistDetail(event.id)) { launchSingleTop = true }
+                    navController.openPage(Routes.playlistDetail(event.id))
                 is DeepLinkNavEvent.Home ->
                     navController.navigate(Routes.HOME) { launchSingleTop = true }
                 is DeepLinkNavEvent.Library ->
                     navController.navigate(Routes.collection(event.tab)) { launchSingleTop = true }
                 is DeepLinkNavEvent.History ->
-                    navController.navigate(Routes.history(event.tab, event.period)) { launchSingleTop = true }
+                    navController.openPage(Routes.history(event.tab, event.period))
                 is DeepLinkNavEvent.Friend ->
-                    navController.navigate(Routes.friendDetail(event.id, event.tab, event.period)) { launchSingleTop = true }
+                    navController.openPage(Routes.friendDetail(event.id, event.tab, event.period))
                 is DeepLinkNavEvent.Recommendations ->
                     navController.navigate(Routes.RECOMMENDATIONS) { launchSingleTop = true }
                 is DeepLinkNavEvent.Charts ->
@@ -488,9 +491,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
             onImportUrl = { url ->
                 mainViewModel.importPlaylistFromUrl(url) { playlistId ->
                     showImportPlaylistDialog = false
-                    navController.navigate(Routes.playlistDetail(playlistId)) {
-                        launchSingleTop = true
-                    }
+                    navController.openPage(Routes.playlistDetail(playlistId))
                 }
             },
             onImportFile = { uri ->
@@ -499,9 +500,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
                     val filename = uri.lastPathSegment
                     mainViewModel.importPlaylistFromFile(content, filename) { playlistId ->
                         showImportPlaylistDialog = false
-                        navController.navigate(Routes.playlistDetail(playlistId)) {
-                            launchSingleTop = true
-                        }
+                        navController.openPage(Routes.playlistDetail(playlistId))
                     }
                 }
             },

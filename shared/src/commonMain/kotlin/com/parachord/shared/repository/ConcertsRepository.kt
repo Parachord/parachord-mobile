@@ -1,5 +1,6 @@
 package com.parachord.shared.repository
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.shared.api.SeatGeekClient
 import com.parachord.shared.api.TicketmasterClient
 import com.parachord.shared.model.Resource
@@ -255,6 +256,10 @@ class ConcertsRepository(
      * Get upcoming events for a specific artist.
      */
     fun getArtistEvents(artistName: String): Flow<Resource<List<ConcertEvent>>> = flow {
+        if (!hasArtistPage(artistName)) {
+            emit(Resource.Success(emptyList()))
+            return@flow
+        }
         val cacheKey = artistName.lowercase()
         val cached = artistEventsCache[cacheKey]
         if (cached != null) {
@@ -293,6 +298,7 @@ class ConcertsRepository(
         lon: Double? = null,
         radiusMiles: Int = 50,
     ): Boolean {
+        if (!hasArtistPage(artistName)) return false
         // Keyed by artist + location + radius, in its OWN cache — never the
         // unfiltered artistEventsCache the On Tour tab reads (#214). A location
         // change re-checks rather than serving a stale-area result.

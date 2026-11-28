@@ -361,7 +361,7 @@ fun CollectionScreen(
                                             onDismiss = { showMenu = false },
                                             onPlayAlbum = {
                                                 showMenu = false
-                                                viewModel.playAlbum(album.id, album.title)
+                                                viewModel.playAlbum(album.id, album.title, album.artist)
                                             },
                                             onQueueAlbum = {
                                                 showMenu = false

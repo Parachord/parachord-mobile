@@ -2,11 +2,12 @@ package com.parachord.shared.playlist
 
 import com.parachord.shared.model.Track
 
-/** Parsed XSPF playlist: a title, optional creator, and the tracks. */
+/** Parsed XSPF playlist: a title, optional creator, the tracks, and the playlist's own cover ([XspfParser.playlistImage]). */
 data class XspfPlaylist(
     val title: String,
     val creator: String?,
     val tracks: List<Track>,
+    val imageUrl: String? = null,
 )
 
 /**
@@ -67,7 +68,27 @@ object XspfParser {
             )
             i = indexOfElement(content, "track", closeStart + 1)
         }
-        return XspfPlaylist(playlistTitle, playlistCreator, tracks)
+        return XspfPlaylist(playlistTitle, playlistCreator, tracks, playlistImage(content))
+    }
+
+    /**
+     * The playlist's cover: the `<image>` directly under `<playlist>`, never a
+     * `<track>`'s (that's album art) (#852, desktop parachord#1410
+     * `playlistImageUrl`). It comes from someone else's document and every
+     * cover view loads it, so only a public https address is kept
+     * ([validatePublicHttpsUrl]: no private network, `file:`, `data:` or
+     * plain http, which the apps' network rules refuse anyway). Null otherwise.
+     */
+    fun playlistImage(content: String): String? {
+        val firstTrack = indexOfElement(content, "track", 0)
+        val header = if (firstTrack >= 0) content.substring(0, firstTrack) else content
+        val url = tagText(header, "image") ?: return null
+        return try {
+            com.parachord.shared.deeplink.validatePublicHttpsUrl(url)
+            url
+        } catch (_: IllegalArgumentException) {
+            null
+        }
     }
 
     /** Index of the next `<name>`/`<name ...>`/`<name/>` open tag at or after [from],

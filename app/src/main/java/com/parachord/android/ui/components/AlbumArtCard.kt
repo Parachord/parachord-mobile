@@ -74,6 +74,8 @@ fun AlbumArtCard(
     contentDescription: String? = "Album artwork",
     artist: String? = null,
     album: String? = null,
+    /** Shown when [artworkUrl] fails to load: a playlist's mosaic behind its own cover ([playlistMosaicFallback]). */
+    fallbackUrl: String? = null,
 ) {
     val shape = RoundedCornerShape(cornerRadius)
     val commonModifier = modifier
@@ -102,7 +104,11 @@ fun AlbumArtCard(
                 // The album page opens with this cover ([ShownAlbumCovers]).
                 onSuccess = { ShownAlbumCovers.remember(artist, album, url) },
                 onError = {
-                    scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { replacement = it } }
+                    if (fallbackUrl != null && replacement == null && url != fallbackUrl) {
+                        replacement = fallbackUrl
+                    } else {
+                        scope.launch { retryBrokenAlbumArt(url, artist, album)?.let { replacement = it } }
+                    }
                 },
                 loading = {
                     if (placeholderName != null) {
@@ -248,5 +254,23 @@ private fun ArtPlaceholderSimple(modifier: Modifier, iconSize: Dp) {
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.size(iconSize * 0.4f),
         )
+    }
+}
+
+/**
+ * The mosaic of [playlistId]'s tracks, kept beside a cover of its own for when
+ * that cover fails to load (#852, desktop's `PlaylistCoverImage` over the
+ * mosaic), as a `file:` URL; null when there's none. The service writes it at
+ * `playlist_mosaics/<id>.jpg` (`ImageEnrichmentService.refreshFallbackMosaic`).
+ */
+@Composable
+fun playlistMosaicFallback(playlistId: String): String? {
+    val context = LocalContext.current
+    return remember(playlistId) {
+        val file = java.io.File(
+            java.io.File(context.filesDir, com.parachord.shared.metadata.PlaylistMosaicPaths.DIR_NAME),
+            com.parachord.shared.metadata.PlaylistCovers.mosaicFileName(playlistId),
+        )
+        file.takeIf { it.exists() }?.toURI()?.toString()
     }
 }

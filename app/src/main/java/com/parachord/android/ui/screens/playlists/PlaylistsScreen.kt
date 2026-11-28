@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.playlists
 
+import com.parachord.android.ui.components.playlistMosaicFallback
 import com.parachord.shared.ui.DesignTokens
 import com.parachord.android.ui.components.PageHero
 import androidx.compose.foundation.background
@@ -197,7 +198,8 @@ fun PlaylistsScreen(
                         // mosaics, stored as `file:/…`) are treated as
                         // canonical and skipped.
                         val art = playlist.artworkUrl
-                        if (art.isNullOrBlank() || !com.parachord.shared.metadata.PlaylistMosaicPaths.isLocalFile(art)) {
+                        // A cover of its own is kept (#852); stock art is replaced at launch.
+                        if (art.isNullOrBlank()) {
                             LaunchedEffect(playlist.id) {
                                 viewModel.enrichPlaylistArtIfNeeded(playlist.id)
                             }
@@ -259,6 +261,7 @@ fun PlaylistsScreen(
                                     size = 44.dp,
                                     cornerRadius = 4.dp,
                                     elevation = 1.dp,
+                                    fallbackUrl = playlistMosaicFallback(playlist.id),
                                 )
                                 Spacer(modifier = Modifier.width(12.dp))
                                 Column(modifier = Modifier.weight(1f)) {

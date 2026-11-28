@@ -6,6 +6,7 @@ import com.parachord.shared.deeplink.HOSTED_PLAYLIST_MAX_BYTES
 import com.parachord.shared.deeplink.fetchPublicPlaylistText
 import com.parachord.shared.deeplink.validatePublicHttpsUrl
 import com.parachord.shared.metadata.ImageEnrichmentService
+import com.parachord.shared.metadata.PlaylistCovers
 import com.parachord.shared.model.Playlist
 import com.parachord.shared.model.PlaylistTrack
 import com.parachord.shared.model.Track
@@ -57,7 +58,7 @@ class HostedXspfService(
     /** Import a local `.xspf` file's contents (no `sourceUrl` → not polled). */
     suspend fun importLocalXspf(content: String): XspfImportResult {
         val parsed = XspfParser.parse(content)
-        return save(parsed.title, "imported-xspf", parsed.tracks, sourceUrl = null, contentHash = null)
+        return save(parsed.title, "imported-xspf", parsed.tracks, sourceUrl = null, contentHash = null, cover = parsed.imageUrl)
     }
 
     /** Import an XSPF playlist from an HTTPS URL → a hosted playlist (polled). */
@@ -68,7 +69,7 @@ class HostedXspfService(
             .ifBlank { throw IllegalStateException("Failed to fetch playlist from $url") }
         require(looksLikeXspf(content)) { "URL does not contain a valid XSPF playlist" }
         val parsed = XspfParser.parse(content)
-        return save(parsed.title, "hosted-xspf", parsed.tracks, sourceUrl = url, contentHash = sha256Hex(content))
+        return save(parsed.title, "hosted-xspf", parsed.tracks, sourceUrl = url, contentHash = sha256Hex(content), cover = parsed.imageUrl)
     }
 
     /** Poll every hosted playlist in the DB; replace tracks on content change. */
@@ -131,11 +132,21 @@ class HostedXspfService(
             trackCount = rows.size,
             lastModified = now,
         )
-        // Tracklist changed → prior mosaic is stale; clear + rebuild with a
-        // cache-bust token so Coil/SwiftUI reload instead of serving the old file.
-        playlistDao.clearArtworkById(playlist.id)
-        runCatching {
-            imageEnrichmentService.enrichPlaylistArt(playlist.id, cacheBustToken = hash.take(8))
+        // The document's cover, or the playlist's own it already had, stays
+        // (#852); else the tracklist changed, the prior mosaic is stale: clear +
+        // rebuild with a cache-bust token so Coil/SwiftUI reload the file.
+        val cover = PlaylistCovers.coverAfterHostedUpdate(playlist.artworkUrl, parsed.imageUrl, rows.map { it.trackArtworkUrl })
+        if (cover != null) {
+            if (cover != playlist.artworkUrl) {
+                val old = playlist.artworkUrl
+                if (old == null) playlistDao.updateArtworkById(playlist.id, cover)
+                else playlistDao.replaceArtworkById(playlist.id, expected = old, artworkUrl = cover)
+            }
+        } else {
+            playlistDao.clearArtworkById(playlist.id)
+            runCatching {
+                imageEnrichmentService.enrichPlaylistArt(playlist.id, cacheBustToken = hash.take(8))
+            }
         }
         Log.d(TAG, "Hosted '${playlist.name}' updated (${rows.size} tracks)")
         return true
@@ -161,12 +172,14 @@ class HostedXspfService(
         tracks: List<Track>,
         sourceUrl: String?,
         contentHash: String?,
+        cover: String?,
     ): XspfImportResult {
         val playlistId = "$source-${randomUUID()}"
         val playlist = Playlist(
             id = playlistId,
             name = name,
-            artworkUrl = tracks.firstOrNull()?.artworkUrl,
+            // Its own cover, or none and the mosaic is built: never a track's (#852).
+            artworkUrl = cover,
             trackCount = tracks.size,
             sourceUrl = sourceUrl,
             sourceContentHash = contentHash,

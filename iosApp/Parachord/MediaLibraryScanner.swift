@@ -148,7 +148,7 @@ final class MediaLibraryScanner {
             resolver: "localfiles",
             spotifyUri: nil, soundcloudId: nil, spotifyId: nil, appleMusicId: nil,
             isrc: nil, recordingMbid: nil, artistMbid: nil, releaseMbid: nil,
-            crossResolverEnrichedAt: nil, inCollection: false
+            crossResolverEnrichedAt: nil, inCollection: false, albumArtist: nil
         )
     }
 
@@ -250,7 +250,7 @@ final class MediaLibraryScanner {
             resolver: "localfiles",
             spotifyUri: nil, soundcloudId: nil, spotifyId: nil, appleMusicId: nil,
             isrc: nil, recordingMbid: nil, artistMbid: nil, releaseMbid: nil,
-            crossResolverEnrichedAt: nil, inCollection: false
+            crossResolverEnrichedAt: nil, inCollection: false, albumArtist: nil
         )
     }
 }

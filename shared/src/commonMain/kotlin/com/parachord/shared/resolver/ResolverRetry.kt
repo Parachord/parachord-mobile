@@ -42,6 +42,52 @@ object ResolverRetry {
                 it.matchedDurationMs == null && it.isrc == null
         }
 
+    /**
+     * Whether a saved entry for [title] by [artist] holds another song, or
+     * another song's cover. A source at 1.0 under names that aren't this
+     * track's was accepted by an ISRC taken from a wrong match ([pickTrackIsrc]
+     * before it skipped those), and a local file's online cover came from a
+     * search whose first result was taken unchecked. A 1.0 with no names is a
+     * stored id, which for a local file's track can be the wrong song's, kept
+     * by a saved queue. A rip with odd tags that
+     * was really matched by ISRC, and a real stored id, are dropped too, and only resolve again.
+     */
+    fun holdsWrongSong(title: String, artist: String, sources: List<ResolvedSource>): Boolean {
+        val hasLocalFile = sources.any { it.resolver == "localfiles" }
+        return sources.any { s ->
+            if (s.resolver == "localfiles") return@any s.artworkUrl?.startsWith("http") == true
+            if ((s.confidence ?: 0.0) < 1.0) return@any false
+            val name = s.matchedTitle ?: return@any hasLocalFile
+            val by = s.matchedArtist ?: return@any hasLocalFile
+            scoreConfidence(title, artist, name, by) < ResolverScoring.MIN_CONFIDENCE_THRESHOLD
+        }
+    }
+
+    /**
+     * Stored-id [hints] with the wrong ones taken down to their name score. A
+     * stored id is trusted at 1.0 whatever its song is called, except when its
+     * own names aren't the track's and the search ([found]) has a source that
+     * is: then the id was another song's (a wrong match saved with a queue).
+     * With nothing else found the id stays, since a service may spell a
+     * track's names its own way.
+     */
+    fun demoteWrongHints(
+        hints: List<ResolvedSource>,
+        found: List<ResolvedSource>,
+        title: String?,
+        artist: String?,
+    ): List<ResolvedSource> {
+        if (title == null || artist == null) return hints
+        val floor = ResolverScoring.MIN_CONFIDENCE_THRESHOLD
+        if (found.none { !it.noMatch && (it.confidence ?: 0.0) >= floor }) return hints
+        return hints.map { hint ->
+            val name = hint.matchedTitle ?: return@map hint
+            val by = hint.matchedArtist ?: return@map hint
+            val score = scoreConfidence(title, artist, name, by)
+            if (score < floor) hint.copy(confidence = score) else hint
+        }
+    }
+
     private val STORED_ID_RESOLVERS = setOf("spotify", "applemusic", "soundcloud")
 
     /**

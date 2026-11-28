@@ -1,5 +1,6 @@
 package com.parachord.android.ui.components
 
+import com.parachord.shared.metadata.hasArtistPage
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -127,7 +128,7 @@ fun AlbumContextMenu(
                     onClick = onGoToAlbum,
                 )
             }
-            if (onGoToArtist != null) {
+            if (onGoToArtist != null && hasArtistPage(artistName)) {
                 ContextMenuItem(
                     icon = Icons.Filled.Person,
                     label = "Go to Artist",

@@ -1,6 +1,7 @@
 package com.parachord.android.ui.navigation
 
 import android.net.Uri
+import android.widget.Toast
 import androidx.compose.animation.AnimatedContentTransitionScope
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -10,12 +11,16 @@ import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.animation.slideOutVertically
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Modifier
 import androidx.navigation.NavHostController
+import androidx.navigation.NavOptionsBuilder
 import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.navArgument
+import com.parachord.shared.metadata.hasArtistPage
+import com.parachord.shared.metadata.noArtistPageMessage
 
 /** Collection's Songs tab index (LibraryScreen: Artists, Albums, Songs, Friends). */
 private const val COLLECTION_SONGS_TAB = 2
@@ -115,6 +120,51 @@ object Routes {
     }
 }
 
+/**
+ * Opens a page from outside it (a link, an import): a new entry, unless that
+ * very page is on top. `launchSingleTop` alone reuses the entry on top for
+ * another album too, and its view model keeps the first one's arguments, so
+ * an album link over an album page did nothing.
+ */
+fun NavHostController.openPage(route: String) {
+    val showing = isShowing(route)
+    navigate(route) { launchSingleTop = showing }
+}
+
+/** Whether the page on top is [route]. */
+fun NavHostController.isShowing(route: String): Boolean {
+    val entry = currentBackStackEntry ?: return false
+    val pattern = entry.destination.route ?: return false
+    return filledRoute(pattern, { entry.arguments?.getString(it) }, Uri::encode) == route
+}
+
+/** [pattern] with its arguments filled in, as [Routes]' builders write it: a query argument with no value is left out. */
+internal fun filledRoute(pattern: String, arg: (String) -> String?, encode: (String) -> String): String {
+    val path = Regex("\\{([^}]+)\\}").replace(pattern.substringBefore('?')) { m ->
+        encode(arg(m.groupValues[1]).orEmpty())
+    }
+    val query = pattern.substringAfter('?', "").split('&').filter { it.isNotEmpty() }
+        .mapNotNull { pair -> pair.substringBefore('=').let { name -> arg(name)?.let { "$name=${encode(it)}" } } }
+    return if (query.isEmpty()) path else path + query.joinToString("&", prefix = "?")
+}
+
+/**
+ * Every link to an artist's page goes through here, so none reaches one that
+ * doesn't exist: Various Artists says so and stays where it is (#840).
+ */
+fun NavHostController.openArtist(
+    name: String,
+    tab: String? = null,
+    mbid: String? = null,
+    options: NavOptionsBuilder.() -> Unit = {},
+) {
+    if (!hasArtistPage(name, mbid)) {
+        if (name.isNotBlank()) Toast.makeText(context, noArtistPageMessage(name), Toast.LENGTH_SHORT).show()
+        return
+    }
+    navigate(Routes.artist(name, tab, mbid), options)
+}
+
 @Composable
 fun ParachordNavHost(
     navController: NavHostController,
@@ -169,7 +219,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.playlistDetail(playlistId))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
                 onNavigateToRecommendations = { navController.navigate(Routes.RECOMMENDATIONS) },
                 onNavigateToCriticalDarlings = { navController.navigate(Routes.CRITICAL_DARLINGS) },
@@ -191,7 +241,7 @@ fun ParachordNavHost(
                 },
                 onOpenConcerts = { navController.navigate(Routes.CONCERTS) },
                 onOpenArtistTour = { name ->
-                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
+                    navController.openArtist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
                 },
                 onAsk = onAsk,
             )
@@ -211,7 +261,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.friendDetail(friendId))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -233,7 +283,7 @@ fun ParachordNavHost(
             val playlistId = backStackEntry.arguments?.getString("playlistId") ?: ""
             com.parachord.android.ui.screens.playlists.PlaylistDetailScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -251,7 +301,7 @@ fun ParachordNavHost(
         ) {
             com.parachord.android.ui.screens.playlists.WeeklyPlaylistScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -270,7 +320,7 @@ fun ParachordNavHost(
                         popUpTo(Routes.SERVICE_PLAYLIST) { inclusive = true }
                     }
                 },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -290,7 +340,7 @@ fun ParachordNavHost(
         }
         composable(Routes.SEARCH) {
             com.parachord.android.ui.screens.search.SearchScreen(
-                onNavigateToArtist = { name, mbid -> navController.navigate(Routes.artist(name, mbid = mbid)) },
+                onNavigateToArtist = { name, mbid -> navController.openArtist(name, mbid = mbid) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -326,9 +376,9 @@ fun ParachordNavHost(
         ) {
             com.parachord.android.ui.screens.nowplaying.NowPlayingScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 onNavigateToArtistOnTour = { name ->
-                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
+                    navController.openArtist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
                 },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -376,13 +426,19 @@ fun ParachordNavHost(
                 navArgument("mbid") { type = NavType.StringType; nullable = true; defaultValue = null },
             ),
         ) { backStackEntry ->
+            // A back stack saved before Various Artists had no page (#840).
+            val args = backStackEntry.arguments
+            if (!hasArtistPage(args?.getString("artistName"), args?.getString("mbid"))) {
+                LaunchedEffect(Unit) { navController.popBackStack() }
+                return@composable
+            }
             val initialTab = backStackEntry.arguments?.getString("tab")
             com.parachord.android.ui.screens.artist.ArtistScreen(
                 onBack = { navController.popBackStack() },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 initialTab = initialTab,
             )
         }
@@ -395,7 +451,7 @@ fun ParachordNavHost(
         ) {
             com.parachord.android.ui.screens.album.AlbumScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
             )
         }
 
@@ -428,7 +484,7 @@ fun ParachordNavHost(
         ) {
             com.parachord.android.ui.screens.chat.ChatScreen(
                 onBack = { navController.popBackStack() },
-                onNavigateToArtist = { name -> navController.navigate(Routes.artist(name)) },
+                onNavigateToArtist = { name -> navController.openArtist(name) },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
@@ -448,7 +504,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
             )
         }
@@ -459,7 +515,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
             )
         }
@@ -467,7 +523,7 @@ fun ParachordNavHost(
             com.parachord.android.ui.screens.discover.RecommendationsScreen(
                 onBack = { navController.popBackStack() },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
                 onNavigateToAlbum = { albumTitle, artistName ->
                     navController.navigate(Routes.album(albumTitle, artistName))
@@ -493,7 +549,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
             )
         }
@@ -504,7 +560,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
             )
         }
@@ -513,7 +569,7 @@ fun ParachordNavHost(
                 onBack = { navController.popBackStack() },
                 // A show opens its artist on the On Tour tab (all their dates).
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB))
+                    navController.openArtist(name, tab = com.parachord.shared.home.ARTIST_ON_TOUR_TAB)
                 },
             )
         }
@@ -535,7 +591,7 @@ fun ParachordNavHost(
                     navController.navigate(Routes.album(albumTitle, artistName))
                 },
                 onNavigateToArtist = { name ->
-                    navController.navigate(Routes.artist(name))
+                    navController.openArtist(name)
                 },
             )
         }

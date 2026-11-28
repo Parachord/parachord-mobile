@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.album
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.android.ui.theme.FillAccent
 import com.parachord.android.ui.components.rememberPlayFromSource
 import com.parachord.android.ui.components.ResolveWhileVisible
@@ -253,8 +254,11 @@ fun AlbumScreen(
                                 Text(
                                     text = detail.artist,
                                     style = MaterialTheme.typography.bodyMedium,
-                                    color = MaterialTheme.colorScheme.primary,
-                                    modifier = Modifier.clickable { onNavigateToArtist(detail.artist) },
+                                    color = if (hasArtistPage(detail.artist)) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                                    modifier = if (hasArtistPage(detail.artist)) {
+                                        Modifier.clickable { onNavigateToArtist(detail.artist) }
+                                    } else Modifier,
                                 )
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -488,11 +492,13 @@ private fun AlbumOptionsSheet(
                 label = "Queue Album",
                 onClick = onQueueAlbum,
             )
-            ContextMenuItem(
-                icon = Icons.Filled.Person,
-                label = "Go to Artist",
-                onClick = onGoToArtist,
-            )
+            if (hasArtistPage(artistName)) {
+                ContextMenuItem(
+                    icon = Icons.Filled.Person,
+                    label = "Go to Artist",
+                    onClick = onGoToArtist,
+                )
+            }
 
             HorizontalDivider(color = ModalDivider, modifier = Modifier.padding(vertical = 4.dp))
 

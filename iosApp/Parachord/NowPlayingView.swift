@@ -72,7 +72,7 @@ final class AppPlayback {
             sourceType: "direct", sourceUrl: url, addedAt: 0,
             resolver: "direct", spotifyUri: nil, soundcloudId: nil,
             spotifyId: nil, appleMusicId: nil, isrc: nil, recordingMbid: nil,
-            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true
+            artistMbid: nil, releaseMbid: nil, crossResolverEnrichedAt: nil, inCollection: true, albumArtist: nil
         )
     }
 }

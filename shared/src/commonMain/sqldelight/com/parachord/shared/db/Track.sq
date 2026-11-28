@@ -74,6 +74,10 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 updateArtworkById:
 UPDATE tracks SET artworkUrl = ? WHERE id = ? AND (artworkUrl IS NULL OR artworkUrl = '');
 
+-- A local file's cover that came from an online lookup (its own is content:// or file://).
+clearLookedUpLocalArtwork:
+UPDATE tracks SET artworkUrl = NULL WHERE resolver = 'localfiles' AND artworkUrl LIKE 'http%';
+
 replaceArtworkUrl:
 UPDATE tracks SET artworkUrl = :fresh WHERE artworkUrl = :dead;
 

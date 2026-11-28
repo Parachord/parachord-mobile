@@ -1,5 +1,6 @@
 package com.parachord.android.ui.screens.discover
 
+import com.parachord.shared.metadata.hasArtistPage
 import com.parachord.android.ui.components.EmptyState
 import com.parachord.android.ui.components.ErrorState
 import com.parachord.shared.ui.icons.AppIcon
@@ -394,7 +395,7 @@ private fun CriticsPickRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 maxLines = 1,
                 overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.hapticClickable(onClick = onArtistClick),
+                modifier = if (hasArtistPage(album.artist)) Modifier.hapticClickable(onClick = onArtistClick) else Modifier,
             )
             if (album.blurb.isNotBlank()) {
                 Spacer(modifier = Modifier.height(4.dp))

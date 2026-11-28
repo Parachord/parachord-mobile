@@ -1989,7 +1989,10 @@ class PlaybackController constructor(
                         .build(),
                     /* handleAudioFocus= */ true,
                 )
-                ctrl.stop()
+                // No ctrl.stop() first: the new item replaces the old one, and
+                // a stopped player is IDLE, which Android Auto answered by
+                // leaving Now Playing at every track change (#848).
+                localItemPending = true
                 // A plugin DRM play waits until it's audible or fails (the
                 // licence comes during load): set before the item goes in.
                 val drmWaiter = if (drmSessionId != null) kotlinx.coroutines.CompletableDeferred<DrmStart>() else null
@@ -4410,6 +4413,33 @@ class PlaybackController constructor(
         Log.d(TAG, "'${current.title}' ended with no Parachord screen showing; keeping the foreground for what plays next")
         foregroundHeldForPlay = true
         return true
+    }
+
+    /**
+     * The next item has been handed to ExoPlayer, which hasn't taken it yet
+     * (the controller's commands reach it a moment later): still ENDED or IDLE
+     * from the last one. Cleared by [onLocalPlayerTookItem].
+     */
+    private var localItemPending = false
+
+    /** ExoPlayer buffers or plays (it has its item), or that item failed. */
+    internal fun onLocalPlayerTookItem() {
+        localItemPending = false
+    }
+
+    /**
+     * The local player is ENDED ([ended]) or IDLE only because one track is
+     * handing over to the next ([isBetweenTracks], #848).
+     */
+    internal fun isBetweenTracks(ended: Boolean): Boolean {
+        val state = stateHolder.state.value
+        val current = state.currentTrack ?: return false
+        return isBetweenTracks(
+            hasTrack = true,
+            waits = needsLoadOnPlay || state.playbackError != null,
+            starting = localItemPending || foregroundTransitionInProgress || heldForListener,
+            endedAndSomethingFollows = ended && somethingFollows(current),
+        )
     }
 
     /**

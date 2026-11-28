@@ -65,6 +65,8 @@ data class ProtocolTrack(
     val durationMs: Long? = null,
     /** The track's cover, when the source carries one. */
     val artworkUrl: String? = null,
+    /** The album's artist, when the track's isn't the album's (`Track.albumArtist`). */
+    val albumArtist: String? = null,
 )
 
 /**
