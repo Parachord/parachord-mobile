@@ -19,6 +19,7 @@ import com.parachord.android.resolver.ResolverManager
 import com.parachord.android.resolver.TrackResolverCache
 import com.parachord.android.resolver.trackKey
 import com.parachord.shared.metadata.SearchArtwork
+import com.parachord.shared.metadata.toTrackEntity
 import com.parachord.shared.search.SearchSession
 import com.parachord.shared.search.SearchState
 import com.parachord.shared.search.asSearchCatalog
@@ -157,18 +158,10 @@ class SearchViewModel constructor(
     }
 
     /** A playable track for a search row, with the cover the row shows. */
-    private fun TrackSearchResult.toPlayable(): TrackEntity = TrackEntity(
-        id = "search-${title.hashCode()}-${artist.hashCode()}",
-        title = title,
-        artist = artist,
-        album = album,
-        duration = duration,
+    private fun TrackSearchResult.toPlayable(): TrackEntity = toTrackEntity(
         artworkUrl = artworkUrl
             ?: session.state.value.art[SearchSession.trackArtKey(title, artist)]
             ?: trackResolverCache.trackArtwork.value[trackKey(title, artist)],
-        spotifyId = spotifyId,
-        recordingMbid = mbid,
-        artistMbid = artistMbid,
     )
 
     /** Save a search history entry when user selects a result. */

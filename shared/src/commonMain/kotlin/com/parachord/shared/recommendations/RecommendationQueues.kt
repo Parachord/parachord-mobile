@@ -162,6 +162,78 @@ sealed class ListenerPlay {
     data class Message(val text: String) : ListenerPlay()
 }
 
+/** What playing any [RecommendationItem] resolves to (shared by phone and car). */
+sealed class RecommendationPlay {
+    data class Play(val queue: CatalogQueue) : RecommendationPlay()
+    data class Message(val text: String) : RecommendationPlay()
+}
+
+/**
+ * Resolves a play action on any [RecommendationItem] (`SONG`, `ALBUM`, `ARTIST`,
+ * weekly `PLAYLIST`, or service `PLAYLIST`) into a playable [CatalogQueue] or a
+ * user-facing message. Shared by the phone Recommendations screen and the car
+ * For You tab so both follow the exact same per-type play rules.
+ */
+suspend fun recommendationItemPlay(
+    row: RecommendationRow,
+    item: RecommendationItem,
+    rowItems: List<RecommendationItem>,
+    albumQueue: suspend (title: String, artist: String) -> CatalogQueue?,
+    artistTopSongs: suspend (artist: String) -> CatalogQueue?,
+    weeklyTracksLoader: suspend (playlistId: String) -> List<LbPlaylistTrack>,
+    servicePlaylistResolver: suspend (url: String) -> ResolvedProtocolPlay?,
+): RecommendationPlay = when (item.type) {
+    RecommendationType.SONG -> {
+        val index = rowItems.indexOf(item)
+        val queue = if (index >= 0) songQueue(rowItems, index, row) else songQueue(listOf(item), 0, row)
+        queue?.let { RecommendationPlay.Play(it) }
+            ?: RecommendationPlay.Message(RecommendationCopy.couldntLoad(item.name))
+    }
+    RecommendationType.ALBUM -> {
+        val queue = try {
+            albumQueue(item.name, item.artist.orEmpty())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        queue?.let { RecommendationPlay.Play(it) }
+            ?: RecommendationPlay.Message(RecommendationCopy.couldntLoad(item.name))
+    }
+    RecommendationType.ARTIST -> {
+        val queue = try {
+            artistTopSongs(item.name)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        queue?.let { RecommendationPlay.Play(it) }
+            ?: RecommendationPlay.Message(RecommendationCopy.couldntLoad(item.name))
+    }
+    RecommendationType.PLAYLIST -> {
+        val weekly = item.weekly
+        if (weekly != null) {
+            val tracks = try {
+                weeklyTracks(weekly, weeklyTracksLoader(weekly.id))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptyList()
+            }
+            if (tracks.isEmpty()) {
+                RecommendationPlay.Message(RecommendationCopy.couldntLoad(item.name))
+            } else {
+                RecommendationPlay.Play(CatalogQueue(tracks, weeklyContext(weekly)))
+            }
+        } else {
+            val queue = servicePlaylistQueue(item, servicePlaylistResolver)
+            queue?.let { RecommendationPlay.Play(it) }
+                ?: RecommendationPlay.Message(RecommendationCopy.couldntLoad(item.name))
+        }
+    }
+}
+
 /** A listener's top tracks as a queue, or the message to show when there are none or they couldn't load. */
 suspend fun listenerPlay(
     service: String,

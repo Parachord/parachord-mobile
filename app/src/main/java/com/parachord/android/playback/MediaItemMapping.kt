@@ -31,11 +31,15 @@ internal fun immersiveAudioExtras(): android.os.Bundle =
  *
  * - `mediaId` is the bare [TrackEntity.id] — matches the existing scheme
  *   that `PlaybackController.playFromQueue()` lookups expect.
- * - `artworkUri` is set only when [TrackEntity.artworkUrl] is non-null;
- *   Auto fetches over HTTPS for remote URIs and accepts `content://` for
- *   local files.
+ * - `artworkUri` is set only when [TrackEntity.artworkUrl] is non-blank, mapped
+ *   through [artworkUriMapper] (in production, [MediaArtworkProvider.uriFor]
+ *   produces a local `content://` URI for AAOS / Android Auto renderers).
  */
-fun TrackEntity.toAutoMediaItem(immersive: Boolean = false): MediaItem {
+fun TrackEntity.toAutoMediaItem(
+    immersive: Boolean = false,
+    artworkData: ByteArray? = null,
+    artworkUriMapper: (String) -> Uri? = { Uri.parse(it) },
+): MediaItem {
     val builder = MediaMetadata.Builder()
         .setTitle(title)
         .setSubtitle(artist)
@@ -44,7 +48,12 @@ fun TrackEntity.toAutoMediaItem(immersive: Boolean = false): MediaItem {
         .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
         .setIsPlayable(true)
         .setIsBrowsable(false)
-    artworkUrl?.let { builder.setArtworkUri(Uri.parse(it)) }
+    artworkUrl?.takeIf { it.isNotBlank() }?.let { artworkUriMapper(it) }?.let { builder.setArtworkUri(it) }
+    // Embedded artwork bytes populate METADATA_KEY_ALBUM_ART for controllers
+    // that read the compat bitmap directly (Bluetooth AVRCP, legacy clients);
+    // AAOS's car-media-common (Templates Host + CarLauncher) reads the local
+    // content:// artworkUri supplied by MediaArtworkProvider instead.
+    artworkData?.let { builder.setArtworkData(it) }
     if (immersive) builder.setExtras(immersiveAudioExtras())
     return MediaItem.Builder()
         .setMediaId(id)

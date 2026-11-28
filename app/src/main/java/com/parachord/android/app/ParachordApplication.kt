@@ -32,6 +32,10 @@ class ParachordApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         registerActivityLifecycleCallbacks(CurrentActivityHolder)
+        // On a car with the media templates host, make the CAL drive app the
+        // launcher entry (and the home-screen media card's tap-out). No-op on
+        // phones and older AAOS cars. Runs every start; idempotent.
+        com.parachord.android.car.cal.CarLauncherMode.apply(this)
         startKoin {
             androidContext(this@ParachordApplication)
             modules(sharedModule, androidModule)

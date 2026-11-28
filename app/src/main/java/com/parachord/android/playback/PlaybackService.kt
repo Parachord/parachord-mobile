@@ -175,7 +175,36 @@ class PlaybackService : MediaLibraryService() {
     private var currentArtworkUrl: String? = null
     private var currentArtworkBitmap: Bitmap? = null
 
+    /**
+     * The playing track's artwork as compact 256px JPEG bytes (url → bytes),
+     * published into the session's [androidx.media3.common.MediaMetadata] for
+     * Bluetooth AVRCP and legacy controllers that read `METADATA_KEY_ALBUM_ART`,
+     * while pre-warming [MediaArtworkProvider]'s disk cache for AAOS's
+     * `content://` `ALBUM_ART_URI` path. Written by the artwork observer below
+     * ([queueSnapshotJob]'s combine re-emits when it changes).
+     */
+    private val sessionArtworkData = kotlinx.coroutines.flow.MutableStateFlow<Pair<String?, ByteArray?>>(null to null)
+
     companion object {
+        private val _sessionCompatTokenFlow =
+            kotlinx.coroutines.flow.MutableStateFlow<android.support.v4.media.session.MediaSessionCompat.Token?>(null)
+
+        /**
+         * Reactive stream of the service's compat session token. Observed by
+         * `CalMediaSession` so session recreation or service restarts always
+         * re-register the active token with `MediaPlaybackManager`.
+         */
+        val sessionCompatTokenFlow: kotlinx.coroutines.flow.StateFlow<android.support.v4.media.session.MediaSessionCompat.Token?> =
+            _sessionCompatTokenFlow
+
+        /**
+         * The service's session as a compat token — set when the session is
+         * built and cleared in [onDestroy].
+         */
+        @Volatile
+        var sessionCompatToken: android.support.v4.media.session.MediaSessionCompat.Token? = null
+            private set
+
         private const val TAG = "PlaybackService"
         private const val NOTIFICATION_ID = 1337
         private const val CHANNEL_ID = "parachord_playback"
@@ -339,11 +368,19 @@ class PlaybackService : MediaLibraryService() {
         // external playback, the system media controls (notification shade,
         // lock screen) show correct progress and artwork instead of the
         // internal silence loop state.
-        val wrapper = ExternalPlaybackForwardingPlayer(exoPlayer, playbackController, stateHolder)
+        val wrapper = ExternalPlaybackForwardingPlayer(
+            delegate = exoPlayer,
+            playbackController = playbackController,
+            stateHolder = stateHolder,
+            artworkUriMapper = { url -> MediaArtworkProvider.uriFor(packageName, url) },
+        )
         forwardingPlayer = wrapper
 
         mediaSession = MediaLibrarySession.Builder(this, wrapper, LibraryCallback())
             .build()
+        val compatToken = mediaSession?.sessionCompatToken
+        sessionCompatToken = compatToken
+        _sessionCompatTokenFlow.value = compatToken
 
         // Unified notification provider — same look for ExoPlayer and external playback.
         setMediaNotificationProvider(UnifiedMediaNotificationProvider())
@@ -431,6 +468,35 @@ class PlaybackService : MediaLibraryService() {
                 }
         }
 
+        // Pre-warm MediaArtworkProvider's disk cache for the playing track's
+        // cover and publish the JPEG bytes onto the session's MediaMetadata.
+        // AAOS's car-media-common (Templates Host + CarLauncher) reads the
+        // content:// artworkUri through MediaArtworkProvider.openFile (sharing
+        // this cache and its per-key in-flight lock so only one fetch runs),
+        // while Bluetooth AVRCP and legacy clients read the embedded bitmap.
+        serviceScope.launch {
+            combine(stateHolder.state, trackResolverCache.trackArtwork) { state, art ->
+                state.effectiveArtwork(art)
+            }
+                .distinctUntilChanged()
+                .collectLatest { url ->
+                    if (url == null) {
+                        sessionArtworkData.value = null to null
+                        return@collectLatest
+                    }
+                    val bytes = withContext(Dispatchers.IO) {
+                        try {
+                            MediaArtworkProvider.getOrFetchEmbeddedBytes(this@PlaybackService, url)
+                        } catch (e: kotlinx.coroutines.CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            null
+                        }
+                    }
+                    sessionArtworkData.value = url to bytes
+                }
+        }
+
         // The car shows the covers the phone does (#551): the current track's
         // by effectiveArtwork (the streaming service's cover, the track's own,
         // then its resolved sources'), the queue's by carArtworkFor. A spinoff
@@ -442,21 +508,33 @@ class PlaybackService : MediaLibraryService() {
                 queueManager.snapshot,
                 stateHolder.state,
                 trackResolverCache.trackArtwork,
-            ) { qs, state, trackArtwork ->
+                sessionArtworkData,
+            ) { qs, state, trackArtwork, artworkData ->
                 // The phone's Now Playing: the service's reported title, artist
                 // and cover over the queued track (#721), so the car never shows
                 // one song's names with another's cover.
                 val current = state.effectiveTrack?.let { it.copy(artworkUrl = state.effectiveArtwork(trackArtwork)) }
-                Triple(
+                listOf(
                     current,
                     qs.upNext.map { it.copy(artworkUrl = carArtworkFor(it, trackArtwork)) },
                     // A Dolby Atmos mix playing: the car leaves its own sound effects out.
                     com.parachord.shared.playback.drm.isImmersiveQuality(state.playingQualityLabel),
+                    // Compact embedded artwork bytes (url → 256px JPEG) for
+                    // Bluetooth AVRCP / legacy bitmap readers (AAOS reads the
+                    // local content:// artworkUri from MediaArtworkProvider).
+                    artworkData,
                 )
             }
                 .distinctUntilChanged()
-                .collect { (current, upNext, immersive) ->
-                    wrapper.updateQueueSnapshot(currentTrack = current, upNext = upNext, currentImmersive = immersive)
+                .collect { parts ->
+                    @Suppress("UNCHECKED_CAST")
+                    val artworkData = parts[3] as Pair<String?, ByteArray?>?
+                    wrapper.updateQueueSnapshot(
+                        currentTrack = parts[0] as com.parachord.shared.model.Track?,
+                        upNext = parts[1] as List<com.parachord.shared.model.Track>,
+                        currentImmersive = parts[2] as Boolean,
+                        currentArtworkData = artworkData,
+                    )
                 }
         }
     }
@@ -789,9 +867,12 @@ class PlaybackService : MediaLibraryService() {
          */
         private fun grantArtworkUriPermissions(items: List<MediaItem>, browserPackage: String) {
             var granted = 0
+            val fileProviderAuthority = "$packageName.fileprovider"
             items.forEach { item ->
                 val uri = item.mediaMetadata.artworkUri ?: return@forEach
-                if (uri.scheme != "content") return@forEach
+                // Only FileProvider URIs need per-package grants; MediaArtworkProvider
+                // is exported read-only so any car host / launcher can read it directly.
+                if (uri.scheme != "content" || uri.authority != fileProviderAuthority) return@forEach
                 try {
                     grantUriPermission(
                         browserPackage, uri,
@@ -970,7 +1051,7 @@ class PlaybackService : MediaLibraryService() {
                 .setIsBrowsable(false)
                 .setIsPlayable(true)
                 .setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                .apply { r.artworkUrl?.let { setArtworkUri(Uri.parse(it)) } }
+                .apply { autoArtworkUri(r.artworkUrl)?.let { setArtworkUri(it) } }
                 .build()
             val mediaId = "$SEARCH_TRACK_PREFIX$index"
             browseTileMetadata[mediaId] = r.title to r.artist
@@ -1014,19 +1095,17 @@ class PlaybackService : MediaLibraryService() {
         }
 
         /**
-         * Resolve a playlist's stored artworkUrl into a URI Android Auto can
-         * actually render. http(s)/content:// pass through. A local mosaic
-         * (`file:/…/playlist_mosaics/…`) lives in our private filesDir, which
-         * the Auto process can't read — bridge it to a `content://` FileProvider
-         * URI (Media3 grants the controller read permission). Returns null when
-         * a local mosaic file is missing/unreadable (better no art than a broken
-         * URI). The app's own in-app rendering keeps using the stored file URI —
-         * this conversion is Auto-surface only.
+         * Resolve a stored artworkUrl into a local `content://` URI car hosts
+         * and launchers can render. Local playlist mosaics (`file:/…/playlist_mosaics/…`)
+         * bridge through our FileProvider with an mtime cache-buster; all other
+         * URLs (HTTPS covers, local MediaStore art) route through
+         * [MediaArtworkProvider]. Returns null when a local mosaic file is
+         * missing/unreadable.
          */
         private fun autoArtworkUri(stored: String?): Uri? {
             if (stored.isNullOrBlank()) return null
             val mosaicName = mosaicFileNameFromStored(stored)
-                ?: return Uri.parse(stored) // http(s)/content:// — Auto-usable as-is
+                ?: return MediaArtworkProvider.uriFor(packageName, stored)
             return try {
                 val file = java.io.File(java.io.File(filesDir, "playlist_mosaics"), mosaicName)
                 if (!file.exists()) null
@@ -1047,8 +1126,8 @@ class PlaybackService : MediaLibraryService() {
         }
 
         /**
-         * A shared [CarItem] as a Media3 item. Playlist and playlist-track art
-         * goes through [autoArtworkUri]; a loved song's art URL is used as is.
+         * A shared [CarItem] as a Media3 item. Every tile's artwork goes through
+         * [autoArtworkUri] so AAOS / Android Auto receive local `content://` URIs.
          * Records [browseTileMetadata] for playable and playlist tiles so the
          * now-playing card shows the real title/artist on dispatch (Auto sends
          * back a bare mediaId).
@@ -1072,11 +1151,7 @@ class PlaybackService : MediaLibraryService() {
                     item.subtitle?.let { builder.setArtist(it) }
                     item.album?.let { builder.setAlbumTitle(it) }
                     builder.setMediaType(MediaMetadata.MEDIA_TYPE_MUSIC)
-                    if (item.id.startsWith(CarIds.lovedTrack(""))) {
-                        item.artworkUrl?.let { builder.setArtworkUri(Uri.parse(it)) }
-                    } else {
-                        autoArtworkUri(item.artworkUrl)?.let { builder.setArtworkUri(it) }
-                    }
+                    autoArtworkUri(item.artworkUrl)?.let { builder.setArtworkUri(it) }
                     browseTileMetadata[item.id] = item.title to item.subtitle
                 }
             }
@@ -1148,6 +1223,8 @@ class PlaybackService : MediaLibraryService() {
         playbackController.carConnections.clear()
         spotifyHandler.disconnect()
         isExternalForeground = false
+        sessionCompatToken = null
+        _sessionCompatTokenFlow.value = null
         mediaSession?.run {
             player.release()
             release()
@@ -1169,13 +1246,13 @@ class PlaybackService : MediaLibraryService() {
                 val track = state.effectiveTrack ?: return@collectLatest
                 val title = track.title
                 val artist = track.artist ?: ""
-                val artworkUrl = track.artworkUrl
+                val artworkKey = MediaArtworkProvider.uriFor(packageName, track.artworkUrl)?.toString()
 
                 // Load artwork if URL changed
-                if (artworkUrl != currentArtworkUrl) {
-                    currentArtworkUrl = artworkUrl
-                    currentArtworkBitmap = if (artworkUrl != null) {
-                        fetchArtworkBitmap(artworkUrl)
+                if (artworkKey != currentArtworkUrl) {
+                    currentArtworkUrl = artworkKey
+                    currentArtworkBitmap = if (artworkKey != null) {
+                        fetchArtworkBitmap(artworkKey)
                     } else null
                 }
 
@@ -1341,8 +1418,9 @@ class PlaybackService : MediaLibraryService() {
                 NOTIFICATION_ID,
                 buildNotification(title, artist, true, currentArtworkBitmap),
             )
-            // Kick off artwork load if needed
-            if (artworkUrl != currentArtworkUrl) {
+            // Kick off artwork load if needed (compare mapped content:// keys)
+            val artworkKey = MediaArtworkProvider.uriFor(packageName, artworkUrl)?.toString()
+            if (artworkKey != currentArtworkUrl) {
                 loadArtworkAndUpdateNotification(title, artist, artworkUrl)
             }
             return
@@ -1372,14 +1450,15 @@ class PlaybackService : MediaLibraryService() {
     }
 
     private fun loadArtworkAndUpdateNotification(title: String, artist: String, artworkUrl: String?) {
-        currentArtworkUrl = artworkUrl
-        if (artworkUrl == null) {
+        val artworkKey = MediaArtworkProvider.uriFor(packageName, artworkUrl)?.toString()
+        currentArtworkUrl = artworkKey
+        if (artworkKey == null) {
             currentArtworkBitmap = null
             return
         }
         serviceScope.launch {
-            val bitmap = fetchArtworkBitmap(artworkUrl)
-            if (currentArtworkUrl == artworkUrl) {
+            val bitmap = fetchArtworkBitmap(artworkKey)
+            if (currentArtworkUrl == artworkKey) {
                 currentArtworkBitmap = bitmap
                 if (isExternalForeground) {
                     val nm = getSystemService(NotificationManager::class.java)
@@ -1509,12 +1588,8 @@ class PlaybackService : MediaLibraryService() {
 
     private suspend fun fetchArtworkBitmap(url: String): Bitmap? = withContext(Dispatchers.IO) {
         try {
-            val connection = URL(url).openConnection()
-            connection.connectTimeout = 5_000
-            connection.readTimeout = 5_000
-            val stream = connection.getInputStream()
-            val original = BitmapFactory.decodeStream(stream)
-            stream.close()
+            val file = MediaArtworkProvider.getOrFetchFile(this@PlaybackService, url) ?: return@withContext null
+            val original = BitmapFactory.decodeFile(file.path)
             if (original != null && (original.width > ARTWORK_SIZE || original.height > ARTWORK_SIZE)) {
                 Bitmap.createScaledBitmap(original, ARTWORK_SIZE, ARTWORK_SIZE, true).also {
                     if (it !== original) original.recycle()
@@ -1522,8 +1597,10 @@ class PlaybackService : MediaLibraryService() {
             } else {
                 original
             }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
         } catch (e: Exception) {
-            Log.w(TAG, "Failed to fetch notification artwork: $url", e)
+            Log.w(TAG, "Failed to fetch notification artwork: ${com.parachord.shared.api.SecretRedaction.redactSecrets(url)}", e)
             null
         }
     }
@@ -1623,6 +1700,7 @@ class PlaybackService : MediaLibraryService() {
         private val delegate: ExoPlayer,
         private val playbackController: PlaybackController,
         private val stateHolder: PlaybackStateHolder,
+        private val artworkUriMapper: (String) -> Uri? = { Uri.parse(it) },
     ) : ForwardingPlayer(delegate) {
 
         /** When true, next/prev commands are available and routed to PlaybackController. */
@@ -2176,7 +2254,12 @@ class PlaybackService : MediaLibraryService() {
          * warning log) to avoid clobbering the snapshot mid-dispatch. Auto's
          * typical usage doesn't trigger this; the guard is defensive.
          */
-        fun updateQueueSnapshot(currentTrack: TrackEntity?, upNext: List<TrackEntity>, currentImmersive: Boolean = false) {
+        fun updateQueueSnapshot(
+            currentTrack: TrackEntity?,
+            upNext: List<TrackEntity>,
+            currentImmersive: Boolean = false,
+            currentArtworkData: Pair<String?, ByteArray?>? = null,
+        ) {
             if (dispatching) {
                 Log.w(TAG, "updateQueueSnapshot called re-entrantly from a listener callback; ignoring inner call to avoid clobbering snapshot state")
                 return
@@ -2217,7 +2300,17 @@ class PlaybackService : MediaLibraryService() {
                     emptyList()
                 }
                 val immersive = currentTrack != null && currentImmersive
-                val items = combined.mapIndexed { i, t -> t.toAutoMediaItem(immersive = i == 0 && immersive) }
+                val items = combined.mapIndexed { i, t ->
+                    // The current track's artwork rides as embedded bytes when the
+                    // fetched artwork is for this track's URL, alongside the local
+                    // content:// artworkUri from MediaArtworkProvider.
+                    val data = currentArtworkData?.takeIf { it.first == t.artworkUrl && i == 0 }?.second
+                    t.toAutoMediaItem(
+                        immersive = i == 0 && immersive,
+                        artworkData = data,
+                        artworkUriMapper = artworkUriMapper,
+                    )
+                }
                 val durationsUs = LongArray(combined.size) { i ->
                     val durMs = combined[i].duration ?: 0L
                     if (durMs > 0L) durMs * 1000L else C.TIME_UNSET
@@ -2448,9 +2541,8 @@ internal fun <T> pageOf(items: List<T>, page: Int, pageSize: Int): List<T> {
  * If [stored] is a local playlist-mosaic artwork URL — a file URI into our
  * private `filesDir/playlist_mosaics/` (handles both `file:/…` and `file:///…`
  * forms) — return the bare mosaic file name with any cache-bust query stripped.
- * Otherwise null: http(s) and content:// artwork are usable by Android Auto
- * as-is and don't need bridging through a FileProvider. Pure + unit-tested;
- * the FileProvider lookup itself lives in PlaybackService.autoArtworkUri.
+ * Otherwise null (other URLs are bridged through [MediaArtworkProvider] in
+ * `PlaybackService.autoArtworkUri`). Pure + unit-tested.
  */
 internal fun mosaicFileNameFromStored(stored: String?): String? =
     com.parachord.shared.metadata.PlaylistMosaicPaths.fileName(stored)

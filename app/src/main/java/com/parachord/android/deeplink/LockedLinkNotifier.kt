@@ -10,7 +10,7 @@ import android.net.Uri
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.parachord.android.R
-import com.parachord.android.ui.MainActivity
+import com.parachord.android.ui.ParachordActivity
 import com.parachord.shared.deeplink.DeepLinkAction
 
 /**
@@ -44,7 +44,7 @@ class LockedLinkNotifier(private val context: Context) {
                 description = "A link that arrived while the phone was locked"
             },
         )
-        val open = Intent(Intent.ACTION_VIEW, uri, context, MainActivity::class.java)
+        val open = Intent(Intent.ACTION_VIEW, uri, context, ParachordActivity::class.java)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
         val pending = PendingIntent.getActivity(
             context, NOTIFICATION_ID, open,

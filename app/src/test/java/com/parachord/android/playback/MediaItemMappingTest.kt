@@ -39,4 +39,20 @@ class MediaItemMappingTest {
         val item = track.toAutoMediaItem()
         assertNull(item.mediaMetadata.artworkUri)
     }
+
+    @Test fun `toAutoMediaItem maps artwork URL through custom mapper`() {
+        val track = Track(
+            id = "t",
+            title = "T",
+            artist = "A",
+            album = "B",
+            artworkUrl = "https://example.com/art.jpg",
+        )
+        val item = track.toAutoMediaItem(
+            artworkUriMapper = { url -> MediaArtworkProvider.uriFor("com.parachord.android", url) },
+        )
+        val expected = MediaArtworkProvider.uriFor("com.parachord.android", "https://example.com/art.jpg")
+        assertEquals(expected, item.mediaMetadata.artworkUri)
+        assertEquals("content", item.mediaMetadata.artworkUri?.scheme)
+    }
 }

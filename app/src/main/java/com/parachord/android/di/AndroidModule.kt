@@ -1508,6 +1508,25 @@ val androidModule = module {
     viewModelOf(::PopOfTheTopsViewModel)
     viewModelOf(::ConcertsViewModel)
     viewModelOf(::SyncViewModel)
+
+    // ── Android Automotive (AAOS) ───────────────────────────────────
+
+    // Cover art for the CAL rows, loaded through the app's Coil ImageLoader.
+    single { com.parachord.android.car.cal.CalArt() }
+
+    // The CAL media templates bridge: every template tap plays through it (the
+    // shared queues), and it registers the Media3 session token with the host.
+    single {
+        com.parachord.android.car.cal.CalPlaybackBridge(
+            playbackController = get(),
+            stateHolder = get(),
+            carBrowse = get(),
+            libraryRepository = get(),
+            metadataService = get(),
+            weeklyPlaylistsRepository = get(),
+            providerPlaylistResolver = get(),
+        )
+    }
     viewModelOf(::PlaylistSyncChannelsViewModel)
     single { com.parachord.android.deeplink.LockedLinkNotifier(androidContext()) }
     viewModelOf(::DeepLinkViewModel)

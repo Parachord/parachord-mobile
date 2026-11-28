@@ -90,7 +90,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+/**
+ * Concrete main Activity for the full Parachord UI. The manifest keeps the
+ * phone launcher `<activity-alias>` named `.ui.MainActivity` pointing here so
+ * existing phone home-screen shortcuts survive updates while `CarLauncherMode`
+ * can disable that alias on AAOS without disabling this Activity.
+ */
+class ParachordActivity : ComponentActivity() {
 
     private val oAuthManager: OAuthManager by inject()
     private val musicKitBridge: MusicKitWebBridge by inject()
@@ -375,7 +381,7 @@ private fun ParachordAppContent(mainViewModel: MainViewModel) {
     // Wire the listen-along stopper for the protocol-play teardown (#120).
     // Process pending deep links from the Activity (intent handling).
     // The Activity stores the URI; the composable-scoped ViewModel processes it.
-    val activity = context as? MainActivity
+    val activity = context as? ParachordActivity
     LaunchedEffect(Unit) {
         activity?.pendingDeepLink?.collect { uri ->
             if (uri != null) {

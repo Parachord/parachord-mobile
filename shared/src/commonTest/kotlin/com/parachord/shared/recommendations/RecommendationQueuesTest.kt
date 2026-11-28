@@ -4,6 +4,7 @@ import com.parachord.shared.api.LbPlaylistTrack
 import com.parachord.shared.deeplink.ProtocolTrack
 import com.parachord.shared.deeplink.ResolvedProtocolPlay
 import com.parachord.shared.model.Track
+import com.parachord.shared.playback.CatalogQueue
 import com.parachord.shared.playback.PlaybackContext
 import com.parachord.shared.playback.SERVICE_PLAYLIST_CONTEXT
 import kotlinx.coroutines.test.runTest
@@ -208,5 +209,85 @@ class RecommendationQueuesTest {
         assertTrue(a.startsWith("rec-"))
         assertTrue(a != recommendedPlaylistKey("https://music.apple.com/us/playlist/pl.2"))
         assertEquals(recommendedPlaylistKey("https://open.spotify.com/playlist/X"), recommendedPlaylistKey("spotify:playlist:X"))
+    }
+
+    @Test
+    fun `recommendationItemPlay dispatches song album artist weekly and service playlist`() = runTest {
+        val sampleTrack = Track(id = "t1", title = "Song", artist = "Band")
+        val albumQ = CatalogQueue(listOf(sampleTrack), PlaybackContext("album", "Record", "Band"))
+        val artistQ = CatalogQueue(listOf(sampleTrack), PlaybackContext("artist", "Band", "Band"))
+        val songItem = RecommendationItem(id = "s1", type = RecommendationType.SONG, name = "Song", artist = "Band")
+        val albumItem = RecommendationItem(id = "a1", type = RecommendationType.ALBUM, name = "Record", artist = "Band")
+        val artistItem = RecommendationItem(id = "r1", type = RecommendationType.ARTIST, name = "Band")
+        val weeklyItem = RecommendationItem(
+            id = "w1",
+            type = RecommendationType.PLAYLIST,
+            name = "Weekly Exploration",
+            weekly = WeeklyInfo(id = "wk-1", contextType = "weekly-exploration", label = "Weekly Exploration", weekLabel = "This Week"),
+        )
+        val serviceItem = RecommendationItem(
+            id = "p1",
+            type = RecommendationType.PLAYLIST,
+            name = "Mix",
+            url = "https://open.spotify.com/playlist/abc",
+        )
+        val row = RecommendationRow(key = "row", title = "For You", type = RecommendationType.SONG, items = listOf(songItem))
+
+        suspend fun run(item: RecommendationItem, items: List<RecommendationItem> = emptyList()) =
+            recommendationItemPlay(
+                row = row,
+                item = item,
+                rowItems = items,
+                albumQueue = { _, _ -> albumQ },
+                artistTopSongs = { artistQ },
+                weeklyTracksLoader = { listOf(LbPlaylistTrack(id = "lb1", title = "Song", artist = "Band")) },
+                servicePlaylistResolver = {
+                    ResolvedProtocolPlay(
+                        displayName = "Mix",
+                        tracks = listOf(ProtocolTrack(title = "Song", artist = "Band")),
+                        providerId = "spotify",
+                    )
+                },
+            )
+
+        assertTrue(run(songItem, listOf(songItem)) is RecommendationPlay.Play)
+        assertEquals(RecommendationPlay.Play(albumQ), run(albumItem))
+        assertEquals(RecommendationPlay.Play(artistQ), run(artistItem))
+        val weeklyRes = run(weeklyItem) as RecommendationPlay.Play
+        assertEquals("weekly-exploration", weeklyRes.queue.context.type)
+        val svcRes = run(serviceItem) as RecommendationPlay.Play
+        assertEquals("service-playlist", svcRes.queue.context.type)
+    }
+
+    @Test
+    fun `recommendationItemPlay turns exceptions into couldntLoad messages`() = runTest {
+        val row = RecommendationRow(key = "row", title = "For You", type = RecommendationType.ALBUM, items = emptyList())
+        suspend fun runFailing(item: RecommendationItem) = recommendationItemPlay(
+            row = row,
+            item = item,
+            rowItems = emptyList(),
+            albumQueue = { _, _ -> error("boom") },
+            artistTopSongs = { error("boom") },
+            weeklyTracksLoader = { error("boom") },
+            servicePlaylistResolver = { error("boom") },
+        )
+
+        val albumMsg = runFailing(RecommendationItem(id = "a", type = RecommendationType.ALBUM, name = "A", artist = "B"))
+        assertEquals(RecommendationPlay.Message(RecommendationCopy.couldntLoad("A")), albumMsg)
+        val artistMsg = runFailing(RecommendationItem(id = "r", type = RecommendationType.ARTIST, name = "R"))
+        assertEquals(RecommendationPlay.Message(RecommendationCopy.couldntLoad("R")), artistMsg)
+        val weeklyMsg = runFailing(
+            RecommendationItem(
+                id = "w",
+                type = RecommendationType.PLAYLIST,
+                name = "W",
+                weekly = WeeklyInfo(id = "wk", contextType = "weekly-exploration", label = "W", weekLabel = "This Week"),
+            ),
+        )
+        assertEquals(RecommendationPlay.Message(RecommendationCopy.couldntLoad("W")), weeklyMsg)
+        val svcMsg = runFailing(
+            RecommendationItem(id = "p", type = RecommendationType.PLAYLIST, name = "P", url = "https://example.com/p"),
+        )
+        assertEquals(RecommendationPlay.Message(RecommendationCopy.couldntLoad("P")), svcMsg)
     }
 }
