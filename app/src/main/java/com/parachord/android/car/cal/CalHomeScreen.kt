@@ -19,11 +19,11 @@ import androidx.core.graphics.drawable.IconCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.parachord.android.R
-import com.parachord.android.data.repository.LibraryRepository
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.android.ui.ParachordActivity
-import com.parachord.shared.format.countOf
-import com.parachord.shared.model.Playlist
+import com.parachord.shared.car.CarBrowse
+import com.parachord.shared.car.CarIds
+import com.parachord.shared.car.CarItem
 import com.parachord.shared.recommendations.RecommendationPageBlock
 import com.parachord.shared.recommendations.recommendationPageLayout
 import com.parachord.shared.repository.HistoryMixesRepository
@@ -37,22 +37,22 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.drop
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import org.koin.core.context.GlobalContext
 
 /**
- * The car home as a `TabTemplate`: Library (Collection Radio, Loved Songs, and
- * saved playlists), For You (the shared recommendations page as sections), Now
- * Playing (pushes `MediaPlaybackTemplate`), and Search (`SearchTemplate`). The
- * host renders the tabs and enforces distraction compliance; every tap plays
- * through the shared queues — the same ones the phone Home and Android Auto
- * play.
+ * The car home as a `TabTemplate`:
+ * - **Library**: draws the shared [CarBrowse] root (`Playlists`, `Loved Songs`,
+ *   `Collection Radio`) — identical titles, order, and drill-down behavior to
+ *   Android Auto and CarPlay — plus the parked-only "Open Parachord" row.
+ * - **For You**: the shared recommendations page as sections.
+ * - **Now Playing**: pushes `MediaPlaybackTemplate`.
+ * - **Search**: pushes `SearchTemplate`.
  */
 class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
-    private val libraryRepository: LibraryRepository by lazy { GlobalContext.get().get() }
+    private val carBrowse: CarBrowse by lazy { GlobalContext.get().get() }
     private val recommendationsRepository: RecommendationsRepository by lazy { GlobalContext.get().get() }
     private val historyMixesRepository: HistoryMixesRepository by lazy { GlobalContext.get().get() }
     private val playback: CalPlaybackBridge by lazy { GlobalContext.get().get() }
@@ -60,7 +60,8 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     private val stateHolder: PlaybackStateHolder by lazy { GlobalContext.get().get() }
 
     private var activeTabId = TAB_LIBRARY
-    private var playlists: List<Playlist> = emptyList()
+    private var rootItems: List<CarItem> = emptyList()
+    private var libraryLoaded = false
     private var libraryJob: Job? = null
     private var recommendationsJob: Job? = null
     private var activeTabArtworkUrls: Set<String> = emptySet()
@@ -125,7 +126,7 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             .setHeaderAction(Action.APP_ICON)
             .addTab(
                 Tab.Builder().setTitle("Library").setContentId(TAB_LIBRARY)
-                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_launcher_foreground)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_car_library)).build())
                     .build(),
             )
             .addTab(
@@ -135,12 +136,12 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             )
             .addTab(
                 Tab.Builder().setTitle("Now Playing").setContentId(TAB_NOW_PLAYING)
-                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, android.R.drawable.ic_media_play)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_car_play)).build())
                     .build(),
             )
             .addTab(
                 Tab.Builder().setTitle("Search").setContentId(TAB_SEARCH)
-                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, android.R.drawable.ic_menu_search)).build())
+                    .setIcon(CarIcon.Builder(IconCompat.createWithResource(carContext, R.drawable.ic_car_search)).build())
                     .build(),
             )
             .setTabContents(
@@ -155,59 +156,37 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
             .build()
     }
 
-    // ── Library tab ──────────────────────────────────────────────────
+    // ── Library tab (shared CarBrowse root) ──────────────────────────
 
     private fun libraryTemplate(): Template {
         // Reserve 1 slot for the "Open Parachord" row in settingsSection().
         val limit = (carListLimit(carContext) - 1).coerceAtLeast(1)
         val shownUrls = HashSet<String>()
-        var remaining = limit
         val library = RowSection.Builder()
             .setTitle("Library")
             .apply {
-                if (remaining > 0) {
+                rootItems.take(limit).forEach { item ->
                     addItem(
-                        Row.Builder()
-                            .setTitle("Collection Radio")
-                            .addText("Everything you have, shuffled")
-                            .setOnClickListener { playback.playCollectionRadio() }
-                            .build(),
-                    )
-                    remaining--
-                }
-                if (remaining > 0) {
-                    addItem(
-                        Row.Builder()
-                            .setTitle("Loved Songs")
-                            .addText("Your collection")
-                            .setImage(
-                                CarIcon.Builder(
-                                    IconCompat.createWithResource(carContext, R.drawable.ic_auto_heart_filled),
-                                ).build(),
-                            )
-                            .setOnClickListener { playback.playLovedSongs() }
-                            .build(),
-                    )
-                    remaining--
-                }
-                playlists.take(remaining).forEach { playlist ->
-                    val artworkUrl = playlist.artworkUrl
-                    if (!artworkUrl.isNullOrBlank()) {
-                        shownUrls.add(artworkUrl)
-                        art.load(carContext, artworkUrl)
-                    }
-                    val safeTitle = playlist.name.ifBlank { "Untitled playlist" }
-                    addItem(
-                        Row.Builder()
-                            .setTitle(safeTitle)
-                            .addText(countOf(playlist.trackCount, "track"))
-                            .setImageWhenReady(art.icon(artworkUrl))
-                            .setOnClickListener { playback.playPlaylist(playlist.id, safeTitle) }
-                            .build(),
+                        carBrowseItemRow(
+                            carContext = carContext,
+                            item = item,
+                            art = art,
+                            shownUrls = shownUrls,
+                            onBrowse = { child ->
+                                screenManager.push(
+                                    CalBrowseScreen(
+                                        carContext = carContext,
+                                        parentId = child.id,
+                                        title = child.title.ifBlank { "Library" },
+                                    ),
+                                )
+                            },
+                            onPlay = { child -> playback.playCarItem(child.id) },
+                        ),
                     )
                 }
             }
-            .setNoItemsMessage("No playlists yet")
+            .setNoItemsMessage(if (!libraryLoaded) "Loading…" else "Nothing here yet")
             .build()
         activeTabArtworkUrls = shownUrls
         return SectionedItemTemplate.Builder()
@@ -226,10 +205,7 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
                     .addText("Settings and setup — parked")
                     .setImage(
                         CarIcon.Builder(
-                            IconCompat.createWithResource(
-                                carContext,
-                                android.R.drawable.ic_menu_preferences,
-                            ),
+                            IconCompat.createWithResource(carContext, R.drawable.ic_car_settings),
                         ).build(),
                     )
                     .setOnClickListener {
@@ -324,13 +300,14 @@ class CalHomeScreen(carContext: CarContext) : Screen(carContext) {
     private fun loadLibrary() {
         if (libraryJob?.isActive == true) return
         libraryJob = scope.launch {
-            try {
-                playlists = libraryRepository.getAllPlaylists().first()
+            rootItems = try {
+                carBrowse.children(CarIds.ROOT)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                playlists = emptyList()
+                emptyList()
             }
+            libraryLoaded = true
             if (activeTabId == TAB_LIBRARY) invalidate()
         }
     }

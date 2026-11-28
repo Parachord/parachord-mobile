@@ -37,12 +37,25 @@ class CalCarAppService : CarAppService() {
         if (BuildConfig.DEBUG) {
             HostValidator.ALLOW_ALL_HOSTS_VALIDATOR
         } else {
+            // Allow only the AAOS media templates host (omitting projected
+            // Android Auto's gearhead until Auto's stricter 2-action header
+            // and 6-item list caps are adapted).
             HostValidator.Builder(applicationContext)
-                .addAllowedHosts(androidx.car.app.R.array.hosts_allowlist_sample)
+                .addAllowedHost(AAOS_TEMPLATES_HOST_PACKAGE, AAOS_HOST_CERT_1)
+                .addAllowedHost(AAOS_TEMPLATES_HOST_PACKAGE, AAOS_HOST_CERT_2)
+                .addAllowedHost(AAOS_TEMPLATES_HOST_PACKAGE, AAOS_HOST_CERT_3)
                 .build()
         }
 
     override fun onCreateSession(): Session = CalMediaSession()
+
+    private companion object {
+        const val AAOS_TEMPLATES_HOST_PACKAGE = "com.google.android.apps.automotive.templates.host"
+        // Official signing digests from androidx.car.app hosts_allowlist_sample.
+        const val AAOS_HOST_CERT_1 = "c241ffbc8e287c4e9a4ad19632ba1b1351ad361d5177b7d7b29859bd2b7fc631"
+        const val AAOS_HOST_CERT_2 = "dd66deaf312d8daec7adbe85a218ecc8c64f3b152f9b5998d5b29300c2623f61"
+        const val AAOS_HOST_CERT_3 = "50e603d333c6049a37bd751375d08f3bd0abebd33facd30bd17b64b89658b421"
+    }
 }
 
 /**

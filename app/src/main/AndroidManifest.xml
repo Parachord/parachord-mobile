@@ -83,7 +83,7 @@
         <!--
             OAuth redirect receiver. Dedicated activity with noHistory="true"
             and Theme.NoDisplay so Chrome Custom Tabs auto-close when the
-            callback fires. Forwards the redirect URI to MainActivity.
+            callback fires. Forwards focus back to ParachordActivity.
         -->
         <activity
             android:name=".auth.OAuthRedirectActivity"
@@ -94,7 +94,7 @@
             android:taskAffinity=""
             android:theme="@android:style/Theme.NoDisplay">
             <!--
-                High priority to beat MainActivity's catch-all parachord://
+                High priority to beat ParachordActivity's catch-all parachord://
                 filter for the specific auth host — otherwise Android shows
                 a disambiguation chooser when the redirect fires.
             -->
@@ -171,7 +171,7 @@
                  + re-verify flag), the chooser disappears and Parachord
                  opens directly.
 
-                 Filter belongs on MainActivity, NOT OAuthRedirectActivity —
+                 Filter belongs on ParachordActivity, NOT OAuthRedirectActivity —
                  that one is OAuth-only and uses parachord://auth/...
 
                  autoVerify is on the filter, not the data tags — Android
@@ -294,12 +294,14 @@
 
         <!--
             The AAOS drive UI as CAL media templates (Android 14+ cars with the
-            media templates host). The car's template host renders every screen
-            and enforces driver-distraction compliance; our Media3 session feeds
-            the playback state, the Assistant and the car's media card.
+            media templates host). Disabled by default so phones with projected
+            Android Auto never offer it (they keep using MediaLibraryService);
+            CarLauncherMode enables it on AAOS cars that declare the templates
+            host feature.
         -->
         <service
             android:name=".car.cal.CalCarAppService"
+            android:enabled="false"
             android:exported="true">
             <intent-filter>
                 <action android:name="androidx.car.app.CarAppService" />

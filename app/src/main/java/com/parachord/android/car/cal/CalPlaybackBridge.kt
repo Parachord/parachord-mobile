@@ -8,10 +8,7 @@ import com.parachord.android.data.repository.WeeklyPlaylistsRepository
 import com.parachord.android.playback.PlaybackController
 import com.parachord.android.playback.PlaybackStateHolder
 import com.parachord.shared.car.CarBrowse
-import com.parachord.shared.car.CarIds
 import com.parachord.shared.deeplink.ProviderPlaylistResolver
-import com.parachord.shared.home.HomeQueue
-import com.parachord.shared.home.HomeQueues
 import com.parachord.shared.metadata.TrackSearchResult
 import com.parachord.shared.metadata.toTrackEntity
 import com.parachord.shared.model.Album
@@ -19,12 +16,9 @@ import com.parachord.shared.model.Track
 import com.parachord.shared.playback.CatalogQueues
 import com.parachord.shared.playback.PlaybackContext
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.RecommendationPlay
 import com.parachord.shared.recommendations.RecommendationRow
-import com.parachord.shared.recommendations.RecommendationType
-import com.parachord.shared.recommendations.servicePlaylistQueue
-import com.parachord.shared.recommendations.songQueue
-import com.parachord.shared.recommendations.weeklyContext
-import com.parachord.shared.recommendations.weeklyTracks
+import com.parachord.shared.recommendations.recommendationItemPlay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -36,10 +30,10 @@ import kotlinx.coroutines.launch
 
 /**
  * The bridge between the CAL template screens and the shared playback stack:
- * every template tap plays through the same queues the phone Home, the
- * recommendations page and the Android Auto tree play, and every call is
- * posted to the main thread (`PlaybackController` requires it). Failures emit
- * onto [messages] so `CalMediaSession` surfaces them with a `CarToast`.
+ * library items play through [CarBrowse.playRequest], recommendations play
+ * through [recommendationItemPlay], and every controller call is posted to the
+ * main thread (`PlaybackController` requires it). Failures emit onto [messages]
+ * so `CalMediaSession` surfaces them with a `CarToast`.
  */
 class CalPlaybackBridge(
     private val playbackController: PlaybackController,
@@ -55,19 +49,6 @@ class CalPlaybackBridge(
     private val _messages = MutableSharedFlow<String>(extraBufferCapacity = 8)
     val messages = _messages.asSharedFlow()
 
-    private val queues = HomeQueues(
-        lovedTracks = {
-            com.parachord.shared.repository.lovedTracks(libraryRepository.getAllTracks().first())
-                .take(com.parachord.shared.car.CAR_LOVED_CAP)
-        },
-        playlistTracks = { id ->
-            libraryRepository.getPlaylistTracks(id).first().map { pt -> libraryRepository.playlistTrackToTrackEntity(pt) }
-        },
-        mixTracks = { emptyList() },
-        catalogQueues = CatalogQueues(metadataService),
-        collectionRadio = { carBrowse.playRequest(CarIds.COLLECTION_RADIO) },
-    )
-
     private val catalogQueues = CatalogQueues(metadataService)
 
     suspend fun ensureConnected() {
@@ -75,11 +56,30 @@ class CalPlaybackBridge(
         playbackController.awaitConnected()
     }
 
-    fun playCollectionRadio() = play { queues.collectionRadio() }
-
-    fun playLovedSongs() = play { queues.loves() }
-
-    fun playPlaylist(id: String, name: String) = play { queues.playlist(id, name) }
+    /** Play any playable [CarBrowse] item (Collection Radio, playlist shuffle, playlist/loved track). */
+    fun playCarItem(itemId: String) = scope.launch {
+        connectIfNeeded()
+        val request = try {
+            carBrowse.playRequest(itemId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            say("Couldn’t start playback")
+            return@launch
+        }
+        if (request == null || request.tracks.isEmpty()) {
+            say("Nothing to play yet")
+            return@launch
+        }
+        onMain {
+            val shuffle = request.shuffle ?: stateHolder.state.value.shuffleEnabled
+            playbackController.playQueue(
+                tracks = request.tracks,
+                startIndex = request.startIndex,
+                shuffle = shuffle,
+            )
+        }
+    }
 
     fun playFromQueue(index: Int) = onMain {
         playbackController.playFromQueue(index)
@@ -159,72 +159,24 @@ class CalPlaybackBridge(
         }
     }
 
-    /** A recommendation entry's tap — the same plays the recommendations page's taps make. */
+    /** A recommendation entry's tap — delegates to the shared [recommendationItemPlay]. */
     fun playRecommendation(row: RecommendationRow, item: RecommendationItem, rowItems: List<RecommendationItem>) = scope.launch {
         connectIfNeeded()
-        when (item.type) {
-            RecommendationType.SONG ->
-                songQueue(rowItems, rowItems.indexOf(item).takeIf { it >= 0 } ?: 0, row)?.let { queue ->
-                    onMain { playbackController.playQueue(queue.tracks, 0, queue.context) }
-                } ?: say("Couldn’t load ${item.name}")
-            RecommendationType.ALBUM -> {
-                val queue = try {
-                    catalogQueues.album(item.name, item.artist.orEmpty())
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
-                if (queue == null) {
-                    say("Couldn’t load ${item.name}")
-                } else {
-                    onMain { playbackController.playQueue(queue.tracks, 0, queue.context) }
-                }
+        when (
+            val result = recommendationItemPlay(
+                row = row,
+                item = item,
+                rowItems = rowItems,
+                albumQueue = { title, artist -> catalogQueues.album(title, artist) },
+                artistTopSongs = { artist -> catalogQueues.artistTopSongs(artist) },
+                weeklyTracksLoader = { id -> weeklyPlaylistsRepository.loadPlaylistTracks(id) },
+                servicePlaylistResolver = { url -> providerPlaylistResolver.resolve(url) },
+            )
+        ) {
+            is RecommendationPlay.Play -> onMain {
+                playbackController.playQueue(result.queue.tracks, 0, result.queue.context)
             }
-            RecommendationType.ARTIST -> {
-                val queue = try {
-                    catalogQueues.artistTopSongs(item.name)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
-                if (queue == null) {
-                    say("Couldn’t load ${item.name}")
-                } else {
-                    onMain { playbackController.playQueue(queue.tracks, 0, queue.context) }
-                }
-            }
-            RecommendationType.PLAYLIST -> {
-                val weekly = item.weekly
-                if (weekly != null) {
-                    val tracks = try {
-                        weeklyTracks(weekly, weeklyPlaylistsRepository.loadPlaylistTracks(weekly.id))
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        emptyList()
-                    }
-                    if (tracks.isEmpty()) {
-                        say("Couldn’t load ${item.name}")
-                    } else {
-                        onMain { playbackController.playQueue(tracks, 0, weeklyContext(weekly)) }
-                    }
-                } else {
-                    val queue = try {
-                        servicePlaylistQueue(item) { url -> providerPlaylistResolver.resolve(url) }
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        null
-                    }
-                    if (queue == null) {
-                        say("Couldn’t load ${item.name}")
-                    } else {
-                        onMain { playbackController.playQueue(queue.tracks, 0, queue.context) }
-                    }
-                }
-            }
+            is RecommendationPlay.Message -> say(result.text)
         }
     }
 
@@ -239,27 +191,6 @@ class CalPlaybackBridge(
             throw e
         } catch (_: Exception) {
             // Proceed so PlaybackController can still handle or report the failure.
-        }
-    }
-
-    private fun play(load: suspend () -> HomeQueue) {
-        scope.launch {
-            connectIfNeeded()
-            val queue = try {
-                load()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                HomeQueue.Failed("Couldn’t start playback")
-            }
-            when (queue) {
-                is HomeQueue.Play -> onMain {
-                    val shuffle = queue.shuffle ?: stateHolder.state.value.shuffleEnabled
-                    playbackController.playQueue(queue.tracks, 0, queue.context, shuffle)
-                }
-                is HomeQueue.Failed -> say(queue.message)
-                HomeQueue.Empty -> say("Nothing to play yet")
-            }
         }
     }
 

@@ -22,7 +22,6 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.verify
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
@@ -62,8 +61,10 @@ class CarCalUnitTest {
         val pm = mockk<PackageManager>(relaxed = true)
         every { pm.hasSystemFeature(CarLauncherMode.TEMPLATES_HOST_FEATURE) } returns true
         val alias = ComponentName("com.parachord.android", CarLauncherMode.PHONE_LAUNCHER_ALIAS)
+        val carService = ComponentName("com.parachord.android", CarLauncherMode.CAR_APP_SERVICE)
         val carActivity = ComponentName("com.parachord.android", CarLauncherMode.CAR_APP_ACTIVITY)
         every { pm.getComponentEnabledSetting(alias) } returns PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
+        every { pm.getComponentEnabledSetting(carService) } returns PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
         every { pm.getComponentEnabledSetting(carActivity) } returns PackageManager.COMPONENT_ENABLED_STATE_DEFAULT
 
         val context = mockk<Context>()
@@ -81,24 +82,29 @@ class CarCalUnitTest {
         }
         verify(exactly = 1) {
             pm.setComponentEnabledSetting(
+                carService,
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+                PackageManager.DONT_KILL_APP,
+            )
+        }
+        verify(exactly = 1) {
+            pm.setComponentEnabledSetting(
                 carActivity,
                 PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
                 PackageManager.DONT_KILL_APP,
             )
         }
 
-        // Second run sees both components already in desired state — zero writes.
+        // Second run sees all three components already in desired state — zero writes.
         every { pm.getComponentEnabledSetting(alias) } returns PackageManager.COMPONENT_ENABLED_STATE_DISABLED
+        every { pm.getComponentEnabledSetting(carService) } returns PackageManager.COMPONENT_ENABLED_STATE_ENABLED
         every { pm.getComponentEnabledSetting(carActivity) } returns PackageManager.COMPONENT_ENABLED_STATE_ENABLED
 
         CarLauncherMode.apply(context)
 
-        verify(exactly = 1) {
-            pm.setComponentEnabledSetting(alias, any(), any())
-        }
-        verify(exactly = 1) {
-            pm.setComponentEnabledSetting(carActivity, any(), any())
-        }
+        verify(exactly = 1) { pm.setComponentEnabledSetting(alias, any(), any()) }
+        verify(exactly = 1) { pm.setComponentEnabledSetting(carService, any(), any()) }
+        verify(exactly = 1) { pm.setComponentEnabledSetting(carActivity, any(), any()) }
     }
 
     // ── CalArt ───────────────────────────────────────────────────────
@@ -238,31 +244,32 @@ class CarCalUnitTest {
         )
     }
 
-    @Test fun `playLovedSongs plays recent loves and reports empty when none`() = runTest {
+    @Test fun `playCarItem dispatches CarBrowse playRequest and reports empty`() = runTest {
         val dispatcher = StandardTestDispatcher(testScheduler)
         val bridgeScope = TestScope(dispatcher)
         val controller = mockk<PlaybackController>(relaxed = true)
-        val libraryRepository = mockk<LibraryRepository>(relaxed = true)
-        every { libraryRepository.getAllTracks() } returns flowOf(emptyList())
+        val carBrowse = mockk<CarBrowse>(relaxed = true)
+        coEvery { carBrowse.playRequest("action:collection-radio") } returns null
 
-        val bridge = makeBridge(bridgeScope, controller = controller, libraryRepository = libraryRepository)
+        val bridge = makeBridge(bridgeScope, controller = controller, carBrowse = carBrowse)
         val messages = mutableListOf<String>()
         val collectJob = backgroundScope.launch(UnconfinedTestDispatcher(testScheduler)) {
             bridge.messages.collect { messages.add(it) }
         }
 
-        bridge.playLovedSongs()
+        bridge.playCarItem("action:collection-radio")
         bridgeScope.advanceUntilIdle()
         advanceUntilIdle()
         assertEquals(listOf("Nothing to play yet"), messages)
         verify(exactly = 0) { controller.playQueue(any(), any(), any(), any()) }
 
-        val loved = listOf(Track(id = "t1", title = "Song", artist = "Band", inCollection = true))
-        every { libraryRepository.getAllTracks() } returns flowOf(loved)
-        bridge.playLovedSongs()
+        val tracks = listOf(Track(id = "t1", title = "Song", artist = "Band", inCollection = true))
+        coEvery { carBrowse.playRequest("action:collection-radio") } returns
+            com.parachord.shared.car.CarPlayRequest(tracks, 0, true)
+        bridge.playCarItem("action:collection-radio")
         bridgeScope.advanceUntilIdle()
         advanceUntilIdle()
-        verify(exactly = 1) { controller.playQueue(loved, 0, any(), any()) }
+        verify(exactly = 1) { controller.playQueue(tracks, 0, null, true) }
 
         collectJob.cancel()
     }

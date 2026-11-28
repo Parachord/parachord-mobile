@@ -25,13 +25,11 @@ import com.parachord.shared.recommendations.ListenerItem
 import com.parachord.shared.recommendations.ListenerPlay
 import com.parachord.shared.recommendations.RecommendationCopy
 import com.parachord.shared.recommendations.RecommendationItem
+import com.parachord.shared.recommendations.RecommendationPlay
 import com.parachord.shared.recommendations.RecommendationRow
-import com.parachord.shared.recommendations.RecommendationType
 import com.parachord.shared.recommendations.listenerPlay
-import com.parachord.shared.recommendations.servicePlaylistQueue
+import com.parachord.shared.recommendations.recommendationItemPlay
 import com.parachord.shared.recommendations.songQueue
-import com.parachord.shared.recommendations.weeklyContext
-import com.parachord.shared.recommendations.weeklyTracks
 import com.parachord.shared.recommendations.WeeklyCovers
 import com.parachord.shared.ui.UiMessages
 import com.parachord.shared.repository.RecommendationPageState
@@ -156,46 +154,19 @@ class RecommendationsViewModel(
         playbackController.playQueue(queue.tracks, startIndex = 0, context = queue.context)
     }
 
-    fun playAlbum(item: RecommendationItem) = withAlbumQueue(item) { q ->
+    fun playAlbum(item: RecommendationItem) = withItemQueue(item, announceLoading = true) { q ->
         playbackController.playQueue(q.tracks, startIndex = 0, context = q.context)
     }
 
-    fun queueAlbum(item: RecommendationItem) = withAlbumQueue(item) { q ->
+    fun queueAlbum(item: RecommendationItem) = withItemQueue(item, announceLoading = true) { q ->
         playbackController.addToQueue(q.tracks)
     }
 
-    private fun withAlbumQueue(item: RecommendationItem, use: (CatalogQueue) -> Unit) {
-        viewModelScope.launch {
-            say(RecommendationCopy.loading(item.name))
-            try {
-                val queue = catalogQueues.album(item.name, item.artist.orEmpty())
-                if (queue == null) say(RecommendationCopy.couldntLoad(item.name)) else use(queue)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to load album '${item.name}'", e)
-                say(RecommendationCopy.couldntLoad(item.name))
-            }
-        }
-    }
-
     fun playWeekly(item: RecommendationItem) {
-        val weekly = item.weekly ?: return
-        viewModelScope.launch {
-            try {
-                val tracks = weeklyTracks(weekly, weeklyPlaylistsRepository.loadPlaylistTracks(weekly.id))
-                if (tracks.isEmpty()) {
-                    say(RecommendationCopy.couldntLoad(item.name))
-                    return@launch
-                }
-                playbackController.playQueue(tracks, startIndex = 0, context = weeklyContext(weekly))
-                say(RecommendationCopy.playing(item.name))
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to play weekly '${item.name}'", e)
-                say(RecommendationCopy.couldntLoad(item.name))
-            }
+        if (item.weekly == null) return
+        withItemQueue(item, announceLoading = false) { q ->
+            playbackController.playQueue(q.tracks, startIndex = 0, context = q.context)
+            say(RecommendationCopy.playing(item.name))
         }
     }
 
@@ -206,24 +177,36 @@ class RecommendationsViewModel(
     /** A weekly playlist card's mosaic (the shared [WeeklyCovers] rule). */
     fun weeklyCovers(id: String): StateFlow<List<String>> = weeklyCoverLoader.covers(id)
 
-    fun playServicePlaylist(item: RecommendationItem) = withServiceQueue(item) { q ->
+    fun playServicePlaylist(item: RecommendationItem) = withItemQueue(item, announceLoading = false) { q ->
         playbackController.playQueue(q.tracks, startIndex = 0, context = q.context)
     }
 
-    fun queueServicePlaylist(item: RecommendationItem) = withServiceQueue(item) { q ->
+    fun queueServicePlaylist(item: RecommendationItem) = withItemQueue(item, announceLoading = false) { q ->
         playbackController.addToQueue(q.tracks)
     }
 
-    private fun withServiceQueue(item: RecommendationItem, use: (CatalogQueue) -> Unit) {
+    private fun withItemQueue(
+        item: RecommendationItem,
+        announceLoading: Boolean,
+        use: (CatalogQueue) -> Unit,
+    ) {
         viewModelScope.launch {
-            val queue = try {
-                servicePlaylistQueue(item) { url -> providerPlaylistResolver.resolve(url) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                null
+            if (announceLoading) say(RecommendationCopy.loading(item.name))
+            val placeholderRow = RecommendationRow(key = item.id, title = null, type = item.type, items = emptyList())
+            when (
+                val res = recommendationItemPlay(
+                    row = placeholderRow,
+                    item = item,
+                    rowItems = emptyList(),
+                    albumQueue = { title, artist -> catalogQueues.album(title, artist) },
+                    artistTopSongs = { artist -> catalogQueues.artistTopSongs(artist) },
+                    weeklyTracksLoader = { id -> weeklyPlaylistsRepository.loadPlaylistTracks(id) },
+                    servicePlaylistResolver = { url -> providerPlaylistResolver.resolve(url) },
+                )
+            ) {
+                is RecommendationPlay.Play -> use(res.queue)
+                is RecommendationPlay.Message -> say(res.text)
             }
-            if (queue == null) say(RecommendationCopy.couldntLoad(item.name)) else use(queue)
         }
     }
 
