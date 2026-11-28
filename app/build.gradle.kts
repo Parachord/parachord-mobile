@@ -142,6 +142,25 @@ android {
             applicationIdSuffix = ".debug"
             isDebuggable = true
         }
+        // The Android Automotive bundle for Play's "Android Automotive OS only"
+        // track: the release build with src/automotiveRelease/AndroidManifest.xml
+        // laid over it (the automotive feature required, `com.android.automotive`
+        // declared, Android Auto's entry removed) and its own version code
+        // (AUTOMOTIVE_VERSION_CODE_OFFSET). Same package and signing as release.
+        // Play wants a car-only artifact on that track: the phone bundle marks
+        // the automotive feature optional so phones can install it.
+        create("automotiveRelease") {
+            initWith(getByName("release"))
+            matchingFallbacks += listOf("release")
+        }
+    }
+
+    // CI's `publishBundle` uploads every variant's bundle to the phone track.
+    // The automotive bundle goes to the Automotive OS track by hand for now.
+    playConfigs {
+        register("automotiveRelease") {
+            enabled.set(false)
+        }
     }
 
     compileOptions {
@@ -270,6 +289,19 @@ dependencies {
     androidTestImplementation(libs.androidx.espresso.core)
     androidTestImplementation(platform(libs.androidx.compose.bom))
     androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+}
+
+// The automotive bundle's version code: the phone's plus this offset, so the
+// two never collide on Play and the car's is always the higher one (Google's
+// rule for a car artifact released beside a phone one).
+val AUTOMOTIVE_VERSION_CODE_OFFSET = 1_000_000
+
+androidComponents {
+    onVariants(selector().withBuildType("automotiveRelease")) { variant ->
+        variant.outputs.forEach { output ->
+            output.versionCode.set(android.defaultConfig.versionCode!! + AUTOMOTIVE_VERSION_CODE_OFFSET)
+        }
+    }
 }
 
 // ── Play Store publishing (Triple-T gradle-play-publisher) ────────────
